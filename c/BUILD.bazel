@@ -1,0 +1,19 @@
+cc_library(
+    name = "add",
+    srcs = ["add.c", "add.h"],
+    hdrs = ["add.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_shared_library(
+    name = "add_shared",
+    deps = [":add"],
+    visibility = ["//visibility:public"],    
+)
+
+cc_binary(
+    name = "test_add",
+    srcs = ["test_add.c"],
+    deps = [":add"],
+    dynamic_deps = [":add_shared"],
+)

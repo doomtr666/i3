@@ -1,0 +1,13 @@
+load(
+    "@rules_dotnet//dotnet:defs.bzl",
+    "csharp_binary",
+)
+
+# bazel run //examples:hello
+csharp_binary(
+    name = "hello",
+    srcs = ["hello.cs"],
+    target_frameworks = ["net8.0"],
+    deps = [],
+)
+
