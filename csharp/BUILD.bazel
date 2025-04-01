@@ -9,5 +9,6 @@ csharp_binary(
     srcs = ["hello.cs"],
     target_frameworks = ["net8.0"],
     deps = [],
+    data = ["//native:add_shared"],
 )
 
