@@ -141,6 +141,24 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//bazel:vulkan_sdk.bzl%vulkan_sdk": {
+      "general": {
+        "bzlTransitiveDigest": "D0XAuiW4EAYeNqB5WtnDHGa+3LEYG9WyT14vkCrakHk=",
+        "usagesDigest": "j6c1ImhOdpmZHNQFp519gvcQWlvDQt64SZ5jGliSHp0=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "vulkan_sdk": {
+            "repoRuleId": "@@//bazel:vulkan_sdk.bzl%vulkan_sdk_rule",
+            "attributes": {
+              "version": "1.4.309.0"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": []
+      }
+    },
     "@@aspect_bazel_lib+//lib:extensions.bzl%toolchains": {
       "general": {
         "bzlTransitiveDigest": "lE3qKeY4xlmeMcPp7z8QKRgPFJvoajWx8gwa5wyqm5U=",
