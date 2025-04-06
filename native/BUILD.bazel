@@ -14,6 +14,6 @@ cc_shared_library(
 cc_binary(
     name = "test_add",
     srcs = ["test_add.c"],
-    deps = [":add", "@vulkan_sdk//:core"],
+    deps = [":add", "@vulkan_sdk//:core", "@vcpkg//:glfw3"],
     dynamic_deps = [":add_shared"],
 )

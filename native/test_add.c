@@ -4,8 +4,12 @@
 
 #include <vulkan/vulkan.h>
 
+#include "GLFW/glfw3.h"
+
 int main()
 {
+    glfwInit();
+
     int a = 5;
     int b = 10;
     int result = add(a, b);

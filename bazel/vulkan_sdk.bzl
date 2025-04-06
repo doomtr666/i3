@@ -1,41 +1,21 @@
+load("//bazel:seven_zip.bzl", "extract_7zip")
+
 _DEFAULT_NAME = "vulkan_sdk"
 
 def _vulkan_sdk_rule_impl(ctx):
-    # download older 7-zip
-    ctx.download_and_extract(
-        url = "https://www.7-zip.org/a/7za920.zip",
-        output = "7za920",
-    )
 
-    ctx.download(
-        url = "https://www.7-zip.org/a/7z2409-x64.exe",
-        output = "7z.exe",
-    )
-
-    # to unpack newer 7-zip
-    ctx.execute([
-        "7za920/7za.exe",
-        "x",
-        "-y",
-        "-o7zip",
-        "7z.exe",
-    ])
-
+    # download vulkan_sdk
     ctx.download(
         url = "https://sdk.lunarg.com/sdk/download/{0}/windows/VulkanSDK-{0}-Installer.exe".format(ctx.attr.version),
         output = "vulkan_sdk.exe",
     )
 
-    result = ctx.execute(
-        ["7zip/7z.exe",
-        "x",
-        "-y",
-        "-ovulkan_sdk",
-        "vulkan_sdk.exe"]
+    # extract vulkan_sdk self extracting archive
+    extract_7zip(
+        ctx = ctx,
+        src = "vulkan_sdk.exe",
+        dst = "vulkan_sdk",
     )
-
-    if result.return_code != 0:
-        fail("unable to unpack VulkanSDK", result.stderr)
 
     # create BUILD file
     ctx.file("BUILD", """
