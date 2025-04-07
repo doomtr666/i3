@@ -161,7 +161,7 @@
     },
     "//bazel:vcpkg.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "Eh+nV8xdpAjJLeMkD7MQ3JGlCRW2cfyQZCAYS6GkFgE=",
+        "bzlTransitiveDigest": "4H3qIzV7YujVSvYdCzwzlr8pwBGhWPec4DfS+9BEuvg=",
         "usagesDigest": "QH2SadHq4n5z71wx8MpszHOpUEJcZoJwasmMxQN20TI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

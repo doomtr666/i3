@@ -1,0 +1,14 @@
+
+cc_library(
+    name = "core",
+    srcs = glob(["*.c"]),
+    hdrs = glob(["*.h"]),
+    visibility = ["//visibility:public"],
+)
+
+cc_shared_library(
+    name = "core_shared",
+    deps = [":core"],
+    visibility = ["//visibility:public"],
+)
+

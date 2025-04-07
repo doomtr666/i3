@@ -1,0 +1,10 @@
+cc_test(
+    name = "core_tst",
+    srcs = glob(["*.cpp"]),
+    deps = [
+        "//native/core:core",
+        "@vcpkg//:gtest",
+    ],
+    dynamic_deps = ["//native/core:core_shared"],
+    visibility = ["//visibility:public"],
+)

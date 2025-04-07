@@ -24,8 +24,9 @@ def _vcpkg_rule_impl(ctx):
     result = ctx.execute([
         "vcpkg_root/vcpkg",
         "install",
-        "glfw3:x64-windows",
         "--triplet=x64-windows",
+        "gtest",
+        "glfw3",
     ])
 
     if result.return_code != 0:
@@ -37,6 +38,19 @@ def _vcpkg_rule_impl(ctx):
         "BUILD",
         content = """
 cc_library(
+    name="gtest",
+    hdrs = glob(["vcpkg_root/installed/x64-windows/include/gtest/**/*.h"]),
+    strip_include_prefix = "vcpkg_root/installed/x64-windows/include",
+    srcs= [
+        "vcpkg_root/installed/x64-windows/lib/manual-link/gtest_main.lib",
+        "vcpkg_root/installed/x64-windows/lib/gtest.lib",
+        "vcpkg_root/installed/x64-windows/bin/gtest_main.dll",
+        "vcpkg_root/installed/x64-windows/bin/gtest.dll",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name="glfw3",
     hdrs = glob(["vcpkg_root/installed/x64-windows/include/GLFW/*.h"]),
     strip_include_prefix = "vcpkg_root/installed/x64-windows/include",
@@ -45,7 +59,7 @@ cc_library(
         "vcpkg_root/installed/x64-windows/bin/glfw3.dll",
     ],
     visibility = ["//visibility:public"],
-    )
+)
 """)
 
 vcpkg_rule = repository_rule(
