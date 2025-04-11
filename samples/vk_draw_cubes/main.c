@@ -108,14 +108,12 @@ int main()
     {
         {
             .stage = I3_RBK_SHADER_STAGE_VERTEX,
-            .code = shaders_data,
-            .code_size = shader_data_size,
+            .shader_module = shader_module,
             .entry_point = "vertexMain"
         },
         {
             .stage = I3_RBK_SHADER_STAGE_FRAGMENT,
-            .code = shaders_data,
-            .code_size = shader_data_size,
+            .shader_module = shader_module,
             .entry_point = "fragmentMain"
         }
     };

@@ -322,110 +322,6 @@ typedef struct i3_rbk_shader_module_i
 // pipeline
 
 /*
-typedef struct VkPipelineDynamicStateCreateInfo {
-    VkStructureType                      sType;
-    const void*                          pNext;
-    VkPipelineDynamicStateCreateFlags    flags;
-    uint32_t                             dynamicStateCount;
-    const VkDynamicState*                pDynamicStates;
-} VkPipelineDynamicStateCreateInfo;
-
-typedef struct VkPipelineColorBlendStateCreateInfo {
-    VkStructureType                               sType;
-    const void*                                   pNext;
-    VkPipelineColorBlendStateCreateFlags          flags;
-    VkBool32                                      logicOpEnable;
-    VkLogicOp                                     logicOp;
-    uint32_t                                      attachmentCount;
-    const VkPipelineColorBlendAttachmentState*    pAttachments;
-    float                                         blendConstants[4];
-} VkPipelineColorBlendStateCreateInfo;
-
-typedef struct VkPipelineDepthStencilStateCreateInfo {
-    VkStructureType                           sType;
-    const void*                               pNext;
-    VkPipelineDepthStencilStateCreateFlags    flags;
-    VkBool32                                  depthTestEnable;
-    VkBool32                                  depthWriteEnable;
-    VkCompareOp                               depthCompareOp;
-    VkBool32                                  depthBoundsTestEnable;
-    VkBool32                                  stencilTestEnable;
-    VkStencilOpState                          front;
-    VkStencilOpState                          back;
-    float                                     minDepthBounds;
-    float                                     maxDepthBounds;
-} VkPipelineDepthStencilStateCreateInfo;
-
-typedef struct VkPipelineMultisampleStateCreateInfo {
-    VkStructureType                          sType;
-    const void*                              pNext;
-    VkPipelineMultisampleStateCreateFlags    flags;
-    VkSampleCountFlagBits                    rasterizationSamples;
-    VkBool32                                 sampleShadingEnable;
-    float                                    minSampleShading;
-    const VkSampleMask*                      pSampleMask;
-    VkBool32                                 alphaToCoverageEnable;
-    VkBool32                                 alphaToOneEnable;
-} VkPipelineMultisampleStateCreateInfo;
-
-typedef struct VkPipelineViewportStateCreateInfo {
-    VkStructureType                       sType;
-    const void*                           pNext;
-    VkPipelineViewportStateCreateFlags    flags;
-    uint32_t                              viewportCount;
-    const VkViewport*                     pViewports;
-    uint32_t                              scissorCount;
-    const VkRect2D*                       pScissors;
-} VkPipelineViewportStateCreateInfo;
-
-typedef struct VkPipelineTessellationStateCreateInfo {
-    VkStructureType                           sType;
-    const void*                               pNext;
-    VkPipelineTessellationStateCreateFlags    flags;
-    uint32_t                                  patchControlPoints;
-} VkPipelineTessellationStateCreateInfo;
-
-typedef struct VkPipelineInputAssemblyStateCreateInfo {
-    VkStructureType                            sType;
-    const void*                                pNext;
-    VkPipelineInputAssemblyStateCreateFlags    flags;
-    VkPrimitiveTopology                        topology;
-    VkBool32                                   primitiveRestartEnable;
-} VkPipelineInputAssemblyStateCreateInfo;
-
-typedef struct VkVertexInputBindingDescription {
-    uint32_t             binding;
-    uint32_t             stride;
-    VkVertexInputRate    inputRate;
-} VkVertexInputBindingDescription;
-
-typedef struct VkVertexInputAttributeDescription {
-    uint32_t    location;
-    uint32_t    binding;
-    VkFormat    format;
-    uint32_t    offset;
-} VkVertexInputAttributeDescription;
-
-typedef struct VkPipelineVertexInputStateCreateInfo {
-    VkStructureType                             sType;
-    const void*                                 pNext;
-    VkPipelineVertexInputStateCreateFlags       flags;
-    uint32_t                                    vertexBindingDescriptionCount;
-    const VkVertexInputBindingDescription*      pVertexBindingDescriptions;
-    uint32_t                                    vertexAttributeDescriptionCount;
-    const VkVertexInputAttributeDescription*    pVertexAttributeDescriptions;
-} VkPipelineVertexInputStateCreateInfo;
-
-typedef struct VkPipelineShaderStageCreateInfo {
-    VkStructureType                     sType;
-    const void*                         pNext;
-    VkPipelineShaderStageCreateFlags    flags;
-    VkShaderStageFlagBits               stage;
-    VkShaderModule                      module;
-    const char*                         pName;
-    const VkSpecializationInfo*         pSpecializationInfo;
-} VkPipelineShaderStageCreateInfo;
-
 typedef struct VkGraphicsPipelineCreateInfo {
     VkStructureType                                  sType;
     const void*                                      pNext;
@@ -463,9 +359,8 @@ typedef struct VkComputePipelineCreateInfo {
 typedef struct i3_rbk_pipeline_shader_stage_desc_t
 {
     i3_rbk_shader_stage_flag_bits_t stage;
+    i3_rbk_shader_module_i *shader_module;
     const char* entry_point;
-    const void* code;
-    uint32_t code_size;
 } i3_rbk_pipeline_shader_stage_desc_t;
 
 // vertex input
@@ -502,7 +397,7 @@ typedef struct i3_rbk_pipeline_input_assembly_state_t
 // tessellation
 typedef struct i3_rbk_pipeline_tessellation_state_t
 {
-    int dummy;
+    int path_control_point_count;
 } i3_rbk_pipeline_tessellation_state_t;
 
 // viewport

@@ -2,6 +2,7 @@
 
 #include "pipeline.h"
 #include "convert.h"
+#include "shader_module.h"
 
 // resource interface
 
@@ -117,42 +118,28 @@ static VkPipelineLayout i3_vk_create_pipeline_layout(i3_arena_t* arena, i3_vk_de
     return layout;
 }
 
-// create shader module
-static VkShaderModule i3_vk_create_shader_module(i3_vk_device_o* device, const i3_rbk_pipeline_shader_stage_desc_t* desc)
-{
-    assert(device != NULL);
-    assert(desc != NULL);
-
-    VkShaderModuleCreateInfo module_ci =
-    {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = desc->code_size,
-        .pCode = desc->code,
-    };
-
-    VkShaderModule module;
-    i3_vk_check(vkCreateShaderModule(device->handle, &module_ci, NULL, &module));
-    return module;
-}
-
 // create stages
-static void i3_vk_create_stages(i3_vk_device_o* device, uint32_t stage_count, const i3_rbk_pipeline_shader_stage_desc_t* descs, VkShaderModule* modules, VkPipelineShaderStageCreateInfo* stages)
+static VkPipelineShaderStageCreateInfo* i3_vk_create_stages(i3_arena_t *arena, uint32_t stage_count, const i3_rbk_pipeline_shader_stage_desc_t* descs)
 {
-    assert(device != NULL);
-    assert(stage_count == 0 || descs != NULL);
-    assert(stage_count == 0 || stages != NULL);
+    assert(arena != NULL);
+    assert(descs != NULL);
+    assert(stage_count > 0);
+
+    VkPipelineShaderStageCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineShaderStageCreateInfo) * stage_count);
 
     for (uint32_t i = 0; i < stage_count; ++i)
     {
         // create stage
-        stages[i] = (VkPipelineShaderStageCreateInfo)
+        ci[i] = (VkPipelineShaderStageCreateInfo)
         {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = i3_vk_convert_shader_stage(descs[i].stage),
-            .module = modules[i],
+            .module = ((i3_vk_shader_module_o*)descs[i].shader_module->self)->handle,
             .pName = descs[i].entry_point,
         };
     }
+
+    return ci;
 }
 
 // vertex input state
@@ -237,16 +224,12 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self, 
         .layout = pipeline->layout,
     };
 
-    // create shader modules
-    VkShaderModule* modules = i3_arena_alloc(&arena, sizeof(VkShaderModule) * desc->stage_count);
-    for (uint32_t i = 0; i < desc->stage_count; i++)
-        modules[i] = i3_vk_create_shader_module(device, &desc->stages[i]);
-
     // create stages
-    void* stages = i3_arena_alloc(&arena, desc->stage_count * sizeof(VkPipelineShaderStageCreateInfo));
-    i3_vk_create_stages(device, desc->stage_count, desc->stages, modules, stages);
-    pipeline_ci.pStages = stages;
-    pipeline_ci.stageCount = desc->stage_count;
+    if(desc->stage_count > 0 && desc->stages != NULL)
+    {
+        pipeline_ci.pStages = i3_vk_create_stages(&arena, desc->stage_count, desc->stages);
+        pipeline_ci.stageCount = desc->stage_count;
+    }
 
     // vertex input state
     if (desc->vertex_input != NULL)
@@ -266,10 +249,6 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self, 
 
     // create pipeline
     i3_vk_check(vkCreateGraphicsPipelines(device->handle, VK_NULL_HANDLE, 1, &pipeline_ci, NULL, &pipeline->handle));
-
-    // destroy shader modules
-    for (uint32_t i = 0; i < desc->stage_count; i++)
-        vkDestroyShaderModule(device->handle, modules[i], NULL);
 
     // free arena
     i3_arena_free(&arena);
@@ -293,9 +272,6 @@ i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self, c
     // create pipeline layout
     pipeline->layout = i3_vk_create_pipeline_layout(&arena, device, &desc->layout);
 
-    // create shader module
-    VkShaderModule module = i3_vk_create_shader_module(device, &desc->stage);
-
     // create pipeline
     VkComputePipelineCreateInfo pipeline_ci =
     {
@@ -304,13 +280,10 @@ i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self, c
     };
 
     // create stage
-    i3_vk_create_stages(device, 1, &desc->stage, &module, &pipeline_ci.stage);
+    pipeline_ci.stage = *i3_vk_create_stages(&arena, 1, &desc->stage);
 
     // create pipeline
     i3_vk_check(vkCreateComputePipelines(device->handle, VK_NULL_HANDLE, 1, &pipeline_ci, NULL, &pipeline->handle));
-
-    // destroy shader module
-    vkDestroyShaderModule(device->handle, module, NULL);
 
     // free arena
     i3_arena_free(&arena);
