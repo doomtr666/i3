@@ -1,0 +1,15 @@
+load("//bazel:slang.bzl", "slangc")
+
+slangc(
+    name = "shaders",
+    srcs = glob(["*.slang"]),
+)
+
+cc_binary(
+    name = "vk_draw_cubes",
+    srcs = glob(["*.c"]),
+    deps = [
+        "//native/vk_backend",],
+    data = [":shaders"],
+    visibility = ["//visibility:public"],
+)

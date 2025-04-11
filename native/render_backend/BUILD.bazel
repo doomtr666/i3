@@ -1,0 +1,9 @@
+cc_library(
+    name = "render_backend",
+    hdrs = glob(["*.h"]),
+    deps = [
+        "//native/core",
+        "//native/render_window",
+    ],
+    visibility = ["//visibility:public"],
+)

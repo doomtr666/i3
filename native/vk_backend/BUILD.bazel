@@ -1,0 +1,22 @@
+cc_library(
+    name = "vk_backend",
+    srcs = glob(["*.c"]) + glob(["*.cpp"]) + glob(["*.h"]),
+    hdrs = glob(["vk_backend.h"]),
+    deps = [
+        "//native/core",
+        "//native/render_window",
+        "//native/render_backend",
+        "@vulkan_sdk//:core",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_shared_library(
+    name = "vk_backend_shared",
+    deps = [":vk_backend"],
+    dynamic_deps = [
+        "//native/core_shared",
+        "//native/render_window_shared",
+    ],
+    visibility = ["//visibility:public"],
+)

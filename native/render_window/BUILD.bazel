@@ -1,0 +1,14 @@
+cc_library(
+    name = "render_window",
+    srcs = glob(["*.c"]),
+    hdrs = glob(["*.h"]),
+    deps = ["//native/core", "@vcpkg//:glfw3", "@vulkan_sdk//:core"],
+    visibility = ["//visibility:public"],
+)
+
+cc_shared_library(
+    name = "render_window_shared",
+    deps = [":render_window"],
+    dynamic_deps = ["//native/core_shared"],
+    visibility = ["//visibility:public"],
+)
