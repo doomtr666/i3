@@ -187,6 +187,170 @@ typedef enum
     I3_RBK_PRIMITIVE_TOPOLOGY_PATCH_LIST,
 } i3_rbk_primitive_topology_t;
 
+// polygon mode
+typedef enum
+{
+    I3_RBK_POLYGON_MODE_FILL = 0,
+    I3_RBK_POLYGON_MODE_LINE,
+    I3_RBK_POLYGON_MODE_POINT,
+} i3_rbk_polygon_mode_t;
+
+// cull mode
+typedef enum
+{
+    I3_RBK_CULL_MODE_FRONT_BIT = i3_flag(0),
+    I3_RBK_CULL_MODE_BACK_BIT = i3_flag(1),
+    I3_RBK_CULL_MODE_FRONT_AND_BACK = I3_RBK_CULL_MODE_FRONT_BIT | I3_RBK_CULL_MODE_BACK_BIT,
+} i3_rbk_cull_mode_flag_bits_t;
+
+typedef i3_rbk_flags_t i3_rbk_cull_mode_flags_t;
+
+// stencil op
+typedef enum
+{
+    I3_RBK_STENCIL_OP_KEEP = 0,
+    I3_RBK_STENCIL_OP_ZERO,
+    I3_RBK_STENCIL_OP_REPLACE,
+    I3_RBK_STENCIL_OP_INCREMENT_AND_CLAMP,
+    I3_RBK_STENCIL_OP_DECREMENT_AND_CLAMP,
+    I3_RBK_STENCIL_OP_INVERT,
+    I3_RBK_STENCIL_OP_INCREMENT_AND_WRAP,
+    I3_RBK_STENCIL_OP_DECREMENT_AND_WRAP,
+} i3_rbk_stencil_op_t;
+
+// front face
+typedef enum
+{
+    I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE = 0,
+    I3_RBK_FRONT_FACE_CLOCKWISE,
+} i3_rbk_front_face_t;
+
+// logic op
+typedef enum
+{
+    I3_RBK_LOGIC_OP_CLEAR = 0,
+    I3_RBK_LOGIC_OP_AND,
+    I3_RBK_LOGIC_OP_AND_REVERSE,
+    I3_RBK_LOGIC_OP_COPY,
+    I3_RBK_LOGIC_OP_AND_INVERTED,
+    I3_RBK_LOGIC_OP_NO_OP,
+    I3_RBK_LOGIC_OP_XOR,
+    I3_RBK_LOGIC_OP_OR,
+    I3_RBK_LOGIC_OP_NOR,
+    I3_RBK_LOGIC_OP_EQUIVALENT,
+    I3_RBK_LOGIC_OP_INVERT,
+    I3_RBK_LOGIC_OP_OR_REVERSE,
+    I3_RBK_LOGIC_OP_COPY_INVERTED,
+    I3_RBK_LOGIC_OP_OR_INVERTED,
+    I3_RBK_LOGIC_OP_NAND,
+    I3_RBK_LOGIC_OP_SET,
+} i3_rbk_logic_op_t;
+
+// blend factor
+typedef enum
+{
+    I3_RBK_BLEND_FACTOR_ZERO = 0,
+    I3_RBK_BLEND_FACTOR_ONE,
+    I3_RBK_BLEND_FACTOR_SRC_COLOR,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR,
+    I3_RBK_BLEND_FACTOR_DST_COLOR,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+    I3_RBK_BLEND_FACTOR_SRC_ALPHA,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    I3_RBK_BLEND_FACTOR_DST_ALPHA,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+    I3_RBK_BLEND_FACTOR_CONSTANT_COLOR,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR,
+    I3_RBK_BLEND_FACTOR_CONSTANT_ALPHA,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA,
+    I3_RBK_BLEND_FACTOR_SRC_ALPHA_SATURATE,
+    I3_RBK_BLEND_FACTOR_SRC1_COLOR,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR,
+    I3_RBK_BLEND_FACTOR_SRC1_ALPHA,
+    I3_RBK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA,
+} i3_rbk_blend_factor_t;
+
+// blend op
+typedef enum
+{
+    I3_RBK_BLEND_OP_ADD = 0,
+    I3_RBK_BLEND_OP_SUBTRACT,
+    I3_RBK_BLEND_OP_REVERSE_SUBTRACT,
+    I3_RBK_BLEND_OP_MIN,
+    I3_RBK_BLEND_OP_MAX,
+} i3_rbk_blend_op_t;
+
+// color component flags
+typedef enum
+{
+    I3_RBK_COLOR_COMPONENT_R_BIT = i3_flag(0),
+    I3_RBK_COLOR_COMPONENT_G_BIT = i3_flag(1),
+    I3_RBK_COLOR_COMPONENT_B_BIT = i3_flag(2),
+    I3_RBK_COLOR_COMPONENT_A_BIT = i3_flag(3),
+} i3_rbk_color_component_flag_bits_t;
+
+typedef i3_rbk_flags_t i3_rbk_color_component_flags_t;
+
+// dynamic state
+typedef enum
+{
+    I3_RBK_DYNAMIC_STATE_VIEWPORT = 0,
+    I3_RBK_DYNAMIC_STATE_SCISSOR,
+    I3_RBK_DYNAMIC_STATE_LINE_WIDTH,
+    I3_RBK_DYNAMIC_STATE_DEPTH_BIAS,
+    I3_RBK_DYNAMIC_STATE_BLEND_CONSTANTS,
+    I3_RBK_DYNAMIC_STATE_DEPTH_BOUNDS,
+    I3_RBK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+    I3_RBK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+    I3_RBK_DYNAMIC_STATE_STENCIL_REFERENCE,
+} i3_rbk_dynamic_state_t;
+
+// viewport
+typedef struct i3_rbk_viewport_t
+{
+    float x;
+    float y;
+    float width;
+    float height;
+    float min_depth;
+    float max_depth;
+} i3_rbk_viewport_t; 
+
+// extents
+typedef struct i3_rbk_extent2d_t 
+{
+    uint32_t width;
+    uint32_t height;
+} i3_rbk_extent2d_t;
+
+typedef struct i3_rbk_extent3d_t 
+{
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+} i3_rbk_extent3d_t;
+
+// offsets
+typedef struct i3_rbk_offset2d_t 
+{
+    int32_t x;
+    int32_t y;
+} i3_rbk_offset2d_t; 
+
+typedef struct i3_rbk_offset3d_t 
+{
+    int32_t x;
+    int32_t y;
+    int32_t z;
+} i3_rbk_offset3d_t;
+
+// rect
+typedef struct i3_rbk_rect_t 
+{
+    i3_rbk_offset2d_t offset;
+    i3_rbk_extent2d_t extent;
+} i3_rbk_rect_t;
+
 // resource interface
 typedef struct i3_rbk_resource_o i3_rbk_resource_o;
 
@@ -319,42 +483,6 @@ typedef struct i3_rbk_shader_module_i
     void (*destroy)(i3_rbk_shader_module_o* self);
 } i3_rbk_shader_module_i;
 
-// pipeline
-
-/*
-typedef struct VkGraphicsPipelineCreateInfo {
-    VkStructureType                                  sType;
-    const void*                                      pNext;
-    VkPipelineCreateFlags                            flags;
-    uint32_t                                         stageCount;
-    const VkPipelineShaderStageCreateInfo*           pStages;
-    const VkPipelineVertexInputStateCreateInfo*      pVertexInputState;
-    const VkPipelineInputAssemblyStateCreateInfo*    pInputAssemblyState;
-    const VkPipelineTessellationStateCreateInfo*     pTessellationState;
-    const VkPipelineViewportStateCreateInfo*         pViewportState;
-    const VkPipelineRasterizationStateCreateInfo*    pRasterizationState;
-    const VkPipelineMultisampleStateCreateInfo*      pMultisampleState;
-    const VkPipelineDepthStencilStateCreateInfo*     pDepthStencilState;
-    const VkPipelineColorBlendStateCreateInfo*       pColorBlendState;
-    const VkPipelineDynamicStateCreateInfo*          pDynamicState;
-    VkPipelineLayout                                 layout;
-    VkRenderPass                                     renderPass;
-    uint32_t                                         subpass;
-    VkPipeline                                       basePipelineHandle;
-    int32_t                                          basePipelineIndex;
-} VkGraphicsPipelineCreateInfo;
-
-typedef struct VkComputePipelineCreateInfo {
-    VkStructureType                    sType;
-    const void*                        pNext;
-    VkPipelineCreateFlags              flags;
-    VkPipelineShaderStageCreateInfo    stage;
-    VkPipelineLayout                   layout;
-    VkPipeline                         basePipelineHandle;
-    int32_t                            basePipelineIndex;
-} VkComputePipelineCreateInfo;
-*/
-
 // shader stage
 typedef struct i3_rbk_pipeline_shader_stage_desc_t
 {
@@ -381,9 +509,9 @@ typedef struct i3_rbk_pipeline_vertex_input_attribute_desc_t
 
 typedef struct i3_rbk_pipeline_vertex_input_state_t
 {
-    i3_rbk_pipeline_vertex_input_binding_desc_t* bindings;
+    const i3_rbk_pipeline_vertex_input_binding_desc_t* bindings;
     uint32_t binding_count;
-    i3_rbk_pipeline_vertex_input_attribute_desc_t* attributes;
+    const i3_rbk_pipeline_vertex_input_attribute_desc_t* attributes;
     uint32_t attribute_count;
 } i3_rbk_pipeline_vertex_input_state_t;
 
@@ -397,45 +525,99 @@ typedef struct i3_rbk_pipeline_input_assembly_state_t
 // tessellation
 typedef struct i3_rbk_pipeline_tessellation_state_t
 {
-    int path_control_point_count;
+    int path_control_points;
 } i3_rbk_pipeline_tessellation_state_t;
 
 // viewport
 typedef struct i3_rbk_pipeline_viewport_state_t
 {
-    int dummy;
+    uint32_t viewport_count;
+    const i3_rbk_viewport_t* viewports;
+    uint32_t scissor_count;
+    const i3_rbk_rect_t* scissors;
 } i3_rbk_pipeline_viewport_state_t;
 
 // rasterization
 typedef struct i3_rbk_pipeline_rasterization_state_t
 {
-    int dummy;
+    bool depth_clamp_enable;
+    bool rasterizer_discard_enable;
+    i3_rbk_polygon_mode_t polygon_mode;
+    i3_rbk_cull_mode_flags_t cull_mode;
+    i3_rbk_front_face_t front_face;
+    bool depth_bias_enable;
+    float depth_bias_constant_factor;
+    float depth_bias_clamp;
+    float depth_bias_slope_factor;
+    float line_width;
 } i3_rbk_pipeline_rasterization_state_t;
 
 // multisample
 typedef struct i3_rbk_pipeline_multisample_state_t
 {
-    int dummy;
+    uint32_t rasterization_samples;
+    bool sample_shading_enable;
+    float min_sample_shading;
+    const uint32_t* sample_mask;
+    bool alpha_to_coverage_enable;
+    bool alpha_to_one_enable;
 } i3_rbk_pipeline_multisample_state_t;
 
 // depth stencil
+typedef struct i3_rbk_stencil_op_state_t
+{
+    i3_rbk_stencil_op_t fail_op;
+    i3_rbk_stencil_op_t pass_op;
+    i3_rbk_stencil_op_t depth_fail_op;
+    i3_rbk_compare_op_t compare_op;
+    uint32_t compare_mask;
+    uint32_t write_mask;
+    uint32_t reference;
+} i3_rbk_stencil_op_state_t;
+
 typedef struct i3_rbk_pipeline_depth_stencil_state_t
 {
-    int dummy;
+    bool depth_test_enable;
+    bool depth_write_enable;
+    i3_rbk_compare_op_t depth_compare_op;
+    bool depth_bounds_test_enable;
+    bool stencil_test_enable;
+    i3_rbk_stencil_op_state_t front;
+    i3_rbk_stencil_op_state_t back;
+    float min_depth_bounds;
+    float max_depth_bounds;
 } i3_rbk_pipeline_depth_stencil_state_t;
 
 // color blend
+typedef struct i3_rbk_pipeline_color_blend_attachment_state_t
+{
+    bool blend_enable;
+    i3_rbk_blend_factor_t src_color_blend_factor;
+    i3_rbk_blend_factor_t dst_color_blend_factor;
+    i3_rbk_blend_op_t color_blend_op;
+    i3_rbk_blend_factor_t src_alpha_blend_factor;
+    i3_rbk_blend_factor_t dst_alpha_blend_factor;
+    i3_rbk_blend_op_t alpha_blend_op;
+    i3_rbk_color_component_flags_t color_write_mask;
+} i3_rbk_pipeline_color_blend_attachment_state_t;
+
 typedef struct i3_rbk_pipeline_color_blend_state_t
 {
-    int dummy;
+    bool logic_op_enable;
+    i3_rbk_logic_op_t logic_op;
+    uint32_t attachment_count;
+    const i3_rbk_pipeline_color_blend_attachment_state_t* attachments;
+    float blend_constants[4];
 } i3_rbk_pipeline_color_blend_state_t;
 
 // dynamic state
 typedef struct i3_rbk_pipeline_dynamic_state_t
 {
-    int dummy;
+    uint32_t dynamic_state_count;
+    const i3_rbk_dynamic_state_t* dynamic_states;
 } i3_rbk_pipeline_dynamic_state_t;
 
+// pipeline layout
 typedef struct i3_rbk_pipeline_layout_desc_t
 {
     int dummy;

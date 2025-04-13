@@ -405,3 +405,245 @@ VkPrimitiveTopology i3_vk_convert_primitive_topology(i3_rbk_primitive_topology_t
     }
     }
 }
+
+// polygon mode
+VkPolygonMode i3_vk_convert_polygon_mode(i3_rbk_polygon_mode_t mode)
+{
+    switch (mode)
+    {
+    case I3_RBK_POLYGON_MODE_FILL:
+        return VK_POLYGON_MODE_FILL;
+    case I3_RBK_POLYGON_MODE_LINE:
+        return VK_POLYGON_MODE_LINE;
+    case I3_RBK_POLYGON_MODE_POINT:
+        return VK_POLYGON_MODE_POINT;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported polygon mode: %d", mode);
+        return VK_POLYGON_MODE_FILL;
+    }
+    }
+}
+
+// cull mode flags
+VkCullModeFlags i3_vk_convert_cull_mode_flags(i3_rbk_cull_mode_flag_bits_t flags)
+{
+    VkCullModeFlags res = 0;
+    if (flags & I3_RBK_CULL_MODE_FRONT_BIT)
+        res |= VK_CULL_MODE_FRONT_BIT;
+    if (flags & I3_RBK_CULL_MODE_BACK_BIT)
+        res |= VK_CULL_MODE_BACK_BIT;
+
+    return res;
+}
+
+// front face
+VkFrontFace i3_vk_convert_front_face(i3_rbk_front_face_t face)
+{
+    switch (face)
+    {
+    case I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE:
+        return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    case I3_RBK_FRONT_FACE_CLOCKWISE:
+        return VK_FRONT_FACE_CLOCKWISE;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported front face: %d", face);
+        return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    }
+    }
+}
+
+// stencil op
+VkStencilOp i3_vk_convert_stencil_op(i3_rbk_stencil_op_t op)
+{
+    switch (op)
+    {
+    case I3_RBK_STENCIL_OP_KEEP:
+        return VK_STENCIL_OP_KEEP;
+    case I3_RBK_STENCIL_OP_ZERO:
+        return VK_STENCIL_OP_ZERO;
+    case I3_RBK_STENCIL_OP_REPLACE:
+        return VK_STENCIL_OP_REPLACE;
+    case I3_RBK_STENCIL_OP_INCREMENT_AND_CLAMP:
+        return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+    case I3_RBK_STENCIL_OP_DECREMENT_AND_CLAMP:
+        return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+    case I3_RBK_STENCIL_OP_INVERT:
+        return VK_STENCIL_OP_INVERT;
+    case I3_RBK_STENCIL_OP_INCREMENT_AND_WRAP:
+        return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+    case I3_RBK_STENCIL_OP_DECREMENT_AND_WRAP:
+        return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported stencil op: %d", op);
+        return VK_STENCIL_OP_KEEP;
+    }
+    }
+}
+
+// logic op
+VkLogicOp i3_vk_convert_logic_op(i3_rbk_logic_op_t op)
+{
+    switch (op)
+    {
+    case I3_RBK_LOGIC_OP_CLEAR:
+        return VK_LOGIC_OP_CLEAR;
+    case I3_RBK_LOGIC_OP_AND:
+        return VK_LOGIC_OP_AND;
+    case I3_RBK_LOGIC_OP_AND_REVERSE:
+        return VK_LOGIC_OP_AND_REVERSE;
+    case I3_RBK_LOGIC_OP_COPY:
+        return VK_LOGIC_OP_COPY;
+    case I3_RBK_LOGIC_OP_AND_INVERTED:
+        return VK_LOGIC_OP_AND_INVERTED;
+    case I3_RBK_LOGIC_OP_NO_OP:
+        return VK_LOGIC_OP_NO_OP;
+    case I3_RBK_LOGIC_OP_XOR:
+        return VK_LOGIC_OP_XOR;
+    case I3_RBK_LOGIC_OP_OR:
+        return VK_LOGIC_OP_OR;
+    case I3_RBK_LOGIC_OP_NOR:
+        return VK_LOGIC_OP_NOR;
+    case I3_RBK_LOGIC_OP_EQUIVALENT:
+        return VK_LOGIC_OP_EQUIVALENT;
+    case I3_RBK_LOGIC_OP_INVERT:
+        return VK_LOGIC_OP_INVERT;
+    case I3_RBK_LOGIC_OP_OR_REVERSE:
+        return VK_LOGIC_OP_OR_REVERSE;
+    case I3_RBK_LOGIC_OP_COPY_INVERTED:
+        return VK_LOGIC_OP_COPY_INVERTED;
+    case I3_RBK_LOGIC_OP_OR_INVERTED:
+        return VK_LOGIC_OP_OR_INVERTED;
+    case I3_RBK_LOGIC_OP_NAND:
+        return VK_LOGIC_OP_NAND;
+    case I3_RBK_LOGIC_OP_SET:
+        return VK_LOGIC_OP_SET;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported logic op: %d", op);
+        return VK_LOGIC_OP_COPY;
+    }
+    }
+}
+
+// blend factor
+VkBlendFactor i3_vk_convert_blend_factor(i3_rbk_blend_factor_t factor)
+{
+    switch (factor)
+    {
+    case I3_RBK_BLEND_FACTOR_ZERO:
+        return VK_BLEND_FACTOR_ZERO;
+    case I3_RBK_BLEND_FACTOR_ONE:
+        return VK_BLEND_FACTOR_ONE;
+    case I3_RBK_BLEND_FACTOR_SRC_COLOR:
+        return VK_BLEND_FACTOR_SRC_COLOR;
+    case I3_RBK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR:
+        return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+    case I3_RBK_BLEND_FACTOR_DST_COLOR:
+        return VK_BLEND_FACTOR_DST_COLOR;
+    case I3_RBK_BLEND_FACTOR_ONE_MINUS_DST_COLOR:
+        return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+    case I3_RBK_BLEND_FACTOR_SRC_ALPHA:
+        return VK_BLEND_FACTOR_SRC_ALPHA;
+    case I3_RBK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:
+        return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    case I3_RBK_BLEND_FACTOR_DST_ALPHA:
+        return VK_BLEND_FACTOR_DST_ALPHA;
+    case I3_RBK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA:
+        return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+    case I3_RBK_BLEND_FACTOR_CONSTANT_COLOR:
+        return VK_BLEND_FACTOR_CONSTANT_COLOR;
+    case I3_RBK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR:
+        return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+    case I3_RBK_BLEND_FACTOR_CONSTANT_ALPHA:
+        return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+    case I3_RBK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA:
+        return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+    case I3_RBK_BLEND_FACTOR_SRC_ALPHA_SATURATE:
+        return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported blend factor: %d", factor);
+        return VK_BLEND_FACTOR_ZERO;
+    }
+    }
+}
+
+// blend op
+VkBlendOp i3_vk_convert_blend_op(i3_rbk_blend_op_t op)
+{
+    switch (op)
+    {
+    case I3_RBK_BLEND_OP_ADD:
+        return VK_BLEND_OP_ADD;
+    case I3_RBK_BLEND_OP_SUBTRACT:
+        return VK_BLEND_OP_SUBTRACT;
+    case I3_RBK_BLEND_OP_REVERSE_SUBTRACT:
+        return VK_BLEND_OP_REVERSE_SUBTRACT;
+    case I3_RBK_BLEND_OP_MIN:
+        return VK_BLEND_OP_MIN;
+    case I3_RBK_BLEND_OP_MAX:
+        return VK_BLEND_OP_MAX;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported blend op: %d", op);
+        return VK_BLEND_OP_ADD;
+    }
+    }
+}
+
+// color component flags
+VkColorComponentFlags i3_vk_convert_color_component_flags(i3_rbk_color_component_flags_t flags)
+{
+    VkColorComponentFlags res = 0;
+    if (flags & I3_RBK_COLOR_COMPONENT_R_BIT)
+        res |= VK_COLOR_COMPONENT_R_BIT;
+    if (flags & I3_RBK_COLOR_COMPONENT_G_BIT)
+        res |= VK_COLOR_COMPONENT_G_BIT;
+    if (flags & I3_RBK_COLOR_COMPONENT_B_BIT)
+        res |= VK_COLOR_COMPONENT_B_BIT;
+    if (flags & I3_RBK_COLOR_COMPONENT_A_BIT)
+        res |= VK_COLOR_COMPONENT_A_BIT;
+
+    return res;
+}
+
+// dynamic state
+VkDynamicState i3_vk_convert_dynamic_state(i3_rbk_dynamic_state_t state)
+{
+    switch (state)
+    {
+    case I3_RBK_DYNAMIC_STATE_VIEWPORT:
+        return VK_DYNAMIC_STATE_VIEWPORT;
+    case I3_RBK_DYNAMIC_STATE_SCISSOR:
+        return VK_DYNAMIC_STATE_SCISSOR;
+    case I3_RBK_DYNAMIC_STATE_LINE_WIDTH:
+        return VK_DYNAMIC_STATE_LINE_WIDTH;
+    case I3_RBK_DYNAMIC_STATE_DEPTH_BIAS:
+        return VK_DYNAMIC_STATE_DEPTH_BIAS;
+    case I3_RBK_DYNAMIC_STATE_BLEND_CONSTANTS:
+        return VK_DYNAMIC_STATE_BLEND_CONSTANTS;
+    case I3_RBK_DYNAMIC_STATE_DEPTH_BOUNDS:
+        return VK_DYNAMIC_STATE_DEPTH_BOUNDS;
+    case I3_RBK_DYNAMIC_STATE_STENCIL_COMPARE_MASK:
+        return VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK;
+    case I3_RBK_DYNAMIC_STATE_STENCIL_WRITE_MASK:
+        return VK_DYNAMIC_STATE_STENCIL_WRITE_MASK;
+    case I3_RBK_DYNAMIC_STATE_STENCIL_REFERENCE:
+        return VK_DYNAMIC_STATE_STENCIL_REFERENCE;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported dynamic state: %d", state);
+        return VK_DYNAMIC_STATE_VIEWPORT;
+    }
+    }
+}

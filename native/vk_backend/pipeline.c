@@ -23,7 +23,7 @@ static void i3_vk_pipeline_release(i3_rbk_resource_o* self)
     if (pipeline->use_count == 0)
     {
         vkDestroyPipelineLayout(pipeline->device->handle, pipeline->layout, NULL);
-        //vkDestroyPipeline(pipeline->device->handle, pipeline->handle, NULL);
+        vkDestroyPipeline(pipeline->device->handle, pipeline->handle, NULL);
         i3_memory_pool_free(&pipeline->device->pipeline_pool, pipeline);
     }
 }
@@ -143,11 +143,12 @@ static VkPipelineShaderStageCreateInfo* i3_vk_create_stages(i3_arena_t *arena, u
 }
 
 // vertex input state
-static void i3_vk_create_vertex_input_states(i3_arena_t* arena, const i3_rbk_pipeline_vertex_input_state_t* desc, VkPipelineVertexInputStateCreateInfo* ci)
+static VkPipelineVertexInputStateCreateInfo* i3_vk_create_vertex_input_states(i3_arena_t* arena, const i3_rbk_pipeline_vertex_input_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
-    assert(ci != NULL);
+
+    VkPipelineVertexInputStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineVertexInputStateCreateInfo));
 
     // create binding descriptions
     VkVertexInputBindingDescription* bindings = i3_arena_alloc(arena, sizeof(VkVertexInputBindingDescription) * desc->binding_count);
@@ -185,20 +186,260 @@ static void i3_vk_create_vertex_input_states(i3_arena_t* arena, const i3_rbk_pip
         .vertexAttributeDescriptionCount = desc->attribute_count,
         .pVertexAttributeDescriptions = attributes,
     };
+
+    return ci;
 }
 
 // input assembly state
-static void i3_vk_create_input_assembly_states(i3_arena_t* arena, const i3_rbk_pipeline_input_assembly_state_t* desc, VkPipelineInputAssemblyStateCreateInfo* ci)
+static VkPipelineInputAssemblyStateCreateInfo* i3_vk_create_input_assembly_states(i3_arena_t* arena, const i3_rbk_pipeline_input_assembly_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
-    assert(ci != NULL);
+
+    VkPipelineInputAssemblyStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineInputAssemblyStateCreateInfo));
+
     *ci = (VkPipelineInputAssemblyStateCreateInfo)
     {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .topology = i3_vk_convert_primitive_topology(desc->topology),
         .primitiveRestartEnable = desc->primitive_restart_enable ? VK_TRUE : VK_FALSE,
     };
+
+    return ci;
+}
+
+// tessellation state
+static VkPipelineTessellationStateCreateInfo* i3_vk_create_tessellation_states(i3_arena_t* arena, const i3_rbk_pipeline_tessellation_state_t* desc)
+{
+    assert(arena != NULL);
+    assert(desc != NULL);
+
+    VkPipelineTessellationStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineTessellationStateCreateInfo));
+
+    *ci = (VkPipelineTessellationStateCreateInfo)
+    {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO,
+        .patchControlPoints = desc->path_control_points,
+    };
+
+    return ci;
+}
+
+// viewport state
+static VkPipelineViewportStateCreateInfo* i3_vk_create_viewport_states(i3_arena_t* arena, const i3_rbk_pipeline_viewport_state_t* desc)
+{
+    assert(arena != NULL);
+    assert(desc != NULL);
+
+    VkPipelineViewportStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineViewportStateCreateInfo));
+
+    *ci = (VkPipelineViewportStateCreateInfo)
+    {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = desc->viewport_count,
+        .scissorCount = desc->scissor_count,
+    };
+
+    // create viewports
+    if(desc->viewport_count > 0)
+    {
+        VkViewport* viewports = i3_arena_alloc(arena, sizeof(VkViewport) * desc->viewport_count);
+        for (uint32_t i = 0; i < desc->viewport_count; i++)
+        {
+            const i3_rbk_viewport_t* viewport = &desc->viewports[i];
+            viewports[i] = (VkViewport)
+            {
+                .x = viewport->x,
+                .y = viewport->y,
+                .width = viewport->width,
+                .height = viewport->height,
+                .minDepth = viewport->min_depth,
+                .maxDepth = viewport->max_depth,
+            };
+        }
+
+        ci->pViewports = viewports;
+    }
+
+    // create scissors
+    if(desc->scissor_count > 0)
+    {
+        VkRect2D* scissors = i3_arena_alloc(arena, sizeof(VkRect2D) * desc->scissor_count);
+        for (uint32_t i = 0; i < desc->scissor_count; i++)
+        {
+            const i3_rbk_rect_t* rect = &desc->scissors[i];
+            scissors[i] = (VkRect2D)
+            {
+                .offset = { rect->offset.x, rect->offset.y },
+                .extent = { rect->extent.width, rect->extent.height },
+            };
+        }
+
+        ci->pScissors = scissors;
+    }
+
+    return ci;
+}
+
+// rasterization state
+static VkPipelineRasterizationStateCreateInfo* i3_vk_create_rasterization_states(i3_arena_t* arena, const i3_rbk_pipeline_rasterization_state_t* desc)
+{
+    assert(arena != NULL);
+    assert(desc != NULL);
+
+    VkPipelineRasterizationStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineRasterizationStateCreateInfo));
+
+    *ci = (VkPipelineRasterizationStateCreateInfo)
+    {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = desc->depth_clamp_enable ? VK_TRUE : VK_FALSE,
+        .rasterizerDiscardEnable = desc->rasterizer_discard_enable ? VK_TRUE : VK_FALSE,
+        .polygonMode = i3_vk_convert_polygon_mode(desc->polygon_mode),
+        .cullMode = i3_vk_convert_cull_mode_flags(desc->cull_mode),
+        .frontFace = i3_vk_convert_front_face(desc->front_face),
+        .depthBiasEnable = desc->depth_bias_enable ? VK_TRUE : VK_FALSE,
+        .depthBiasConstantFactor = desc->depth_bias_constant_factor,
+        .depthBiasClamp = desc->depth_bias_clamp,
+        .depthBiasSlopeFactor = desc->depth_bias_slope_factor,
+        .lineWidth = desc->line_width,
+    };
+
+    return ci;
+}
+
+// multisample state
+static VkPipelineMultisampleStateCreateInfo* i3_vk_create_multisample_states(i3_arena_t* arena, const i3_rbk_pipeline_multisample_state_t* desc)
+{
+    assert(arena != NULL);
+    assert(desc != NULL);
+
+    VkPipelineMultisampleStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineMultisampleStateCreateInfo));
+
+    *ci = (VkPipelineMultisampleStateCreateInfo)
+    {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = i3_vk_convert_sample_count(desc->rasterization_samples),
+        .sampleShadingEnable = desc->sample_shading_enable ? VK_TRUE : VK_FALSE,
+        .minSampleShading = desc->min_sample_shading,
+        .pSampleMask = desc->sample_mask,
+        .alphaToCoverageEnable = desc->alpha_to_coverage_enable ? VK_TRUE : VK_FALSE,
+        .alphaToOneEnable = desc->alpha_to_one_enable ? VK_TRUE : VK_FALSE,
+    };
+
+    return ci;
+}
+
+// depth stencil state
+static VkPipelineDepthStencilStateCreateInfo* i3_vk_create_depth_stencil_states(i3_arena_t* arena, const i3_rbk_pipeline_depth_stencil_state_t* desc)
+{
+    assert(arena != NULL);
+    assert(desc != NULL);
+
+    VkPipelineDepthStencilStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineDepthStencilStateCreateInfo));
+
+    *ci = (VkPipelineDepthStencilStateCreateInfo)
+    {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = desc->depth_test_enable ? VK_TRUE : VK_FALSE,
+        .depthWriteEnable = desc->depth_write_enable ? VK_TRUE : VK_FALSE,
+        .depthCompareOp = i3_vk_convert_compare_op(desc->depth_compare_op),
+        .depthBoundsTestEnable = desc->depth_bounds_test_enable ? VK_TRUE : VK_FALSE,
+        .stencilTestEnable = desc->stencil_test_enable ? VK_TRUE : VK_FALSE,
+        .front = (VkStencilOpState)
+        {
+            .failOp = i3_vk_convert_stencil_op(desc->front.fail_op),
+            .passOp = i3_vk_convert_stencil_op(desc->front.pass_op),
+            .depthFailOp = i3_vk_convert_stencil_op(desc->front.depth_fail_op),
+            .compareOp = i3_vk_convert_compare_op(desc->front.compare_op),
+            .compareMask = desc->front.compare_mask,
+            .writeMask = desc->front.write_mask,
+            .reference = desc->front.reference,
+        },
+        .back = (VkStencilOpState)
+        {
+            .failOp = i3_vk_convert_stencil_op(desc->back.fail_op),
+            .passOp = i3_vk_convert_stencil_op(desc->back.pass_op),
+            .depthFailOp = i3_vk_convert_stencil_op(desc->back.depth_fail_op),
+            .compareOp = i3_vk_convert_compare_op(desc->back.compare_op),
+            .compareMask = desc->back.compare_mask,
+            .writeMask = desc->back.write_mask,
+            .reference = desc->back.reference,
+        },
+        .minDepthBounds = desc->min_depth_bounds,
+        .maxDepthBounds = desc->max_depth_bounds,
+    };
+
+    return ci;
+}
+
+// color blend state
+static VkPipelineColorBlendStateCreateInfo* i3_vk_create_color_blend_states(i3_arena_t* arena, const i3_rbk_pipeline_color_blend_state_t* desc)
+{
+    assert(arena != NULL);
+    assert(desc != NULL);
+
+    VkPipelineColorBlendStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineColorBlendStateCreateInfo));
+
+    *ci = (VkPipelineColorBlendStateCreateInfo)
+    {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = desc->logic_op_enable ? VK_TRUE : VK_FALSE,
+        .logicOp = i3_vk_convert_logic_op(desc->logic_op),
+        .attachmentCount = desc->attachment_count,
+        .blendConstants = { desc->blend_constants[0], desc->blend_constants[1], desc->blend_constants[2], desc->blend_constants[3] },
+    };
+
+    // create attachments
+    if (desc->attachment_count > 0)
+    {
+        VkPipelineColorBlendAttachmentState* attachments = i3_arena_alloc(arena, sizeof(VkPipelineColorBlendAttachmentState) * desc->attachment_count);
+        for (uint32_t i = 0; i < desc->attachment_count; i++)
+        {
+            const i3_rbk_pipeline_color_blend_attachment_state_t* attachment = &desc->attachments[i];
+            attachments[i] = (VkPipelineColorBlendAttachmentState)
+            {
+                .blendEnable = attachment->blend_enable ? VK_TRUE : VK_FALSE,
+                .srcColorBlendFactor = i3_vk_convert_blend_factor(attachment->src_color_blend_factor),
+                .dstColorBlendFactor = i3_vk_convert_blend_factor(attachment->dst_color_blend_factor),
+                .colorBlendOp = i3_vk_convert_blend_op(attachment->color_blend_op),
+                .srcAlphaBlendFactor = i3_vk_convert_blend_factor(attachment->src_alpha_blend_factor),
+                .dstAlphaBlendFactor = i3_vk_convert_blend_factor(attachment->dst_alpha_blend_factor),
+                .alphaBlendOp = i3_vk_convert_blend_op(attachment->alpha_blend_op),
+                .colorWriteMask = i3_vk_convert_color_component_flags(attachment->color_write_mask),
+            };
+        }
+
+        ci->pAttachments = attachments;
+    }
+
+    return ci;
+}
+
+// dynamic state
+static VkPipelineDynamicStateCreateInfo* i3_vk_create_dynamic_states(i3_arena_t* arena, const i3_rbk_pipeline_dynamic_state_t* desc)
+{
+    assert(arena != NULL);
+    assert(desc != NULL);
+
+    VkPipelineDynamicStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineDynamicStateCreateInfo));
+
+    *ci = (VkPipelineDynamicStateCreateInfo)
+    {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .dynamicStateCount = desc->dynamic_state_count, 
+    };
+
+    // create dynamic states
+    if (desc->dynamic_state_count > 0)
+    {
+        VkDynamicState* dynamic_states = i3_arena_alloc(arena, sizeof(VkDynamicState) * desc->dynamic_state_count);
+        for (uint32_t i = 0; i < desc->dynamic_state_count; i++)
+            dynamic_states[i] = i3_vk_convert_dynamic_state(desc->dynamic_states[i]);
+
+        ci->pDynamicStates = dynamic_states;
+    }
+
+    return ci;
 }
 
 // create graphics pipeline
@@ -233,19 +474,39 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self, 
 
     // vertex input state
     if (desc->vertex_input != NULL)
-    {
-        VkPipelineVertexInputStateCreateInfo* vertex_input = i3_arena_alloc(&arena, sizeof(VkPipelineVertexInputStateCreateInfo));
-        i3_vk_create_vertex_input_states(&arena, desc->vertex_input, vertex_input);
-        pipeline_ci.pVertexInputState = vertex_input;
-    }
+        pipeline_ci.pVertexInputState = i3_vk_create_vertex_input_states(&arena, desc->vertex_input);
 
     // input assembly state
     if (desc->input_assembly != NULL)
-    {
-        VkPipelineInputAssemblyStateCreateInfo* input_assembly = i3_arena_alloc(&arena, sizeof(VkPipelineInputAssemblyStateCreateInfo));
-        i3_vk_create_input_assembly_states(&arena, desc->input_assembly, input_assembly);
-        pipeline_ci.pInputAssemblyState = input_assembly;
-    }
+        pipeline_ci.pInputAssemblyState = i3_vk_create_input_assembly_states(&arena, desc->input_assembly);
+
+    // tessellation state
+    if (desc->tessellation != NULL)
+        pipeline_ci.pTessellationState = i3_vk_create_tessellation_states(&arena, desc->tessellation);
+
+    // viewport state
+    if (desc->viewport != NULL)
+        pipeline_ci.pViewportState = i3_vk_create_viewport_states(&arena, desc->viewport);
+
+    // rasterization state
+    if (desc->rasterization != NULL)
+        pipeline_ci.pRasterizationState = i3_vk_create_rasterization_states(&arena, desc->rasterization);
+
+    // multisample state
+    if (desc->multisample != NULL)
+        pipeline_ci.pMultisampleState = i3_vk_create_multisample_states(&arena, desc->multisample);
+
+    // depth stencil state
+    if (desc->depth_stencil != NULL)
+        pipeline_ci.pDepthStencilState = i3_vk_create_depth_stencil_states(&arena, desc->depth_stencil);
+
+    // color blend state
+    if (desc->color_blend != NULL)
+        pipeline_ci.pColorBlendState = i3_vk_create_color_blend_states(&arena, desc->color_blend);
+        
+    // dynamic state
+    if (desc->dynamic != NULL)
+        pipeline_ci.pDynamicState = i3_vk_create_dynamic_states(&arena, desc->dynamic);
 
     // create pipeline
     i3_vk_check(vkCreateGraphicsPipelines(device->handle, VK_NULL_HANDLE, 1, &pipeline_ci, NULL, &pipeline->handle));

@@ -45,3 +45,30 @@ VkVertexInputRate i3_vk_convert_vertex_input_rate(i3_rbk_vertex_input_rate_t rat
 
 // primitive topology
 VkPrimitiveTopology i3_vk_convert_primitive_topology(i3_rbk_primitive_topology_t topology);
+
+// polygon mode
+VkPolygonMode i3_vk_convert_polygon_mode(i3_rbk_polygon_mode_t mode);
+
+// cull mode flags
+VkCullModeFlags i3_vk_convert_cull_mode_flags(i3_rbk_cull_mode_flag_bits_t flags);
+
+// front face
+VkFrontFace i3_vk_convert_front_face(i3_rbk_front_face_t face);
+
+// stencil op
+VkStencilOp i3_vk_convert_stencil_op(i3_rbk_stencil_op_t op);
+
+// logic op
+VkLogicOp i3_vk_convert_logic_op(i3_rbk_logic_op_t op);
+
+// blend factor
+VkBlendFactor i3_vk_convert_blend_factor(i3_rbk_blend_factor_t factor);
+
+// blend op
+VkBlendOp i3_vk_convert_blend_op(i3_rbk_blend_op_t op);
+
+// color component flags
+VkColorComponentFlags i3_vk_convert_color_component_flags(i3_rbk_color_component_flags_t flags);
+
+// dynamic state
+VkDynamicState i3_vk_convert_dynamic_state(i3_rbk_dynamic_state_t state);

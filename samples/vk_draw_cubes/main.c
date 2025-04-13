@@ -102,7 +102,6 @@ int main()
     };
     i3_rbk_shader_module_i* shader_module = device->create_shader_module(device->self, &shader_desc);
     
-
     // pipeline stages
     i3_rbk_pipeline_shader_stage_desc_t stages[] =
     {
@@ -156,14 +155,73 @@ int main()
         .topology = I3_RBK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
     };
 
+    // viewport state
+    i3_rbk_viewport_t viewport_data = {
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = 800.0f,
+        .height = 600.0f,
+        .min_depth = 0.0f,
+        .max_depth = 1.0f
+    };
+
+    i3_rbk_rect_t scissor_data = {
+        .offset = { 0, 0 },
+        .extent = { 800, 600 }
+    };
+
+    i3_rbk_pipeline_viewport_state_t viewport = {
+        .viewport_count = 1,
+        .viewports = &viewport_data,
+        .scissor_count = 1,
+        .scissors = &scissor_data
+    };
+
+    // rasterization state
+    i3_rbk_pipeline_rasterization_state_t rasterization = {
+        .polygon_mode = I3_RBK_POLYGON_MODE_FILL,
+        .cull_mode = I3_RBK_CULL_MODE_BACK_BIT,
+        .front_face = I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depth_clamp_enable = false,
+        .rasterizer_discard_enable = false,
+        .depth_bias_enable = false,
+        .line_width = 1.0f
+    };
+
+    // multisample state
+    i3_rbk_pipeline_multisample_state_t multisample = {
+        .rasterization_samples = 1,
+        .sample_shading_enable = false,
+        .min_sample_shading = 0.0f,
+        .alpha_to_coverage_enable = false,
+        .alpha_to_one_enable = false
+    };
+
+    // dynamic state
+    i3_rbk_dynamic_state_t dynamic_states[] =
+    {
+        I3_RBK_DYNAMIC_STATE_VIEWPORT,
+        I3_RBK_DYNAMIC_STATE_SCISSOR,
+    };
+
+    i3_rbk_pipeline_dynamic_state_t dynamic = {
+        .dynamic_state_count = sizeof(dynamic_states) / sizeof(dynamic_states[0]),
+        .dynamic_states = dynamic_states
+    };
+
+    // graphics pipeline
     i3_rbk_graphics_pipeline_desc_t pipeline_desc = {
         .stage_count = 2,
         .stages = stages,
         .vertex_input = &vertex_input,
         .input_assembly = &input_assembly,
+        .viewport = &viewport,
+        .rasterization = &rasterization,
+        .multisample = &multisample,
+        .dynamic = &dynamic,
     };
+    
     i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
-
 
     while (!window->should_close(window->self))
     {
