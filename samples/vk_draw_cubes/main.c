@@ -243,6 +243,22 @@ int main()
         .alpha_to_one_enable = false
     };
 
+    // color blend state
+    i3_rbk_pipeline_color_blend_attachment_state_t color_blend_attachments[] =
+    {
+        {
+            .blend_enable = false,
+            .color_write_mask = I3_RBK_COLOR_COMPONENT_R_BIT | I3_RBK_COLOR_COMPONENT_G_BIT | I3_RBK_COLOR_COMPONENT_B_BIT | I3_RBK_COLOR_COMPONENT_A_BIT
+        }
+    };
+
+    i3_rbk_pipeline_color_blend_state_t color_blend = {
+        .logic_op_enable = false,
+        .attachment_count = 1,
+        .attachments = color_blend_attachments,
+        .blend_constants = { 0.0f, 0.0f, 0.0f, 0.0f }
+    };
+
     // dynamic state
     i3_rbk_dynamic_state_t dynamic_states[] =
     {
@@ -264,6 +280,7 @@ int main()
         .viewport = &viewport,
         .rasterization = &rasterization,
         .multisample = &multisample,
+        .color_blend = &color_blend,
         .dynamic = &dynamic,
         .layout = pipeline_layout,
         .framebuffer = frame_buffer,
