@@ -81,6 +81,50 @@ int main()
 
     i3_rbk_swapchain_i* swapchain = device->create_swapchain(device->self, window, &swapchain_desc);
 
+    // create framebuffer
+    i3_rbk_framebuffer_attachment_desc_t framebuffer_attachment =
+    {
+        .image_view = image_view,
+    };
+
+    i3_rbk_framebuffer_desc_t framebuffer_desc =
+    {
+        .width = 800,
+        .height = 600,
+        .layers = 1,
+        .color_attachment_count = 1,
+        .color_attachments = &framebuffer_attachment,
+    };
+
+    i3_rbk_framebuffer_i *frame_buffer = device->create_framebuffer(device->self, &framebuffer_desc);
+
+    // create descriptor set layout
+    i3_rbk_descriptor_set_layout_binding_t descriptor_set_layout_bindings[] =
+    {
+        {
+            .binding = 0,
+            .descriptor_type = I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptor_count = 1,
+            .stage_flags = I3_RBK_SHADER_STAGE_VERTEX,
+        }
+    };
+
+    i3_rbk_descriptor_set_layout_desc_t descriptor_set_layout_desc = 
+    {
+        .binding_count = sizeof(descriptor_set_layout_bindings) / sizeof(descriptor_set_layout_bindings[0]),
+        .bindings = descriptor_set_layout_bindings,
+    };
+
+    i3_rbk_descriptor_set_layout_i* descriptor_set_layout = device->create_descriptor_set_layout(device->self, &descriptor_set_layout_desc);
+
+    // create pipeline layout
+    i3_rbk_pipeline_layout_desc_t pipeline_layout_desc = 
+    {
+        .set_layout_count = 1,
+        .set_layouts = &descriptor_set_layout,
+    };
+
+    i3_rbk_pipeline_layout_i* pipeline_layout = device->create_pipeline_layout(device->self, &pipeline_layout_desc);
 
     // create shader module
     FILE* file = fopen("samples/vk_draw_cubes/shaders.spv", "rb");
@@ -102,6 +146,8 @@ int main()
     };
     i3_rbk_shader_module_i* shader_module = device->create_shader_module(device->self, &shader_desc);
     
+    i3_free(shaders_data);
+
     // pipeline stages
     i3_rbk_pipeline_shader_stage_desc_t stages[] =
     {
@@ -219,6 +265,8 @@ int main()
         .rasterization = &rasterization,
         .multisample = &multisample,
         .dynamic = &dynamic,
+        .layout = pipeline_layout,
+        .framebuffer = frame_buffer,
     };
     
     i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
@@ -228,6 +276,10 @@ int main()
         i3_render_window_poll_events();
     }
 
+    frame_buffer->destroy(frame_buffer->self);
+    shader_module->destroy(shader_module->self);
+    descriptor_set_layout->destroy(descriptor_set_layout->self);
+    pipeline_layout->destroy(pipeline_layout->self);
     pipeline->destroy(pipeline->self);
     swapchain->destroy(swapchain->self);
     image_view->destroy(image_view->self);
@@ -237,6 +289,8 @@ int main()
     device->destroy(device->self);
     window->destroy(window->self);
     backend->destroy(backend->self);
+
+    i3_log_dbg(vk_logger, "Application finished successfully");
 
     return 0;
 }

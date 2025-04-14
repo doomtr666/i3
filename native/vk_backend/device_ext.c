@@ -18,7 +18,7 @@ void i3_vk_device_ext_load(VkDevice device, i3_vkbk_device_ext_t* ext)
 #undef I3_VKBK_DEV_EXT_FN
 
 #define I3_VKBK_DEV_EXT_NAME(ext_name) \
-    i3_log_dbg(log, "Device ext " #ext_name " loaded : %s", ext->ext_name##_supported ? "TRUE" : "FALSE");
+    i3_log_dbg(log, "Device extension " #ext_name " loaded : %s", ext->ext_name##_supported ? "TRUE" : "FALSE");
 #define I3_VKBK_DEV_EXT_FN(func_name)
         I3_VKBK_DEV_EXTS()
 #undef I3_VKBK_DEV_EXT_NAME

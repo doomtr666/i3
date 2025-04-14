@@ -8,7 +8,8 @@ typedef struct i3_vk_pipeline_o
     i3_rbk_pipeline_i iface;
     i3_vk_device_o* device;
     uint32_t use_count;
-    VkPipelineLayout layout;
+    i3_rbk_framebuffer_i* framebuffer; // keep ref to framebuffer
+    i3_rbk_pipeline_layout_i* layout; // keep ref to pipeline layout
     VkPipeline handle;
 } i3_vk_pipeline_o;
 

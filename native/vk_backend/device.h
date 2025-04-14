@@ -26,6 +26,9 @@ typedef struct i3_vk_device_o
     i3_memory_pool_t buffer_pool;
     i3_memory_pool_t image_pool;
     i3_memory_pool_t image_view_pool;
+    i3_memory_pool_t descriptor_set_layout_pool;
+    i3_memory_pool_t pipeline_layout_pool;
+    i3_memory_pool_t framebuffer_pool;
     i3_memory_pool_t shader_module_pool;
     i3_memory_pool_t pipeline_pool;
 

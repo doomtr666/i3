@@ -341,9 +341,9 @@ VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flag_bits_t
     case I3_RBK_SHADER_STAGE_CALLABLE:
         return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
     case I3_RBK_SHADER_STAGE_TASK:
-        return VK_SHADER_STAGE_TASK_BIT_NV;
+        return VK_SHADER_STAGE_TASK_BIT_EXT;
     case I3_RBK_SHADER_STAGE_MESH:
-        return VK_SHADER_STAGE_MESH_BIT_NV;
+        return VK_SHADER_STAGE_MESH_BIT_EXT;
     default:
     {
         i3_logger_i* logger = i3_vk_get_logger();
@@ -351,6 +351,41 @@ VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flag_bits_t
         return VK_SHADER_STAGE_VERTEX_BIT;
     }
     }
+}
+
+VkShaderStageFlags i3_vk_convert_shader_stage_flags(i3_rbk_shader_stage_flag_bits_t stage)
+{
+    VkShaderStageFlags res = 0;
+    if (stage & I3_RBK_SHADER_STAGE_VERTEX)
+        res |= VK_SHADER_STAGE_VERTEX_BIT;
+    if (stage & I3_RBK_SHADER_STAGE_TESSELLATION_CONTROL)
+        res |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+    if (stage & I3_RBK_SHADER_STAGE_TESSELLATION_EVALUATION)
+        res |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    if (stage & I3_RBK_SHADER_STAGE_GEOMETRY)
+        res |= VK_SHADER_STAGE_GEOMETRY_BIT;
+    if (stage & I3_RBK_SHADER_STAGE_FRAGMENT)
+        res |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (stage & I3_RBK_SHADER_STAGE_COMPUTE)
+        res |= VK_SHADER_STAGE_COMPUTE_BIT;
+    if (stage & I3_RBK_SHADER_STAGE_RAYGEN)
+        res |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    if (stage & I3_RBK_SHADER_STAGE_ANY_HIT)
+        res |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+    if (stage & I3_RBK_SHADER_STAGE_CLOSEST_HIT)
+        res |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    if (stage & I3_RBK_SHADER_STAGE_MISS)
+        res |= VK_SHADER_STAGE_MISS_BIT_KHR;
+    if (stage & I3_RBK_SHADER_STAGE_INTERSECTION)
+        res |= VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+    if (stage & I3_RBK_SHADER_STAGE_CALLABLE)
+        res |= VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+    if (stage & I3_RBK_SHADER_STAGE_TASK)
+        res |= VK_SHADER_STAGE_TASK_BIT_EXT;
+    if (stage & I3_RBK_SHADER_STAGE_MESH)
+        res |= VK_SHADER_STAGE_MESH_BIT_EXT;
+
+    return res;
 }
 
 // vertex input rate
@@ -644,6 +679,42 @@ VkDynamicState i3_vk_convert_dynamic_state(i3_rbk_dynamic_state_t state)
         i3_logger_i* logger = i3_vk_get_logger();
         i3_log_wrn(logger, "Unsupported dynamic state: %d", state);
         return VK_DYNAMIC_STATE_VIEWPORT;
+    }
+    }
+}
+
+// descriptor type
+VkDescriptorType i3_vk_convert_descriptor_type(i3_rbk_descriptor_type_t type)
+{
+    switch (type)
+    {
+    case I3_RBK_DESCRIPTOR_TYPE_SAMPLER:
+        return VK_DESCRIPTOR_TYPE_SAMPLER;
+    case I3_RBK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+        return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    case I3_RBK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+        return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    case I3_RBK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+        return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    case I3_RBK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+        return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+    case I3_RBK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+        return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    case I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    case I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    case I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    case I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+    case I3_RBK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+        return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    default:
+    {
+        i3_logger_i* logger = i3_vk_get_logger();
+        i3_log_wrn(logger, "Unsupported descriptor type: %d", type);
+        return VK_DESCRIPTOR_TYPE_SAMPLER;
     }
     }
 }

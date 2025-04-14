@@ -39,6 +39,7 @@ VkImageAspectFlags i3_vk_convert_image_aspect_flags(i3_rbk_image_aspect_flags_t 
 
 // shader stage
 VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flag_bits_t stage);
+VkShaderStageFlags i3_vk_convert_shader_stage_flags(i3_rbk_shader_stage_flag_bits_t stage);
 
 // vertex input rate
 VkVertexInputRate i3_vk_convert_vertex_input_rate(i3_rbk_vertex_input_rate_t rate);
@@ -72,3 +73,6 @@ VkColorComponentFlags i3_vk_convert_color_component_flags(i3_rbk_color_component
 
 // dynamic state
 VkDynamicState i3_vk_convert_dynamic_state(i3_rbk_dynamic_state_t state);
+
+// descriptor type
+VkDescriptorType i3_vk_convert_descriptor_type(i3_rbk_descriptor_type_t type);

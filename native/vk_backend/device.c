@@ -8,6 +8,9 @@
 #include "swapchain.h"
 #include "shader_module.h"
 #include "pipeline.h"
+#include "descriptor_set_layout.h"
+#include "pipeline_layout.h"
+#include "framebuffer.h"
 
 static void i3_vk_device_destroy(i3_rbk_device_o* self)
 {
@@ -18,6 +21,9 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     i3_memory_pool_destroy(&device->buffer_pool);
     i3_memory_pool_destroy(&device->image_pool);
     i3_memory_pool_destroy(&device->image_view_pool);
+    i3_memory_pool_destroy(&device->descriptor_set_layout_pool);
+    i3_memory_pool_destroy(&device->pipeline_layout_pool);
+    i3_memory_pool_destroy(&device->framebuffer_pool);
     i3_memory_pool_destroy(&device->shader_module_pool);
     i3_memory_pool_destroy(&device->pipeline_pool);
 
@@ -39,6 +45,9 @@ static i3_vk_device_o i3_vk_device_iface_ =
         .create_buffer = i3_vk_device_create_buffer,
         .create_image = i3_vk_device_create_image,
         .create_image_view = i3_vk_device_create_image_view,
+        .create_descriptor_set_layout = i3_vk_device_create_descriptor_set_layout,
+        .create_pipeline_layout = i3_vk_device_create_pipeline_layout,
+        .create_framebuffer = i3_vk_device_create_framebuffer,
         .create_shader_module = i3_vk_device_create_shader_module,
         .create_graphics_pipeline = i3_vk_device_create_graphics_pipeline,
         .create_compute_pipeline = i3_vk_device_create_compute_pipeline,
@@ -158,12 +167,6 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
                                            .device = device->handle,
                                            .instance = backend->instance,
                                            .vulkanApiVersion = backend->api_version };
-#if 0
-    // enable allocation with buffer device address extension
-    // needed by acceleration structures
-    if (dev->device_ext.VK_KHR_buffer_device_address_supported)
-        allocator_ci.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-#endif
 
     i3_vk_check(vmaCreateAllocator(&allocator_ci, &device->vma));
     i3_log_dbg(device->log, "VMA created");
@@ -173,6 +176,9 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
     i3_memory_pool_init(&device->buffer_pool, i3_alignof(i3_vk_buffer_o), sizeof(i3_vk_buffer_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->image_pool, i3_alignof(i3_vk_image_o), sizeof(i3_vk_image_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->image_view_pool, i3_alignof(i3_vk_image_view_o), sizeof(i3_vk_image_view_o), I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->descriptor_set_layout_pool, i3_alignof(i3_vk_descriptor_set_layout_o), sizeof(i3_vk_descriptor_set_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->pipeline_layout_pool, i3_alignof(i3_vk_pipeline_layout_o), sizeof(i3_vk_pipeline_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->framebuffer_pool, i3_alignof(i3_vk_framebuffer_o), sizeof(i3_vk_framebuffer_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->shader_module_pool, i3_alignof(i3_vk_shader_module_o), sizeof(i3_vk_shader_module_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->pipeline_pool, i3_alignof(i3_vk_pipeline_o), sizeof(i3_vk_pipeline_o), I3_RESOURCE_BLOCK_CAPACITY);
 

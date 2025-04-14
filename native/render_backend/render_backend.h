@@ -305,6 +305,22 @@ typedef enum
     I3_RBK_DYNAMIC_STATE_STENCIL_REFERENCE,
 } i3_rbk_dynamic_state_t;
 
+// descriptor type
+typedef enum
+{
+    I3_RBK_DESCRIPTOR_TYPE_SAMPLER = 0,
+    I3_RBK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    I3_RBK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+    I3_RBK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+    I3_RBK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+    I3_RBK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
+    I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+    I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+    I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC,
+    I3_RBK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,
+} i3_rbk_descriptor_type_t;
+
 // viewport
 typedef struct i3_rbk_viewport_t
 {
@@ -364,6 +380,11 @@ typedef struct i3_rbk_resource_i
     void (*set_debug_name)(i3_rbk_resource_o* self, const char* name);
 
 } i3_rbk_resource_i;
+
+#define i3_rbk_resource_add_ref(resource) { i3_rbk_resource_i *res__ = (resource)->get_resource_i((resource)->self); res__->add_ref(res__->self); }
+#define i3_rbk_resource_release(resource) { i3_rbk_resource_i *res__ = (resource)->get_resource_i((resource)->self); res__->release(res__->self); }
+#define i3_rbk_resource_get_use_count(resource) ((resource)->get_resource_i((resource)->self)->get_use_count((resource)->get_resource_i((resource)->self)->self))
+#define i3_rbk_resource_set_debug_name(resource, name) { i3_rbk_resource_i *res__ = (resource)->get_resource_i((resource)->self); res__->set_debug_name(res__->self, name); }
 
 // sampler
 typedef struct i3_rbk_sampler_desc_t
@@ -464,6 +485,81 @@ typedef struct i3_rbk_image_view_i
     i3_rbk_resource_i* (*get_resource)(i3_rbk_image_view_o* self);
     void (*destroy)(i3_rbk_image_view_o* self);
 } i3_rbk_image_view_i;
+
+// descriptor set layout
+typedef struct i3_rbk_descriptor_set_layout_binding_t
+{
+    uint32_t binding;
+    i3_rbk_descriptor_type_t descriptor_type;
+    uint32_t descriptor_count;
+    i3_rbk_shader_stage_flags_t stage_flags;
+    i3_rbk_sampler_i* immutable_samplers;
+} i3_rbk_descriptor_set_layout_binding_t;
+
+typedef struct i3_rbk_descriptor_set_layout_desc_t
+{
+    uint32_t binding_count;
+    const i3_rbk_descriptor_set_layout_binding_t* bindings;
+} i3_rbk_descriptor_set_layout_desc_t;
+
+typedef struct i3_rbk_descriptor_set_layout_o i3_rbk_descriptor_set_layout_o;
+
+typedef struct i3_rbk_descriptor_set_layout_i
+{
+    i3_rbk_descriptor_set_layout_o* self;
+    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_descriptor_set_layout_o* self);
+    void (*destroy)(i3_rbk_descriptor_set_layout_o* self);
+} i3_rbk_descriptor_set_layout_i;
+
+// pipeline layout
+typedef struct i3_rbk_push_constant_range_t
+{
+    i3_rbk_shader_stage_flags_t stage_flags;
+    uint32_t offset;
+    uint32_t size;
+} i3_rbk_push_constant_range_t;
+
+typedef struct i3_rbk_pipeline_layout_desc_t
+{
+    uint32_t set_layout_count;
+    const i3_rbk_descriptor_set_layout_i** set_layouts;
+    uint32_t push_constant_range_count;
+    const i3_rbk_push_constant_range_t* push_constant_ranges;
+} i3_rbk_pipeline_layout_desc_t;
+
+typedef	struct i3_rbk_pipeline_layout_o i3_rbk_pipeline_layout_o;
+
+typedef struct i3_rbk_pipeline_layout_i
+{
+    i3_rbk_pipeline_layout_o* self;
+    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_pipeline_layout_o* self);
+    void (*destroy)(i3_rbk_pipeline_layout_o* self);
+} i3_rbk_pipeline_layout_i;
+
+// framebuffer
+typedef struct i3_rbk_framebuffer_attachment_desc_t
+{
+    i3_rbk_image_view_i* image_view;
+} i3_rbk_framebuffer_attachment_desc_t;
+
+typedef struct i3_rbk_framebuffer_desc_t
+{
+    uint32_t width;
+    uint32_t height;
+    uint32_t layers;
+    uint32_t color_attachment_count;
+    const i3_rbk_framebuffer_attachment_desc_t* color_attachments;
+    i3_rbk_framebuffer_attachment_desc_t *depth_attachment;
+} i3_rbk_framebuffer_desc_t;
+
+typedef struct i3_rbk_framebuffer_o i3_rbk_framebuffer_o;
+
+typedef struct i3_rbk_framebuffer_i
+{
+    i3_rbk_framebuffer_o* self;
+    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_framebuffer_o* self);
+    void (*destroy)(i3_rbk_framebuffer_o* self);
+} i3_rbk_framebuffer_i;
 
 // shader module
 typedef struct i3_rbk_shader_module_desc_t
@@ -617,12 +713,6 @@ typedef struct i3_rbk_pipeline_dynamic_state_t
     const i3_rbk_dynamic_state_t* dynamic_states;
 } i3_rbk_pipeline_dynamic_state_t;
 
-// pipeline layout
-typedef struct i3_rbk_pipeline_layout_desc_t
-{
-    int dummy;
-} i3_rbk_pipeline_layout_desc_t;
-
 // graphics pipeline
 typedef struct i3_rbk_graphics_pipeline_desc_t
 {
@@ -637,14 +727,15 @@ typedef struct i3_rbk_graphics_pipeline_desc_t
     const i3_rbk_pipeline_depth_stencil_state_t* depth_stencil;
     const i3_rbk_pipeline_color_blend_state_t* color_blend;
     const i3_rbk_pipeline_dynamic_state_t* dynamic;
-    i3_rbk_pipeline_layout_desc_t layout;
+    i3_rbk_framebuffer_i* framebuffer;
+    i3_rbk_pipeline_layout_i* layout;
 } i3_rbk_graphics_pipeline_desc_t;
 
 // compute pipeline
 typedef struct i3_rbk_compute_pipeline_desc_t
 {
     i3_rbk_pipeline_shader_stage_desc_t stage;
-    i3_rbk_pipeline_layout_desc_t layout;
+    i3_rbk_pipeline_layout_i* layout;
 } i3_rbk_compute_pipeline_desc_t;
 
 // pipeline interface
@@ -711,11 +802,20 @@ struct i3_rbk_device_i
     // create image view
     i3_rbk_image_view_i* (*create_image_view)(i3_rbk_device_o* self, i3_rbk_image_i* image, const i3_rbk_image_view_desc_t* info);
 
-    // create graphics pipeline
-    i3_rbk_pipeline_i* (*create_graphics_pipeline)(i3_rbk_device_o* self, const i3_rbk_graphics_pipeline_desc_t* desc);
+    // create descriptor set layout
+    i3_rbk_descriptor_set_layout_i* (*create_descriptor_set_layout)(i3_rbk_device_o* self, const i3_rbk_descriptor_set_layout_desc_t* desc);
+
+    // create pipeline layout
+    i3_rbk_pipeline_layout_i* (*create_pipeline_layout)(i3_rbk_device_o* self, const i3_rbk_pipeline_layout_desc_t* desc);
+
+    // create framebuffer
+    i3_rbk_framebuffer_i* (*create_framebuffer)(i3_rbk_device_o* self, const i3_rbk_framebuffer_desc_t* desc);
 
     // create shader module
     i3_rbk_shader_module_i* (*create_shader_module)(i3_rbk_device_o* self, const i3_rbk_shader_module_desc_t* desc);
+
+    // create graphics pipeline
+    i3_rbk_pipeline_i* (*create_graphics_pipeline)(i3_rbk_device_o* self, const i3_rbk_graphics_pipeline_desc_t* desc);
     
     // create compute pipeline
     i3_rbk_pipeline_i* (*create_compute_pipeline)(i3_rbk_device_o* self, const i3_rbk_compute_pipeline_desc_t* desc);
