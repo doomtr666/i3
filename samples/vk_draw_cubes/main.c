@@ -1,7 +1,7 @@
 #include <stdio.h>
 
-#include "native/vk_backend/vk_backend.h"
 #include "native/core/log.h"
+#include "native/vk_backend/vk_backend.h"
 
 #include <direct.h>
 
@@ -25,26 +25,19 @@ int main()
     i3_rbk_device_i* device = backend->create_device(backend->self, 0);
 
     // create sampler
-    i3_rbk_sampler_desc_t sampler_desc =
-    {
-        .mag_filter = I3_RBK_FILTER_LINEAR,
-        .min_filter = I3_RBK_FILTER_LINEAR,
-        .mipmap_mode = I3_RBK_SAMPLER_MIPMAP_MODE_LINEAR
-    };
+    i3_rbk_sampler_desc_t sampler_desc = {.mag_filter = I3_RBK_FILTER_LINEAR,
+                                          .min_filter = I3_RBK_FILTER_LINEAR,
+                                          .mipmap_mode = I3_RBK_SAMPLER_MIPMAP_MODE_LINEAR};
 
     i3_rbk_sampler_i* sampler = device->create_sampler(device->self, &sampler_desc);
 
     // create buffer
-    i3_rbk_buffer_desc_t buffer_desc =
-    {
-        .size = 1024
-    };
+    i3_rbk_buffer_desc_t buffer_desc = {.size = 1024};
 
     i3_rbk_buffer_i* buffer = device->create_buffer(device->self, &buffer_desc);
 
     // create image
-    i3_rbk_image_desc_t image_desc =
-    {
+    i3_rbk_image_desc_t image_desc = {
         .type = I3_RBK_IMAGE_TYPE_2D,
         .format = I3_RBK_FORMAT_R8G8B8A8_UNORM,
         .width = 800,
@@ -52,28 +45,26 @@ int main()
         .depth = 1,
         .mip_levels = 1,
         .array_layers = 1,
-        .samples = 1
+        .samples = 1,
     };
 
     i3_rbk_image_i* image = device->create_image(device->self, &image_desc);
 
     // create image view
-    i3_rbk_image_view_desc_t image_view_info =
-    {
+    i3_rbk_image_view_desc_t image_view_info = {
         .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
         .format = I3_RBK_FORMAT_R8G8B8A8_UNORM,
         .aspect_mask = I3_RBK_IMAGE_ASPECT_COLOR,
         .base_mip_level = 0,
         .level_count = 1,
         .base_array_layer = 0,
-        .layer_count = 1
+        .layer_count = 1,
     };
 
     i3_rbk_image_view_i* image_view = device->create_image_view(device->self, image, &image_view_info);
 
     // create swapchain
-    i3_rbk_swapchain_desc_t swapchain_desc =
-    {
+    i3_rbk_swapchain_desc_t swapchain_desc = {
         .requested_image_count = 2,
         .srgb = false,
         .vsync = false,
@@ -82,13 +73,11 @@ int main()
     i3_rbk_swapchain_i* swapchain = device->create_swapchain(device->self, window, &swapchain_desc);
 
     // create framebuffer
-    i3_rbk_framebuffer_attachment_desc_t framebuffer_attachment =
-    {
+    i3_rbk_framebuffer_attachment_desc_t framebuffer_attachment = {
         .image_view = image_view,
     };
 
-    i3_rbk_framebuffer_desc_t framebuffer_desc =
-    {
+    i3_rbk_framebuffer_desc_t framebuffer_desc = {
         .width = 800,
         .height = 600,
         .layers = 1,
@@ -96,30 +85,26 @@ int main()
         .color_attachments = &framebuffer_attachment,
     };
 
-    i3_rbk_framebuffer_i *frame_buffer = device->create_framebuffer(device->self, &framebuffer_desc);
+    i3_rbk_framebuffer_i* frame_buffer = device->create_framebuffer(device->self, &framebuffer_desc);
 
     // create descriptor set layout
-    i3_rbk_descriptor_set_layout_binding_t descriptor_set_layout_bindings[] =
-    {
-        {
-            .binding = 0,
-            .descriptor_type = I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptor_count = 1,
-            .stage_flags = I3_RBK_SHADER_STAGE_VERTEX,
-        }
-    };
+    i3_rbk_descriptor_set_layout_binding_t descriptor_set_layout_bindings[] = {{
+        .binding = 0,
+        .descriptor_type = I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptor_count = 1,
+        .stage_flags = I3_RBK_SHADER_STAGE_VERTEX,
+    }};
 
-    i3_rbk_descriptor_set_layout_desc_t descriptor_set_layout_desc = 
-    {
+    i3_rbk_descriptor_set_layout_desc_t descriptor_set_layout_desc = {
         .binding_count = sizeof(descriptor_set_layout_bindings) / sizeof(descriptor_set_layout_bindings[0]),
         .bindings = descriptor_set_layout_bindings,
     };
 
-    i3_rbk_descriptor_set_layout_i* descriptor_set_layout = device->create_descriptor_set_layout(device->self, &descriptor_set_layout_desc);
+    i3_rbk_descriptor_set_layout_i* descriptor_set_layout
+        = device->create_descriptor_set_layout(device->self, &descriptor_set_layout_desc);
 
     // create pipeline layout
-    i3_rbk_pipeline_layout_desc_t pipeline_layout_desc = 
-    {
+    i3_rbk_pipeline_layout_desc_t pipeline_layout_desc = {
         .set_layout_count = 1,
         .set_layouts = &descriptor_set_layout,
     };
@@ -140,54 +125,24 @@ int main()
     fread(shaders_data, 1, shader_data_size, file);
     fclose(file);
 
-    i3_rbk_shader_module_desc_t shader_desc = {
-        .code = shaders_data,
-        .code_size = shader_data_size
-    };
+    i3_rbk_shader_module_desc_t shader_desc = {.code = shaders_data, .code_size = shader_data_size};
     i3_rbk_shader_module_i* shader_module = device->create_shader_module(device->self, &shader_desc);
-    
+
     i3_free(shaders_data);
 
     // pipeline stages
-    i3_rbk_pipeline_shader_stage_desc_t stages[] =
-    {
-        {
-            .stage = I3_RBK_SHADER_STAGE_VERTEX,
-            .shader_module = shader_module,
-            .entry_point = "vertexMain"
-        },
-        {
-            .stage = I3_RBK_SHADER_STAGE_FRAGMENT,
-            .shader_module = shader_module,
-            .entry_point = "fragmentMain"
-        }
-    };
+    i3_rbk_pipeline_shader_stage_desc_t stages[]
+        = {{.stage = I3_RBK_SHADER_STAGE_VERTEX, .shader_module = shader_module, .entry_point = "vertexMain"},
+           {.stage = I3_RBK_SHADER_STAGE_FRAGMENT, .shader_module = shader_module, .entry_point = "fragmentMain"}};
 
     // vertex input state
-    i3_rbk_pipeline_vertex_input_binding_desc_t bindings[] =
-    {
-        {
-            .binding = 0,
-            .stride = 6 * sizeof(float),
-            .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX
-        },
+    i3_rbk_pipeline_vertex_input_binding_desc_t bindings[] = {
+        {.binding = 0, .stride = 6 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
     };
 
-    i3_rbk_pipeline_vertex_input_attribute_desc_t attributes[] =
-    {
-        {
-            .location = 0,
-            .binding = 0,
-            .format = I3_RBK_FORMAT_R32G32B32_SFLOAT,
-            .offset = 0
-        },
-        {
-            .location = 1,
-            .binding = 0,
-            .format = I3_RBK_FORMAT_R32G32B32_SFLOAT,
-            .offset = 3 * sizeof(float)
-        }
-    };
+    i3_rbk_pipeline_vertex_input_attribute_desc_t attributes[]
+        = {{.location = 0, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
+           {.location = 1, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 3 * sizeof(float)}};
 
     i3_rbk_pipeline_vertex_input_state_t vertex_input = {
         .binding_count = 1,
@@ -202,26 +157,13 @@ int main()
     };
 
     // viewport state
-    i3_rbk_viewport_t viewport_data = {
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = 800.0f,
-        .height = 600.0f,
-        .min_depth = 0.0f,
-        .max_depth = 1.0f
-    };
+    i3_rbk_viewport_t viewport_data
+        = {.x = 0.0f, .y = 0.0f, .width = 800.0f, .height = 600.0f, .min_depth = 0.0f, .max_depth = 1.0f};
 
-    i3_rbk_rect_t scissor_data = {
-        .offset = { 0, 0 },
-        .extent = { 800, 600 }
-    };
+    i3_rbk_rect_t scissor_data = {.offset = {0, 0}, .extent = {800, 600}};
 
-    i3_rbk_pipeline_viewport_state_t viewport = {
-        .viewport_count = 1,
-        .viewports = &viewport_data,
-        .scissor_count = 1,
-        .scissors = &scissor_data
-    };
+    i3_rbk_pipeline_viewport_state_t viewport
+        = {.viewport_count = 1, .viewports = &viewport_data, .scissor_count = 1, .scissors = &scissor_data};
 
     // rasterization state
     i3_rbk_pipeline_rasterization_state_t rasterization = {
@@ -231,7 +173,7 @@ int main()
         .depth_clamp_enable = false,
         .rasterizer_discard_enable = false,
         .depth_bias_enable = false,
-        .line_width = 1.0f
+        .line_width = 1.0f,
     };
 
     // multisample state
@@ -240,35 +182,34 @@ int main()
         .sample_shading_enable = false,
         .min_sample_shading = 0.0f,
         .alpha_to_coverage_enable = false,
-        .alpha_to_one_enable = false
+        .alpha_to_one_enable = false,
     };
 
     // color blend state
-    i3_rbk_pipeline_color_blend_attachment_state_t color_blend_attachments[] =
-    {
-        {
-            .blend_enable = false,
-            .color_write_mask = I3_RBK_COLOR_COMPONENT_R_BIT | I3_RBK_COLOR_COMPONENT_G_BIT | I3_RBK_COLOR_COMPONENT_B_BIT | I3_RBK_COLOR_COMPONENT_A_BIT
-        }
+    i3_rbk_pipeline_color_blend_attachment_state_t color_blend_attachment = {
+
+        .blend_enable = false,
+        .color_write_mask = I3_RBK_COLOR_COMPONENT_R_BIT | I3_RBK_COLOR_COMPONENT_G_BIT | I3_RBK_COLOR_COMPONENT_B_BIT
+                            | I3_RBK_COLOR_COMPONENT_A_BIT,
+
     };
 
     i3_rbk_pipeline_color_blend_state_t color_blend = {
         .logic_op_enable = false,
         .attachment_count = 1,
-        .attachments = color_blend_attachments,
-        .blend_constants = { 0.0f, 0.0f, 0.0f, 0.0f }
+        .attachments = &color_blend_attachment,
+        .blend_constants = {0.0f, 0.0f, 0.0f, 0.0f},
     };
 
     // dynamic state
-    i3_rbk_dynamic_state_t dynamic_states[] =
-    {
+    i3_rbk_dynamic_state_t dynamic_states[] = {
         I3_RBK_DYNAMIC_STATE_VIEWPORT,
         I3_RBK_DYNAMIC_STATE_SCISSOR,
     };
 
     i3_rbk_pipeline_dynamic_state_t dynamic = {
         .dynamic_state_count = sizeof(dynamic_states) / sizeof(dynamic_states[0]),
-        .dynamic_states = dynamic_states
+        .dynamic_states = dynamic_states,
     };
 
     // graphics pipeline
@@ -285,11 +226,26 @@ int main()
         .layout = pipeline_layout,
         .framebuffer = frame_buffer,
     };
-    
+
     i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
 
     while (!window->should_close(window->self))
     {
+        // create cmd buffer
+        i3_rbk_cmd_buffer_i* cmd_buffer = device->create_cmd_buffer(device->self);
+
+        // submit cmd buffer
+        device->submit_cmd_buffers(device->self, &cmd_buffer, 1);
+
+        // destroy cmd buffer
+        cmd_buffer->destroy(cmd_buffer->self);
+
+        // present image view to swapchain
+        device->present(device->self, swapchain, image_view);
+
+        // perform cleanup
+        device->end_frame(device->self);
+
         i3_render_window_poll_events();
     }
 

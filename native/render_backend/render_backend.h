@@ -330,16 +330,16 @@ typedef struct i3_rbk_viewport_t
     float height;
     float min_depth;
     float max_depth;
-} i3_rbk_viewport_t; 
+} i3_rbk_viewport_t;
 
 // extents
-typedef struct i3_rbk_extent2d_t 
+typedef struct i3_rbk_extent2d_t
 {
     uint32_t width;
     uint32_t height;
 } i3_rbk_extent2d_t;
 
-typedef struct i3_rbk_extent3d_t 
+typedef struct i3_rbk_extent3d_t
 {
     uint32_t width;
     uint32_t height;
@@ -347,13 +347,13 @@ typedef struct i3_rbk_extent3d_t
 } i3_rbk_extent3d_t;
 
 // offsets
-typedef struct i3_rbk_offset2d_t 
+typedef struct i3_rbk_offset2d_t
 {
     int32_t x;
     int32_t y;
-} i3_rbk_offset2d_t; 
+} i3_rbk_offset2d_t;
 
-typedef struct i3_rbk_offset3d_t 
+typedef struct i3_rbk_offset3d_t
 {
     int32_t x;
     int32_t y;
@@ -361,7 +361,7 @@ typedef struct i3_rbk_offset3d_t
 } i3_rbk_offset3d_t;
 
 // rect
-typedef struct i3_rbk_rect_t 
+typedef struct i3_rbk_rect_t
 {
     i3_rbk_offset2d_t offset;
     i3_rbk_extent2d_t extent;
@@ -376,15 +376,28 @@ typedef struct i3_rbk_resource_i
 
     void (*add_ref)(i3_rbk_resource_o* self);
     void (*release)(i3_rbk_resource_o* self);
-    int32_t(*get_use_count)(i3_rbk_resource_o* self);
+    int32_t (*get_use_count)(i3_rbk_resource_o* self);
     void (*set_debug_name)(i3_rbk_resource_o* self, const char* name);
 
 } i3_rbk_resource_i;
 
-#define i3_rbk_resource_add_ref(resource) { i3_rbk_resource_i *res__ = (resource)->get_resource_i((resource)->self); res__->add_ref(res__->self); }
-#define i3_rbk_resource_release(resource) { i3_rbk_resource_i *res__ = (resource)->get_resource_i((resource)->self); res__->release(res__->self); }
-#define i3_rbk_resource_get_use_count(resource) ((resource)->get_resource_i((resource)->self)->get_use_count((resource)->get_resource_i((resource)->self)->self))
-#define i3_rbk_resource_set_debug_name(resource, name) { i3_rbk_resource_i *res__ = (resource)->get_resource_i((resource)->self); res__->set_debug_name(res__->self, name); }
+#define i3_rbk_resource_add_ref(resource)                                        \
+    {                                                                            \
+        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
+        res__->add_ref(res__->self);                                             \
+    }
+#define i3_rbk_resource_release(resource)                                        \
+    {                                                                            \
+        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
+        res__->release(res__->self);                                             \
+    }
+#define i3_rbk_resource_get_use_count(resource) \
+    ((resource)->get_resource_i((resource)->self)->get_use_count((resource)->get_resource_i((resource)->self)->self))
+#define i3_rbk_resource_set_debug_name(resource, name)                           \
+    {                                                                            \
+        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
+        res__->set_debug_name(res__->self, name);                                \
+    }
 
 // sampler
 typedef struct i3_rbk_sampler_desc_t
@@ -527,7 +540,7 @@ typedef struct i3_rbk_pipeline_layout_desc_t
     const i3_rbk_push_constant_range_t* push_constant_ranges;
 } i3_rbk_pipeline_layout_desc_t;
 
-typedef	struct i3_rbk_pipeline_layout_o i3_rbk_pipeline_layout_o;
+typedef struct i3_rbk_pipeline_layout_o i3_rbk_pipeline_layout_o;
 
 typedef struct i3_rbk_pipeline_layout_i
 {
@@ -549,7 +562,7 @@ typedef struct i3_rbk_framebuffer_desc_t
     uint32_t layers;
     uint32_t color_attachment_count;
     const i3_rbk_framebuffer_attachment_desc_t* color_attachments;
-    i3_rbk_framebuffer_attachment_desc_t *depth_attachment;
+    i3_rbk_framebuffer_attachment_desc_t* depth_attachment;
 } i3_rbk_framebuffer_desc_t;
 
 typedef struct i3_rbk_framebuffer_o i3_rbk_framebuffer_o;
@@ -583,7 +596,7 @@ typedef struct i3_rbk_shader_module_i
 typedef struct i3_rbk_pipeline_shader_stage_desc_t
 {
     i3_rbk_shader_stage_flag_bits_t stage;
-    i3_rbk_shader_module_i *shader_module;
+    i3_rbk_shader_module_i* shader_module;
     const char* entry_point;
 } i3_rbk_pipeline_shader_stage_desc_t;
 
@@ -800,13 +813,17 @@ struct i3_rbk_device_i
     i3_rbk_image_i* (*create_image)(i3_rbk_device_o* self, const i3_rbk_image_desc_t* desc);
 
     // create image view
-    i3_rbk_image_view_i* (*create_image_view)(i3_rbk_device_o* self, i3_rbk_image_i* image, const i3_rbk_image_view_desc_t* info);
+    i3_rbk_image_view_i* (*create_image_view)(i3_rbk_device_o* self,
+                                              i3_rbk_image_i* image,
+                                              const i3_rbk_image_view_desc_t* info);
 
     // create descriptor set layout
-    i3_rbk_descriptor_set_layout_i* (*create_descriptor_set_layout)(i3_rbk_device_o* self, const i3_rbk_descriptor_set_layout_desc_t* desc);
+    i3_rbk_descriptor_set_layout_i* (*create_descriptor_set_layout)(i3_rbk_device_o* self,
+                                                                    const i3_rbk_descriptor_set_layout_desc_t* desc);
 
     // create pipeline layout
-    i3_rbk_pipeline_layout_i* (*create_pipeline_layout)(i3_rbk_device_o* self, const i3_rbk_pipeline_layout_desc_t* desc);
+    i3_rbk_pipeline_layout_i* (*create_pipeline_layout)(i3_rbk_device_o* self,
+                                                        const i3_rbk_pipeline_layout_desc_t* desc);
 
     // create framebuffer
     i3_rbk_framebuffer_i* (*create_framebuffer)(i3_rbk_device_o* self, const i3_rbk_framebuffer_desc_t* desc);
@@ -816,15 +833,26 @@ struct i3_rbk_device_i
 
     // create graphics pipeline
     i3_rbk_pipeline_i* (*create_graphics_pipeline)(i3_rbk_device_o* self, const i3_rbk_graphics_pipeline_desc_t* desc);
-    
+
     // create compute pipeline
     i3_rbk_pipeline_i* (*create_compute_pipeline)(i3_rbk_device_o* self, const i3_rbk_compute_pipeline_desc_t* desc);
+
+    // create swapchain
+    i3_rbk_swapchain_i* (*create_swapchain)(i3_rbk_device_o* self,
+                                            i3_render_window_i* window,
+                                            const i3_rbk_swapchain_desc_t* desc);
 
     // create cmb buffer
     i3_rbk_cmd_buffer_i* (*create_cmd_buffer)(i3_rbk_device_o* self);
 
-    // create swapchain
-    i3_rbk_swapchain_i* (*create_swapchain)(i3_rbk_device_o* self, i3_render_window_i* window, const i3_rbk_swapchain_desc_t* desc);
+    // submit cmd buffers
+    void (*submit_cmd_buffers)(i3_rbk_device_o* self, i3_rbk_cmd_buffer_i** cmd_buffers, uint32_t cmd_buffer_count);
+
+    // present swapchain
+    void (*present)(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, i3_rbk_image_view_i* image_view);
+
+    // end frame
+    void (*end_frame)(i3_rbk_device_o* self);
 
     // destroy device
     void (*destroy)(i3_rbk_device_o* self);
@@ -837,10 +865,13 @@ struct i3_render_backend_i
 
     // get render device description
     const i3_rbk_device_desc_t* (*get_device_desc)(i3_render_backend_o* self, uint32_t index);
-    uint32_t(*get_device_count)(i3_render_backend_o* self);
+    uint32_t (*get_device_count)(i3_render_backend_o* self);
 
     // create render window
-    i3_render_window_i* (*create_render_window)(i3_render_backend_o* self, const char* title, uint32_t width, uint32_t height);
+    i3_render_window_i* (*create_render_window)(i3_render_backend_o* self,
+                                                const char* title,
+                                                uint32_t width,
+                                                uint32_t height);
 
     // create render device
     i3_rbk_device_i* (*create_device)(i3_render_backend_o* self, uint32_t desc_index);

@@ -1,0 +1,25 @@
+---
+Language: Cpp
+BasedOnStyle: Chromium
+AccessModifierOffset: '-2'
+BreakBeforeBraces: Allman
+Cpp11BracedListStyle: 'true'
+IndentWidth: '4'
+NamespaceIndentation: All
+UseTab: Never
+ColumnLimit: '120'
+PointerAlignment : 'Left'
+IndentPPDirectives : 'BeforeHash'
+---
+Language: C
+BasedOnStyle: Chromium
+AccessModifierOffset: '-2'
+BreakBeforeBraces: Allman
+IndentWidth: '4'
+NamespaceIndentation: All
+UseTab: Never
+ColumnLimit: '120'
+PointerAlignment : 'Left'
+IndentPPDirectives : 'BeforeHash'
+BreakBeforeBinaryOperators: All
+...

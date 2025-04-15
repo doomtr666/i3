@@ -27,16 +27,16 @@ static const char* i3_log_level_to_string(i3_log_level_t level)
 {
     switch (level)
     {
-    case I3_LOG_LEVEL_DEBUG:
-        return "DBG";
-    case I3_LOG_LEVEL_INFO:
-        return "INF";
-    case I3_LOG_LEVEL_WARN:
-        return "WRN";
-    case I3_LOG_LEVEL_ERROR:
-        return "ERR";
-    default:
-        return "UNK";
+        case I3_LOG_LEVEL_DEBUG:
+            return "DBG";
+        case I3_LOG_LEVEL_INFO:
+            return "INF";
+        case I3_LOG_LEVEL_WARN:
+            return "WRN";
+        case I3_LOG_LEVEL_ERROR:
+            return "ERR";
+        default:
+            return "UNK";
     }
 }
 
@@ -44,16 +44,16 @@ static const char* i3_get_color_from_level(i3_log_level_t level)
 {
     switch (level)
     {
-    case I3_LOG_LEVEL_DEBUG:
-        return "\033[32m";
-    case I3_LOG_LEVEL_INFO:
-        return "\033[37m";
-    case I3_LOG_LEVEL_WARN:
-        return "\033[33m\033[1m";
-    case I3_LOG_LEVEL_ERROR:
-        return "\033[31m\033[1m";
-    default:
-        return "";
+        case I3_LOG_LEVEL_DEBUG:
+            return "\033[32m";
+        case I3_LOG_LEVEL_INFO:
+            return "\033[37m";
+        case I3_LOG_LEVEL_WARN:
+            return "\033[33m\033[1m";
+        case I3_LOG_LEVEL_ERROR:
+            return "\033[31m\033[1m";
+        default:
+            return "";
     }
 }
 
@@ -107,11 +107,7 @@ static void i3_destroy_loggers(void)
     i3_loggers_ = NULL;
 }
 
-static i3_logger_i logger_iface__ = {
-    .self = NULL,
-    .set_level = i3_logger_set_level,
-    .log = i3_logger_log
-};
+static i3_logger_i logger_iface__ = {.self = NULL, .set_level = i3_logger_set_level, .log = i3_logger_log};
 
 i3_logger_i* i3_get_logger(const char* name)
 {
@@ -127,7 +123,7 @@ i3_logger_i* i3_get_logger(const char* name)
 
     uint32_t namelen = (uint32_t)strlen(name);
 
-    // return logger if it already exists   
+    // return logger if it already exists
     i3_logger_o* logger = (i3_logger_o*)i3_hashtable_find(&i3_loggers_->loggers_table, name, namelen);
     if (logger != NULL)
         return &logger->iface;
@@ -138,7 +134,7 @@ i3_logger_i* i3_get_logger(const char* name)
 
     logger->iface = logger_iface__;
     logger->iface.self = logger;
-    logger->name = name; // I consider name is a literal string here, no need to copy
+    logger->name = name;  // I consider name is a literal string here, no need to copy
     logger->level = I3_LOG_LEVEL_INFO;
     logger->prev = logger->next = NULL;
 

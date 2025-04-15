@@ -8,15 +8,15 @@
 #define i3_dlist_elem(type) \
     struct                  \
     {                       \
-        type *prev;         \
-        type *next;         \
+        type* prev;         \
+        type* next;         \
     }
 
 #define i3_dlist(type) \
     struct             \
     {                  \
-        type *first;   \
-        type *last;    \
+        type* first;   \
+        type* last;    \
     }
 
 #define i3_dlist_init(head) ((head)->first = (head)->last = NULL)

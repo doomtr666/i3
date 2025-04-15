@@ -8,5 +8,3 @@ typedef struct i3_vec3_t
     float y;
     float z;
 } i3_vec3_t;
-
-

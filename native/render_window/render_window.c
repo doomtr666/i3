@@ -3,14 +3,15 @@
 #include "native/core/log.h"
 
 #if I3_PLATFORM == I3_PLATFORM_WINDOWS
-#define GLFW_EXPOSE_NATIVE_WIN32
+    #define GLFW_EXPOSE_NATIVE_WIN32
 #endif
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
 
-typedef enum {
+typedef enum
+{
     I3_RENDER_WINDOW_API_NONE = 0,
     I3_RENDER_WINDOW_API_VULKAN,
 } i3_render_window_api_t;
@@ -68,13 +69,11 @@ static void i3_render_window_destroy(i3_render_window_o* self)
     i3_free(self);
 }
 
-static i3_render_window_i render_window_iface_ = {
-    .self = NULL,
-    .get_vk_surface = i3_render_window_get_vk_surface,
-    .get_native_handle = i3_render_window_get_native_handle,
-    .should_close = i3_render_window_should_close,
-    .destroy = i3_render_window_destroy
-};
+static i3_render_window_i render_window_iface_ = {.self = NULL,
+                                                  .get_vk_surface = i3_render_window_get_vk_surface,
+                                                  .get_native_handle = i3_render_window_get_native_handle,
+                                                  .should_close = i3_render_window_should_close,
+                                                  .destroy = i3_render_window_destroy};
 
 static void i3_render_window_init_glfw()
 {
@@ -91,7 +90,10 @@ static void i3_render_window_init_glfw()
 
 // render window functions
 
-i3_render_window_i* i3_render_window_create_vulkan(void* vk_instance, const char* title, uint32_t width, uint32_t height)
+i3_render_window_i* i3_render_window_create_vulkan(void* vk_instance,
+                                                   const char* title,
+                                                   uint32_t width,
+                                                   uint32_t height)
 {
     assert(title != NULL);
 

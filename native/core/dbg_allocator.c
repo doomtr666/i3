@@ -1,5 +1,5 @@
-#include <stdio.h>
 #include <inttypes.h>
+#include <stdio.h>
 
 #include "common.h"
 #include "list.h"
@@ -53,8 +53,7 @@ static void i3_add_memory_tracker(void* ptr, size_t size, const char* file, int 
 
     i3_allocation_info_t* alloc = malloc(sizeof(i3_allocation_info_t));
     assert(alloc != NULL);
-    *alloc = (i3_allocation_info_t)
-    {
+    *alloc = (i3_allocation_info_t){
         .index = i3_allocation_counter_++,
         .ptr = ptr,
         .size = size,

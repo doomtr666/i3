@@ -19,7 +19,10 @@ struct i3_render_window_i
     void (*destroy)(i3_render_window_o* self);
 };
 
-I3_EXPORT i3_render_window_i* i3_render_window_create_vulkan(void* vk_instance, const char* title, uint32_t width, uint32_t height);
+I3_EXPORT i3_render_window_i* i3_render_window_create_vulkan(void* vk_instance,
+                                                             const char* title,
+                                                             uint32_t width,
+                                                             uint32_t height);
 I3_EXPORT void i3_render_window_poll_events();
 
 // vulkan specific

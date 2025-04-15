@@ -11,6 +11,26 @@
 #include "descriptor_set_layout.h"
 #include "pipeline_layout.h"
 #include "framebuffer.h"
+#include "cmd_buffer.h"
+
+static void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self, i3_rbk_cmd_buffer_i** cmd_buffers, uint32_t cmd_buffer_count)
+{
+    assert(self != NULL);
+    assert(cmd_buffers != NULL);
+    assert(cmd_buffer_count > 0);
+}
+
+static void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, i3_rbk_image_view_i *image_view)
+{
+    assert(self != NULL);
+    assert(swapchain != NULL);
+    assert(image_view != NULL);
+}
+
+static void i3_vk_device_end_frame(i3_rbk_device_o* self)
+{
+    assert(self != NULL);
+}
 
 static void i3_vk_device_destroy(i3_rbk_device_o* self)
 {
@@ -26,6 +46,7 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     i3_memory_pool_destroy(&device->framebuffer_pool);
     i3_memory_pool_destroy(&device->shader_module_pool);
     i3_memory_pool_destroy(&device->pipeline_pool);
+    i3_memory_pool_destroy(&device->cmd_buffer_pool);
 
     // destroy vma
     vmaDestroyAllocator(device->vma);
@@ -52,6 +73,10 @@ static i3_vk_device_o i3_vk_device_iface_ =
         .create_graphics_pipeline = i3_vk_device_create_graphics_pipeline,
         .create_compute_pipeline = i3_vk_device_create_compute_pipeline,
         .create_swapchain = i3_vk_device_create_swapchain,
+        .create_cmd_buffer = i3_vk_device_create_cmd_buffer,
+        .submit_cmd_buffers = i3_vk_device_submit_cmd_buffers,
+        .present = i3_vk_device_present,
+        .end_frame = i3_vk_device_end_frame,
         .destroy = i3_vk_device_destroy
     }
 };
@@ -181,7 +206,8 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
     i3_memory_pool_init(&device->framebuffer_pool, i3_alignof(i3_vk_framebuffer_o), sizeof(i3_vk_framebuffer_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->shader_module_pool, i3_alignof(i3_vk_shader_module_o), sizeof(i3_vk_shader_module_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->pipeline_pool, i3_alignof(i3_vk_pipeline_o), sizeof(i3_vk_pipeline_o), I3_RESOURCE_BLOCK_CAPACITY);
-
+    i3_memory_pool_init(&device->cmd_buffer_pool, i3_alignof(i3_vk_cmd_buffer_o), sizeof(i3_vk_cmd_buffer_o), I3_RESOURCE_BLOCK_CAPACITY);
+    
     i3_log_inf(device->log, "Vulkan device %s created", device_desc->base.name);
 
     return &device->iface;

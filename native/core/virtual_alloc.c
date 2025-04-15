@@ -2,7 +2,7 @@
 
 #if I3_PLATFORM == I3_PLATFORM_WINDOWS
 
-#include <Windows.h>
+    #include <Windows.h>
 
 void* i3_virtual_alloc(size_t size)
 {
