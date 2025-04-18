@@ -141,24 +141,6 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
-    "//bazel:seven_zip.bzl%seven_zip": {
-      "general": {
-        "bzlTransitiveDigest": "EkQh4kMlrUxWuTHWEyaOzBtMuav4nN6ByacroZ3saWY=",
-        "usagesDigest": "WeKdDz0ZuYhGjXfR9xVEHUk6cMbuKR4Q9Pd0x+/Ns2g=",
-        "recordedFileInputs": {},
-        "recordedDirentsInputs": {},
-        "envVariables": {},
-        "generatedRepoSpecs": {
-          "seven_zip": {
-            "repoRuleId": "@@//bazel:seven_zip.bzl%seven_zip_rule",
-            "attributes": {
-              "version": "2409"
-            }
-          }
-        },
-        "recordedRepoMappingEntries": []
-      }
-    },
     "//bazel:vcpkg.bzl%vcpkg": {
       "general": {
         "bzlTransitiveDigest": "tvd+hpqiNL75ZKBtdWI/3fzN/1zI261iXAKtbjtjrZE=",
@@ -179,7 +161,7 @@
     },
     "//bazel:vulkan_sdk.bzl%vulkan_sdk": {
       "general": {
-        "bzlTransitiveDigest": "yCCRvu+FdlDKk5YJO058OYGEJUx6OM/S28quKKFCHmI=",
+        "bzlTransitiveDigest": "JCft/yBhiyHZJxEQpuK1JP+7SP4MzUlWeo7vCf0fkJM=",
         "usagesDigest": "F18xGFzPPmXMAGs6z7PUT3oHCQxasMrQKihzKBh/YxE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

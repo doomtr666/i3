@@ -5,6 +5,31 @@
 
 #include <direct.h>
 
+// cube vertex data
+static float cube_vertex_data[] = {
+    -1.000000, 1.000000,  1.000000,  0.000000,  0.000000,  1.000000,  1.000000,  -1.000000, 1.000000,  0.000000,
+    0.000000,  1.000000,  1.000000,  1.000000,  1.000000,  0.000000,  0.000000,  1.000000,  1.000000,  -1.000000,
+    1.000000,  0.000000,  -1.000000, 0.000000,  -1.000000, -1.000000, -1.000000, 0.000000,  -1.000000, 0.000000,
+    1.000000,  -1.000000, -1.000000, 0.000000,  -1.000000, 0.000000,  -1.000000, -1.000000, 1.000000,  -1.000000,
+    0.000000,  0.000000,  -1.000000, 1.000000,  -1.000000, -1.000000, 0.000000,  0.000000,  -1.000000, -1.000000,
+    -1.000000, -1.000000, 0.000000,  0.000000,  1.000000,  1.000000,  -1.000000, 0.000000,  0.000000,  -1.000000,
+    -1.000000, -1.000000, -1.000000, 0.000000,  0.000000,  -1.000000, -1.000000, 1.000000,  -1.000000, 0.000000,
+    0.000000,  -1.000000, 1.000000,  1.000000,  1.000000,  1.000000,  0.000000,  -0.000000, 1.000000,  -1.000000,
+    -1.000000, 1.000000,  0.000000,  -0.000000, 1.000000,  1.000000,  -1.000000, 1.000000,  0.000000,  -0.000000,
+    -1.000000, 1.000000,  1.000000,  0.000000,  1.000000,  -0.000000, 1.000000,  1.000000,  -1.000000, 0.000000,
+    1.000000,  -0.000000, -1.000000, 1.000000,  -1.000000, 0.000000,  1.000000,  -0.000000, -1.000000, -1.000000,
+    1.000000,  0.000000,  -0.000000, 1.000000,  -1.000000, -1.000000, 1.000000,  0.000000,  -1.000000, 0.000000,
+    -1.000000, 1.000000,  1.000000,  -1.000000, 0.000000,  0.000000,  1.000000,  -1.000000, -1.000000, 0.000000,
+    0.000000,  -1.000000, 1.000000,  -1.000000, 1.000000,  1.000000,  0.000000,  0.000000,  1.000000,  1.000000,
+    1.000000,  0.000000,  1.000000,  -0.000000,
+};
+
+// cube index data
+static uint32_t cube_index_data[] = {
+    0, 1,  2, 3, 4,  5, 6, 7,  8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+    0, 18, 1, 3, 19, 4, 6, 20, 7, 9, 21, 10, 12, 22, 13, 15, 23, 16,
+};
+
 int main()
 {
     // set vk backend logger level to debug
@@ -31,10 +56,28 @@ int main()
 
     i3_rbk_sampler_i* sampler = device->create_sampler(device->self, &sampler_desc);
 
-    // create buffer
-    i3_rbk_buffer_desc_t buffer_desc = {.size = 1024};
+    // create vertex buffer
+    i3_rbk_buffer_desc_t vertex_buffer_desc = {
+        .flags = I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
+        .size = sizeof(cube_vertex_data),
+    };
 
-    i3_rbk_buffer_i* buffer = device->create_buffer(device->self, &buffer_desc);
+    i3_rbk_buffer_i* vertex_buffer = device->create_buffer(device->self, &vertex_buffer_desc);
+
+    // create index buffer
+    i3_rbk_buffer_desc_t index_buffer_desc = {
+        .flags = I3_RBK_BUFFER_FLAG_INDEX_BUFFER,
+        .size = sizeof(cube_index_data),
+    };
+
+    i3_rbk_buffer_i* index_buffer = device->create_buffer(device->self, &index_buffer_desc);
+
+    // copy data to buffers
+    i3_rbk_cmd_buffer_i* cmd_buffer = device->create_cmd_buffer(device->self);
+    cmd_buffer->write_buffer(cmd_buffer->self, vertex_buffer, 0, sizeof(cube_vertex_data), cube_vertex_data);
+    cmd_buffer->write_buffer(cmd_buffer->self, index_buffer, 0, sizeof(cube_index_data), cube_index_data);
+    device->submit_cmd_buffers(device->self, &cmd_buffer, 1);
+    cmd_buffer->destroy(cmd_buffer->self);
 
     // create image
     i3_rbk_image_desc_t image_desc = {
@@ -131,18 +174,20 @@ int main()
     i3_free(shaders_data);
 
     // pipeline stages
-    i3_rbk_pipeline_shader_stage_desc_t stages[]
-        = {{.stage = I3_RBK_SHADER_STAGE_VERTEX, .shader_module = shader_module, .entry_point = "vertexMain"},
-           {.stage = I3_RBK_SHADER_STAGE_FRAGMENT, .shader_module = shader_module, .entry_point = "fragmentMain"}};
+    i3_rbk_pipeline_shader_stage_desc_t stages[] = {
+        {.stage = I3_RBK_SHADER_STAGE_VERTEX, .shader_module = shader_module, .entry_point = "vertexMain"},
+        {.stage = I3_RBK_SHADER_STAGE_FRAGMENT, .shader_module = shader_module, .entry_point = "fragmentMain"},
+    };
 
     // vertex input state
     i3_rbk_pipeline_vertex_input_binding_desc_t bindings[] = {
         {.binding = 0, .stride = 6 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
     };
 
-    i3_rbk_pipeline_vertex_input_attribute_desc_t attributes[]
-        = {{.location = 0, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
-           {.location = 1, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 3 * sizeof(float)}};
+    i3_rbk_pipeline_vertex_input_attribute_desc_t attributes[] = {
+        {.location = 0, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
+        {.location = 1, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 3 * sizeof(float)},
+    };
 
     i3_rbk_pipeline_vertex_input_state_t vertex_input = {
         .binding_count = 1,
@@ -257,7 +302,8 @@ int main()
     swapchain->destroy(swapchain->self);
     image_view->destroy(image_view->self);
     image->destroy(image->self);
-    buffer->destroy(buffer->self);
+    vertex_buffer->destroy(vertex_buffer->self);
+    index_buffer->destroy(index_buffer->self);
     sampler->destroy(sampler->self);
     device->destroy(device->self);
     window->destroy(window->self);

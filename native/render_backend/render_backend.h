@@ -65,6 +65,12 @@ typedef enum
 typedef enum
 {
     I3_RBK_BUFFER_FLAG_NONE = 0,
+    I3_RBK_BUFFER_FLAG_VERTEX_BUFFER = i3_flag(0),
+    I3_RBK_BUFFER_FLAG_INDEX_BUFFER = i3_flag(1),
+    I3_RBK_BUFFER_FLAG_INDIRECT_BUFFER = i3_flag(2),
+    I3_RBK_BUFFER_FLAG_UNIFORM_BUFFER = i3_flag(3),
+    I3_RBK_BUFFER_FLAG_STORAGE_BUFFER = i3_flag(4),
+    I3_RBK_BUFFER_FLAG_STAGING = i3_flag(5),
 } i3_rbk_buffer_flag_bits_t;
 
 typedef i3_rbk_flags_t i3_rbk_buffer_flags_t;
@@ -385,19 +391,25 @@ typedef struct i3_rbk_resource_i
     {                                                                            \
         i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
         res__->add_ref(res__->self);                                             \
-    }
+    }                                                                            \
+    while (0)
+
 #define i3_rbk_resource_release(resource)                                        \
     {                                                                            \
         i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
         res__->release(res__->self);                                             \
-    }
+    }                                                                            \
+    while (0)
+
 #define i3_rbk_resource_get_use_count(resource) \
     ((resource)->get_resource_i((resource)->self)->get_use_count((resource)->get_resource_i((resource)->self)->self))
+
 #define i3_rbk_resource_set_debug_name(resource, name)                           \
     {                                                                            \
         i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
         res__->set_debug_name(res__->self, name);                                \
-    }
+    }                                                                            \
+    while (0)
 
 // sampler
 typedef struct i3_rbk_sampler_desc_t
@@ -446,6 +458,11 @@ typedef struct i3_rbk_buffer_i
 
     const i3_rbk_buffer_desc_t* (*get_desc)(i3_rbk_buffer_o* self);
     i3_rbk_resource_i* (*get_resource_i)(i3_rbk_buffer_o* self);
+
+    // map/unmap staging buffer
+    void* (*map)(i3_rbk_buffer_o* self);
+    void (*unmap)(i3_rbk_buffer_o* self);
+
     void (*destroy)(i3_rbk_buffer_o* self);
 } i3_rbk_buffer_i;
 
@@ -789,6 +806,20 @@ typedef struct i3_rbk_cmd_buffer_i
     i3_rbk_cmd_buffer_o* self;
 
     i3_rbk_resource_i* (*get_resource_i)(i3_rbk_cmd_buffer_o* self);
+
+    void (*write_buffer)(i3_rbk_cmd_buffer_o* self,
+                         i3_rbk_buffer_i* buffer,
+                         uint32_t dst_offset,
+                         uint32_t size,
+                         const void* data);
+
+    void (*copy_buffer)(i3_rbk_cmd_buffer_o* self,
+                        i3_rbk_buffer_i* src_buffer,
+                        i3_rbk_buffer_i* dst_buffer,
+                        uint32_t src_offset,
+                        uint32_t dst_offset,
+                        uint32_t size);
+
     void (*destroy)(i3_rbk_cmd_buffer_o* self);
 } i3_rbk_cmd_buffer_i;
 

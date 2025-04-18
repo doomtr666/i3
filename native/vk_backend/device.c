@@ -1,26 +1,30 @@
 
 #include "native/core/array.h"
 
-#include "sampler.h"
 #include "buffer.h"
+#include "cmd_buffer.h"
+#include "cmd_list.h"
+#include "descriptor_set_layout.h"
+#include "framebuffer.h"
 #include "image.h"
 #include "image_view.h"
-#include "swapchain.h"
-#include "shader_module.h"
 #include "pipeline.h"
-#include "descriptor_set_layout.h"
 #include "pipeline_layout.h"
-#include "framebuffer.h"
-#include "cmd_buffer.h"
+#include "sampler.h"
+#include "shader_module.h"
+#include "swapchain.h"
+#include "use_list.h"
 
-static void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self, i3_rbk_cmd_buffer_i** cmd_buffers, uint32_t cmd_buffer_count)
+static void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
+                                            i3_rbk_cmd_buffer_i** cmd_buffers,
+                                            uint32_t cmd_buffer_count)
 {
     assert(self != NULL);
     assert(cmd_buffers != NULL);
     assert(cmd_buffer_count > 0);
 }
 
-static void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, i3_rbk_image_view_i *image_view)
+static void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, i3_rbk_image_view_i* image_view)
 {
     assert(self != NULL);
     assert(swapchain != NULL);
@@ -37,6 +41,8 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     i3_vk_device_o* device = (i3_vk_device_o*)self;
 
     // destroy resource pools
+    i3_memory_pool_destroy(&device->use_list_block_pool);
+    i3_memory_pool_destroy(&device->cmd_list_block_pool);
     i3_memory_pool_destroy(&device->sampler_pool);
     i3_memory_pool_destroy(&device->buffer_pool);
     i3_memory_pool_destroy(&device->image_pool);
@@ -58,28 +64,23 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     i3_free(device);
 }
 
-static i3_vk_device_o i3_vk_device_iface_ =
-{
-    .iface =
-    {
-        .create_sampler = i3_vk_device_create_sampler,
-        .create_buffer = i3_vk_device_create_buffer,
-        .create_image = i3_vk_device_create_image,
-        .create_image_view = i3_vk_device_create_image_view,
-        .create_descriptor_set_layout = i3_vk_device_create_descriptor_set_layout,
-        .create_pipeline_layout = i3_vk_device_create_pipeline_layout,
-        .create_framebuffer = i3_vk_device_create_framebuffer,
-        .create_shader_module = i3_vk_device_create_shader_module,
-        .create_graphics_pipeline = i3_vk_device_create_graphics_pipeline,
-        .create_compute_pipeline = i3_vk_device_create_compute_pipeline,
-        .create_swapchain = i3_vk_device_create_swapchain,
-        .create_cmd_buffer = i3_vk_device_create_cmd_buffer,
-        .submit_cmd_buffers = i3_vk_device_submit_cmd_buffers,
-        .present = i3_vk_device_present,
-        .end_frame = i3_vk_device_end_frame,
-        .destroy = i3_vk_device_destroy
-    }
-};
+static i3_vk_device_o i3_vk_device_iface_
+    = {.iface = {.create_sampler = i3_vk_device_create_sampler,
+                 .create_buffer = i3_vk_device_create_buffer,
+                 .create_image = i3_vk_device_create_image,
+                 .create_image_view = i3_vk_device_create_image_view,
+                 .create_descriptor_set_layout = i3_vk_device_create_descriptor_set_layout,
+                 .create_pipeline_layout = i3_vk_device_create_pipeline_layout,
+                 .create_framebuffer = i3_vk_device_create_framebuffer,
+                 .create_shader_module = i3_vk_device_create_shader_module,
+                 .create_graphics_pipeline = i3_vk_device_create_graphics_pipeline,
+                 .create_compute_pipeline = i3_vk_device_create_compute_pipeline,
+                 .create_swapchain = i3_vk_device_create_swapchain,
+                 .create_cmd_buffer = i3_vk_device_create_cmd_buffer,
+                 .submit_cmd_buffers = i3_vk_device_submit_cmd_buffers,
+                 .present = i3_vk_device_present,
+                 .end_frame = i3_vk_device_end_frame,
+                 .destroy = i3_vk_device_destroy}};
 
 i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc* device_desc)
 {
@@ -123,21 +124,16 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
         char optical_flow_flag = (qfam_props[i].queueFlags & VK_QUEUE_OPTICAL_FLOW_BIT_NV) != 0 ? 'F' : '_';
 
         VkDeviceQueueCreateInfo* queue_ci = i3_array_addn(&queues_ci, 1);
-        *queue_ci = (VkDeviceQueueCreateInfo)
-        {
+        *queue_ci = (VkDeviceQueueCreateInfo){
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .queueFamilyIndex = i,
             .queueCount = 1,
             .pQueuePriorities = &queue_priority,
         };
 
-        i3_log_dbg(device->log, "Device queue family %d: %d queue(s), flags 0x%x (%c.%c.%c.%c.%c.%c.%c.%c)",
-            i, qfam_props[i].queueCount,
-            qfam_props[i].queueFlags,
-            graphics_flag,
-            compute_flag, transfer_flag, sparse_flag,
-            protected_flag, video_decode_flag, video_encode_flag, optical_flow_flag
-        );
+        i3_log_dbg(device->log, "Device queue family %d: %d queue(s), flags 0x%x (%c.%c.%c.%c.%c.%c.%c.%c)", i,
+                   qfam_props[i].queueCount, qfam_props[i].queueFlags, graphics_flag, compute_flag, transfer_flag,
+                   sparse_flag, protected_flag, video_decode_flag, video_encode_flag, optical_flow_flag);
     }
 
     // enumarate extensions
@@ -166,8 +162,7 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
     }
 
     // create device
-    VkDeviceCreateInfo device_ci =
-    {
+    VkDeviceCreateInfo device_ci = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = i3_array_count(&queues_ci),
         .pQueueCreateInfos = i3_array_data(&queues_ci),
@@ -186,28 +181,41 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
     // load extensions
     i3_vk_device_ext_load(device->handle, &device->ext);
 
-
     // create VMA
-    VmaAllocatorCreateInfo allocator_ci = { .physicalDevice = device_desc->physical_device,
+    VmaAllocatorCreateInfo allocator_ci = {.physicalDevice = device_desc->physical_device,
                                            .device = device->handle,
                                            .instance = backend->instance,
-                                           .vulkanApiVersion = backend->api_version };
+                                           .vulkanApiVersion = backend->api_version};
 
     i3_vk_check(vmaCreateAllocator(&allocator_ci, &device->vma));
     i3_log_dbg(device->log, "VMA created");
 
     // initialize resource pools
-    i3_memory_pool_init(&device->sampler_pool, i3_alignof(i3_vk_sampler_o), sizeof(i3_vk_sampler_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->buffer_pool, i3_alignof(i3_vk_buffer_o), sizeof(i3_vk_buffer_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->image_pool, i3_alignof(i3_vk_image_o), sizeof(i3_vk_image_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->image_view_pool, i3_alignof(i3_vk_image_view_o), sizeof(i3_vk_image_view_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->descriptor_set_layout_pool, i3_alignof(i3_vk_descriptor_set_layout_o), sizeof(i3_vk_descriptor_set_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->pipeline_layout_pool, i3_alignof(i3_vk_pipeline_layout_o), sizeof(i3_vk_pipeline_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->framebuffer_pool, i3_alignof(i3_vk_framebuffer_o), sizeof(i3_vk_framebuffer_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->shader_module_pool, i3_alignof(i3_vk_shader_module_o), sizeof(i3_vk_shader_module_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->pipeline_pool, i3_alignof(i3_vk_pipeline_o), sizeof(i3_vk_pipeline_o), I3_RESOURCE_BLOCK_CAPACITY);
-    i3_memory_pool_init(&device->cmd_buffer_pool, i3_alignof(i3_vk_cmd_buffer_o), sizeof(i3_vk_cmd_buffer_o), I3_RESOURCE_BLOCK_CAPACITY);
-    
+    i3_memory_pool_init(&device->use_list_block_pool, i3_alignof(i3_vk_use_list_block_t),
+                        sizeof(i3_vk_use_list_block_t), I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->cmd_list_block_pool, i3_alignof(i3_vk_cmd_list_block_t),
+                        sizeof(i3_vk_cmd_list_block_t), I3_VK_CMD_LIST_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->sampler_pool, i3_alignof(i3_vk_sampler_o), sizeof(i3_vk_sampler_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->buffer_pool, i3_alignof(i3_vk_buffer_o), sizeof(i3_vk_buffer_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->image_pool, i3_alignof(i3_vk_image_o), sizeof(i3_vk_image_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->image_view_pool, i3_alignof(i3_vk_image_view_o), sizeof(i3_vk_image_view_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->descriptor_set_layout_pool, i3_alignof(i3_vk_descriptor_set_layout_o),
+                        sizeof(i3_vk_descriptor_set_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->pipeline_layout_pool, i3_alignof(i3_vk_pipeline_layout_o),
+                        sizeof(i3_vk_pipeline_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->framebuffer_pool, i3_alignof(i3_vk_framebuffer_o), sizeof(i3_vk_framebuffer_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->shader_module_pool, i3_alignof(i3_vk_shader_module_o), sizeof(i3_vk_shader_module_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->pipeline_pool, i3_alignof(i3_vk_pipeline_o), sizeof(i3_vk_pipeline_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->cmd_buffer_pool, i3_alignof(i3_vk_cmd_buffer_o), sizeof(i3_vk_cmd_buffer_o),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+
     i3_log_inf(device->log, "Vulkan device %s created", device_desc->base.name);
 
     return &device->iface;

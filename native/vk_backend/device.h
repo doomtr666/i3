@@ -4,12 +4,12 @@
 
 #include "vk_mem_alloc.h"
 
+#include "backend.h"
 #include "device_desc.h"
 #include "device_ext.h"
-#include "backend.h"
-
 
 #define I3_RESOURCE_BLOCK_CAPACITY 1024
+#define I3_CMD_BUFFER_DATA_BLOCK_CAPACITY 1024
 
 typedef struct i3_vk_device_o
 {
@@ -22,6 +22,8 @@ typedef struct i3_vk_device_o
     VmaAllocator vma;
 
     // resource pools
+    i3_memory_pool_t use_list_block_pool;
+    i3_memory_pool_t cmd_list_block_pool;
     i3_memory_pool_t sampler_pool;
     i3_memory_pool_t buffer_pool;
     i3_memory_pool_t image_pool;
@@ -32,7 +34,6 @@ typedef struct i3_vk_device_o
     i3_memory_pool_t shader_module_pool;
     i3_memory_pool_t pipeline_pool;
     i3_memory_pool_t cmd_buffer_pool;
-
 } i3_vk_device_o;
 
 i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc* device_desc);

@@ -5,11 +5,6 @@ dotnet.toolchain(dotnet_version = "8.0.200")
 use_repo(dotnet, "dotnet_toolchains")
 register_toolchains("@dotnet_toolchains//:all")
 
-# 7zip
-sevenzip = use_extension("//bazel:seven_zip.bzl", "seven_zip")
-sevenzip.install(version = "2409")
-use_repo(sevenzip, "seven_zip")
-
 # vulkan sdk
 vulkan_sdk = use_extension("//bazel:vulkan_sdk.bzl", "vulkan_sdk")
 vulkan_sdk.install(version = "1.4.309.0")
