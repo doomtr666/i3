@@ -1,7 +1,7 @@
 #include "native/core/arena.h"
 
-#include "pipeline_layout.h"
 #include "descriptor_set_layout.h"
+#include "pipeline_layout.h"
 
 // resource interface
 
@@ -47,10 +47,10 @@ static void i3_vk_pipeline_layout_set_debug_name(i3_rbk_resource_o* self, const 
 
     if (pipeline_layout->device->backend->ext.VK_EXT_debug_utils_supported)
     {
-        VkDebugUtilsObjectNameInfoEXT name_info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        VkDebugUtilsObjectNameInfoEXT name_info = {.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                    .objectType = VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                                    .objectHandle = (uintptr_t)pipeline_layout->handle,
-                                                   .pObjectName = name };
+                                                   .pObjectName = name};
         pipeline_layout->device->backend->ext.vkSetDebugUtilsObjectNameEXT(pipeline_layout->device->handle, &name_info);
     }
 }
@@ -90,7 +90,8 @@ static i3_vk_pipeline_layout_o i3_vk_pipeline_layout_iface_ =
 };
 
 // create pipeline layout
-i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* self, const i3_rbk_pipeline_layout_desc_t* desc)
+i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* self,
+                                                              const i3_rbk_pipeline_layout_desc_t* desc)
 {
     assert(self != NULL);
     assert(desc != NULL);
@@ -105,22 +106,22 @@ i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* s
     pipeline_layout->use_count = 1;
 
     // create layout
-    VkPipelineLayoutCreateInfo layout_ci =
-    {
+    VkPipelineLayoutCreateInfo layout_ci = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = desc->set_layout_count,
         .pushConstantRangeCount = desc->push_constant_range_count,
     };
 
     //  descriptor set layouts
-    VkDescriptorSetLayout set_layouts[I3_RBK_PIPELINE_LAYOUT_MAX_DESCRIPTOR_SET_COUNT] = { 0 };
+    VkDescriptorSetLayout set_layouts[I3_RBK_PIPELINE_LAYOUT_MAX_DESCRIPTOR_SET_COUNT] = {0};
     assert(desc->set_layout_count <= I3_RBK_PIPELINE_LAYOUT_MAX_DESCRIPTOR_SET_COUNT);
 
-    if(desc->set_layout_count > 0)
+    if (desc->set_layout_count > 0)
     {
-        for(uint32_t i=0; i < desc->set_layout_count; ++i)
+        for (uint32_t i = 0; i < desc->set_layout_count; ++i)
         {
-            i3_rbk_descriptor_set_layout_i* set_layout = desc->set_layouts[i];            
+            i3_rbk_descriptor_set_layout_i* set_layout = (i3_rbk_descriptor_set_layout_i*)desc->set_layouts[i];
+
             // get handle
             set_layouts[i] = ((i3_vk_descriptor_set_layout_o*)set_layout->self)->handle;
 
@@ -136,14 +137,14 @@ i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* s
     i3_arena_t arena;
     i3_arena_init(&arena, I3_KB);
 
-    if(desc->push_constant_range_count > 0)
+    if (desc->push_constant_range_count > 0)
     {
-        VkPushConstantRange* push_constant_ranges = i3_arena_alloc(&arena, sizeof(VkPushConstantRange) * desc->push_constant_range_count);
+        VkPushConstantRange* push_constant_ranges
+            = i3_arena_alloc(&arena, sizeof(VkPushConstantRange) * desc->push_constant_range_count);
         for (uint32_t i = 0; i < desc->push_constant_range_count; ++i)
         {
             const i3_rbk_push_constant_range_t* range = &desc->push_constant_ranges[i];
-            push_constant_ranges[i] = (VkPushConstantRange)
-            {
+            push_constant_ranges[i] = (VkPushConstantRange){
                 .stageFlags = i3_vk_convert_shader_stage_flags(range->stage_flags),
                 .offset = range->offset,
                 .size = range->size,

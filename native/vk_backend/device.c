@@ -12,17 +12,9 @@
 #include "pipeline_layout.h"
 #include "sampler.h"
 #include "shader_module.h"
+#include "submission.h"
 #include "swapchain.h"
 #include "use_list.h"
-
-static void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
-                                            i3_rbk_cmd_buffer_i** cmd_buffers,
-                                            uint32_t cmd_buffer_count)
-{
-    assert(self != NULL);
-    assert(cmd_buffers != NULL);
-    assert(cmd_buffer_count > 0);
-}
 
 static void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, i3_rbk_image_view_i* image_view)
 {
@@ -31,14 +23,12 @@ static void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swap
     assert(image_view != NULL);
 }
 
-static void i3_vk_device_end_frame(i3_rbk_device_o* self)
-{
-    assert(self != NULL);
-}
-
 static void i3_vk_device_destroy(i3_rbk_device_o* self)
 {
     i3_vk_device_o* device = (i3_vk_device_o*)self;
+
+    // destroy submissions array
+    i3_array_free(&device->submissions);
 
     // destroy resource pools
     i3_memory_pool_destroy(&device->use_list_block_pool);
@@ -53,6 +43,10 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     i3_memory_pool_destroy(&device->shader_module_pool);
     i3_memory_pool_destroy(&device->pipeline_pool);
     i3_memory_pool_destroy(&device->cmd_buffer_pool);
+    i3_memory_pool_destroy(&device->submission_pool);
+
+    // destroy command pool
+    vkDestroyCommandPool(device->handle, device->cmd_pool, NULL);
 
     // destroy vma
     vmaDestroyAllocator(device->vma);
@@ -181,6 +175,18 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
     // load extensions
     i3_vk_device_ext_load(device->handle, &device->ext);
 
+    // create command pool
+    VkCommandPoolCreateInfo cmd_pool_ci = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .queueFamilyIndex = 0,  // TODO: handle queues
+        .flags = 0,
+    };
+    i3_vk_check(vkCreateCommandPool(device->handle, &cmd_pool_ci, NULL, &device->cmd_pool));
+
+    // get graphics queue
+    // TODO: handle queues
+    vkGetDeviceQueue(device->handle, 0, 0, &device->graphics_queue);
+
     // create VMA
     VmaAllocatorCreateInfo allocator_ci = {.physicalDevice = device_desc->physical_device,
                                            .device = device->handle,
@@ -215,6 +221,11 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
                         I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->cmd_buffer_pool, i3_alignof(i3_vk_cmd_buffer_o), sizeof(i3_vk_cmd_buffer_o),
                         I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->submission_pool, i3_alignof(i3_vk_submission_t), sizeof(i3_vk_submission_t),
+                        I3_RESOURCE_BLOCK_CAPACITY);
+
+    // initialize submission array
+    i3_array_init(&device->submissions, sizeof(i3_vk_submission_t*));
 
     i3_log_inf(device->log, "Vulkan device %s created", device_desc->base.name);
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "native/core/array.h"
 #include "native/core/memory_pool.h"
 
 #include "vk_mem_alloc.h"
@@ -17,9 +18,11 @@ typedef struct i3_vk_device_o
     i3_logger_i* log;
     i3_vk_backend_o* backend;
     i3_vk_device_desc desc;
-    VkDevice handle;
     i3_vkbk_device_ext_t ext;
+    VkDevice handle;
+    VkCommandPool cmd_pool;
     VmaAllocator vma;
+    VkQueue graphics_queue;
 
     // resource pools
     i3_memory_pool_t use_list_block_pool;
@@ -34,6 +37,11 @@ typedef struct i3_vk_device_o
     i3_memory_pool_t shader_module_pool;
     i3_memory_pool_t pipeline_pool;
     i3_memory_pool_t cmd_buffer_pool;
+    i3_memory_pool_t submission_pool;
+
+    // submissions
+    i3_array_t submissions;
+
 } i3_vk_device_o;
 
 i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc* device_desc);

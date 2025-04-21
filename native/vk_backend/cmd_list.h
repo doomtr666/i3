@@ -9,6 +9,7 @@ typedef struct i3_vk_cmd_list_block_t
 {
     uint8_t commands[I3_VK_CMD_LIST_BLOCK_SIZE];
     uint8_t* current;
+    uint8_t* end;
     struct i3_vk_cmd_list_block_t* next;
 } i3_vk_cmd_list_block_t;
 
@@ -21,8 +22,10 @@ typedef struct i3_vk_cmd_list_t
 
 static inline void i3_vk_cmd_list_init(i3_vk_cmd_list_t* list, i3_vk_device_o* device);
 static inline void i3_vk_cmd_list_destroy(i3_vk_cmd_list_t* list);
-static inline void* i3_vk_cmd_list_alloc(i3_vk_cmd_list_t* list, uint32_t size);
+static inline void* i3_vk_cmd_list_write(i3_vk_cmd_list_t* list, uint32_t size);
 static inline void i3_vk_cmd_list_write_id(i3_vk_cmd_list_t* list, uint32_t id);
+static inline void* i3_vk_cmd_list_read(i3_vk_cmd_list_t* list, uint32_t size);
+static inline uint32_t i3_vk_cmd_list_read_id(i3_vk_cmd_list_t* list);
 
 // command list
 
@@ -42,7 +45,7 @@ static inline void i3_vk_cmd_list_write_id(i3_vk_cmd_list_t* list, uint32_t id);
 
 typedef enum
 {
-    I3_VK_CMDS()
+    I3_VK_CMDS() I3_VK_CMD_END,
 } i3_vk_cmd_id_t;
 
 #undef I3_VK_CMD_BEGIN
@@ -70,13 +73,65 @@ I3_VK_CMDS()
     {                                                                                                                \
         assert(list != NULL);                                                                                        \
         i3_vk_cmd_list_write_id(list, I3_VK_CMD_##name);                                                             \
-        i3_vk_cmd_##name##_t* cmd = (i3_vk_cmd_##name##_t*)i3_vk_cmd_list_alloc(list, sizeof(i3_vk_cmd_##name##_t)); \
+        i3_vk_cmd_##name##_t* cmd = (i3_vk_cmd_##name##_t*)i3_vk_cmd_list_write(list, sizeof(i3_vk_cmd_##name##_t)); \
         return cmd;                                                                                                  \
     }
 #define I3_VK_CMD_FIELD(type, name)
 #define I3_VK_CMD_END(name)
 
 I3_VK_CMDS()
+
+#undef I3_VK_CMD_BEGIN
+#undef I3_VK_CMD_FIELD
+#undef I3_VK_CMD_END
+
+// forward declarations of decode functions
+#define I3_VK_CMD_BEGIN(name) void i3_vk_cmd_decode_##name(void* ctx, i3_vk_cmd_##name##_t* cmd);
+#define I3_VK_CMD_FIELD(type, name)
+#define I3_VK_CMD_END(name)
+
+I3_VK_CMDS()
+
+#undef I3_VK_CMD_BEGIN
+#undef I3_VK_CMD_FIELD
+#undef I3_VK_CMD_END
+
+// decode functions
+#define I3_VK_CMD_BEGIN(name)                                                                   \
+    case I3_VK_CMD_##name:                                                                      \
+    {                                                                                           \
+        i3_vk_cmd_##name##_t* cmd =                                                             \
+            (i3_vk_cmd_##name##_t*)i3_vk_cmd_list_read(cmd_list, sizeof(i3_vk_cmd_##name##_t)); \
+        i3_vk_cmd_decode_##name(ctx, cmd);                                                      \
+        break;                                                                                  \
+    }
+#define I3_VK_CMD_FIELD(type, name)
+#define I3_VK_CMD_END(name)
+
+static inline void i3_vk_cmd_decode(void* ctx, i3_vk_cmd_list_t* cmd_list)
+{
+    assert(cmd_list != NULL);
+
+    // reset command list for reading
+    cmd_list->current = cmd_list->first;
+    cmd_list->current->current = cmd_list->current->commands;
+
+    while (true)
+    {
+        uint32_t cmd_id = i3_vk_cmd_list_read_id(cmd_list);
+        if (cmd_id == I3_VK_CMD_END)
+            break;
+
+        switch (cmd_id)
+        {
+            I3_VK_CMDS()
+
+            default:
+                assert(false && "Unknown command id");
+                break;
+        }
+    }
+}
 
 #undef I3_VK_CMD_BEGIN
 #undef I3_VK_CMD_FIELD
@@ -106,19 +161,18 @@ static inline void i3_vk_cmd_list_destroy(i3_vk_cmd_list_t* list)
     }
 }
 
-static inline void* i3_vk_cmd_list_alloc(i3_vk_cmd_list_t* list, uint32_t size)
+static inline void* i3_vk_cmd_list_write(i3_vk_cmd_list_t* list, uint32_t size)
 {
     assert(list != NULL);
     assert(size > 0);
 
     // allocate a new block if needed
-    if (list->current == NULL ||
-        (list->current->current + size) > (list->current->commands + I3_VK_CMD_LIST_BLOCK_SIZE))
+    if (list->current == NULL || (list->current->end + size) > (list->current->commands + I3_VK_CMD_LIST_BLOCK_SIZE))
     {
         i3_vk_cmd_list_block_t* block = i3_memory_pool_alloc(&list->device->cmd_list_block_pool);
         assert(block != NULL);
 
-        block->current = block->commands;
+        block->end = block->commands;
         block->next = NULL;
 
         if (list->first == NULL)
@@ -129,8 +183,8 @@ static inline void* i3_vk_cmd_list_alloc(i3_vk_cmd_list_t* list, uint32_t size)
         list->current = block;
     }
 
-    void* ptr = list->current->current;
-    list->current->current += size;
+    void* ptr = list->current->end;
+    list->current->end += size;
 
     return ptr;
 }
@@ -140,6 +194,35 @@ static inline void i3_vk_cmd_list_write_id(i3_vk_cmd_list_t* list, uint32_t id)
     assert(list != NULL);
 
     // write the command id to the command list
-    uint32_t* cmd_id = (uint32_t*)i3_vk_cmd_list_alloc(list, sizeof(uint32_t));
+    uint32_t* cmd_id = (uint32_t*)i3_vk_cmd_list_write(list, sizeof(uint32_t));
     *cmd_id = id;
+}
+
+static inline void* i3_vk_cmd_list_read(i3_vk_cmd_list_t* list, uint32_t size)
+{
+    assert(list != NULL);
+    assert(size > 0);
+
+    if (list->current->current + size > list->current->end)
+    {
+        list->current = list->current->next;
+        if (list->current == NULL)
+            return NULL;
+        list->current->current = list->current->commands;
+    }
+
+    void* ptr = list->current->current;
+    list->current->current += size;
+    return ptr;
+}
+
+static inline uint32_t i3_vk_cmd_list_read_id(i3_vk_cmd_list_t* list)
+{
+    assert(list != NULL);
+    // read the command id from the command list
+    uint32_t* cmd_id = (uint32_t*)i3_vk_cmd_list_read(list, sizeof(uint32_t));
+    // if the command id is NULL, it means that the command list is terminated
+    if (cmd_id == NULL)
+        return I3_VK_CMD_END;
+    return *cmd_id;
 }

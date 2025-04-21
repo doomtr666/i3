@@ -276,6 +276,7 @@ int main()
 
     while (!window->should_close(window->self))
     {
+#if 0        
         // create cmd buffer
         i3_rbk_cmd_buffer_i* cmd_buffer = device->create_cmd_buffer(device->self);
 
@@ -287,7 +288,7 @@ int main()
 
         // present image view to swapchain
         device->present(device->self, swapchain, image_view);
-
+#endif
         // perform cleanup
         device->end_frame(device->self);
 
