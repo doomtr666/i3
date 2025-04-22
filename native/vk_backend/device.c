@@ -16,13 +16,6 @@
 #include "swapchain.h"
 #include "use_list.h"
 
-static void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, i3_rbk_image_view_i* image_view)
-{
-    assert(self != NULL);
-    assert(swapchain != NULL);
-    assert(image_view != NULL);
-}
-
 static void i3_vk_device_destroy(i3_rbk_device_o* self)
 {
     i3_vk_device_o* device = (i3_vk_device_o*)self;

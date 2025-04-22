@@ -19,8 +19,10 @@ static void i3_vk_swapchain_release(i3_rbk_resource_o* self)
 
     if (swapchain->use_count == 0)
     {
-        if (swapchain->handle != VK_NULL_HANDLE)
-            vkDestroySwapchainKHR(swapchain->device->handle, swapchain->handle, NULL);
+        // destroy semaphores
+        vkDestroySemaphore(swapchain->device->handle, swapchain->acquire_sem, NULL);
+        vkDestroySemaphore(swapchain->device->handle, swapchain->present_sem, NULL);
+        vkDestroySwapchainKHR(swapchain->device->handle, swapchain->handle, NULL);
         i3_free(swapchain);
     }
 }
@@ -40,10 +42,10 @@ static void i3_vk_swapchain_set_debug_name(i3_rbk_resource_o* self, const char* 
 
     if (swapchain->device->backend->ext.VK_EXT_debug_utils_supported)
     {
-        VkDebugUtilsObjectNameInfoEXT name_info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        VkDebugUtilsObjectNameInfoEXT name_info = {.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                    .objectType = VK_OBJECT_TYPE_SWAPCHAIN_KHR,
                                                    .objectHandle = (uintptr_t)swapchain->handle,
-                                                   .pObjectName = name };
+                                                   .pObjectName = name};
         swapchain->device->backend->ext.vkSetDebugUtilsObjectNameEXT(swapchain->device->handle, &name_info);
     }
 }
@@ -97,7 +99,8 @@ bool i3_vk_recreate_swapchain(i3_vk_swapchain_o* swapchain)
 
     // get physical device capabilities
     VkSurfaceCapabilitiesKHR surface_caps;
-    i3_vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(swapchain->device->desc.physical_device, swapchain->surface, &surface_caps));
+    i3_vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(swapchain->device->desc.physical_device, swapchain->surface,
+                                                          &surface_caps));
 
     // image extents
     swapchain->create_info.imageExtent = surface_caps.currentExtent;
@@ -111,10 +114,21 @@ bool i3_vk_recreate_swapchain(i3_vk_swapchain_o* swapchain)
     if (old_swapchain != VK_NULL_HANDLE)
         vkDestroySwapchainKHR(swapchain->device->handle, old_swapchain, NULL);
 
+    // get swapchain images
+    i3_vk_check(vkGetSwapchainImagesKHR(swapchain->device->handle, swapchain->handle, &swapchain->image_count, NULL));
+    assert(swapchain->image_count > 0 && swapchain->image_count <= I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT);
+    i3_vk_check(vkGetSwapchainImagesKHR(swapchain->device->handle, swapchain->handle, &swapchain->image_count,
+                                        swapchain->images));
+
+    // reset out of date flag
+    swapchain->out_of_date = false;
+
     return true;
 }
 
-static bool i3_vk_prensent_mode_supported(VkPresentModeKHR* present_modes, uint32_t present_mode_count, VkPresentModeKHR present_mode)
+static bool i3_vk_prensent_mode_supported(VkPresentModeKHR* present_modes,
+                                          uint32_t present_mode_count,
+                                          VkPresentModeKHR present_mode)
 {
     for (uint32_t i = 0; i < present_mode_count; i++)
     {
@@ -124,7 +138,9 @@ static bool i3_vk_prensent_mode_supported(VkPresentModeKHR* present_modes, uint3
     return false;
 }
 
-i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self, i3_render_window_i* window, const i3_rbk_swapchain_desc_t* desc)
+i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self,
+                                                  i3_render_window_i* window,
+                                                  const i3_rbk_swapchain_desc_t* desc)
 {
     assert(self != NULL);
     assert(window != NULL);
@@ -150,8 +166,7 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self, i3_rend
     }
 
     // swapchain create info
-    swapchain->create_info = (VkSwapchainCreateInfoKHR)
-    {
+    swapchain->create_info = (VkSwapchainCreateInfoKHR){
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = swapchain->surface,
         .imageArrayLayers = 1,
@@ -159,13 +174,14 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self, i3_rend
         .clipped = VK_TRUE,
     };
 
-
     // get physical device capabilities
     VkSurfaceCapabilitiesKHR surface_caps;
-    i3_vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(swapchain->device->desc.physical_device, swapchain->surface, &surface_caps));
+    i3_vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(swapchain->device->desc.physical_device, swapchain->surface,
+                                                          &surface_caps));
 
     // min image count
-    swapchain->create_info.minImageCount = i3_clamp(swapchain->desc.requested_image_count, surface_caps.minImageCount, surface_caps.maxImageCount);
+    swapchain->create_info.minImageCount
+        = i3_clamp(swapchain->desc.requested_image_count, surface_caps.minImageCount, surface_caps.maxImageCount);
 
     // image extents
     swapchain->create_info.imageExtent = surface_caps.currentExtent;
@@ -190,12 +206,14 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self, i3_rend
     // format and color space
     VkSurfaceFormatKHR* surface_formats = NULL;
     uint32_t format_count = 0;
-    i3_vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(swapchain->device->desc.physical_device, swapchain->surface, &format_count, NULL));
+    i3_vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(swapchain->device->desc.physical_device, swapchain->surface,
+                                                     &format_count, NULL));
     if (format_count == 0)
         i3_vk_log_fatal("No supported surface formats");
     surface_formats = i3_alloc(format_count * sizeof(VkSurfaceFormatKHR));
     assert(surface_formats != NULL);
-    i3_vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(swapchain->device->desc.physical_device, swapchain->surface, &format_count, surface_formats));
+    i3_vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(swapchain->device->desc.physical_device, swapchain->surface,
+                                                     &format_count, surface_formats));
 
     swapchain->create_info.imageFormat = surface_formats[0].format;
     swapchain->create_info.imageColorSpace = surface_formats[0].colorSpace;
@@ -217,12 +235,14 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self, i3_rend
     // present mode
     VkPresentModeKHR* present_modes = NULL;
     uint32_t present_mode_count = 0;
-    i3_vk_check(vkGetPhysicalDeviceSurfacePresentModesKHR(swapchain->device->desc.physical_device, swapchain->surface, &present_mode_count, NULL));
+    i3_vk_check(vkGetPhysicalDeviceSurfacePresentModesKHR(swapchain->device->desc.physical_device, swapchain->surface,
+                                                          &present_mode_count, NULL));
     if (present_mode_count == 0)
         i3_vk_log_fatal("No supported present modes");
     present_modes = i3_alloc(present_mode_count * sizeof(VkPresentModeKHR));
     assert(present_modes != NULL);
-    i3_vk_check(vkGetPhysicalDeviceSurfacePresentModesKHR(swapchain->device->desc.physical_device, swapchain->surface, &present_mode_count, present_modes));
+    i3_vk_check(vkGetPhysicalDeviceSurfacePresentModesKHR(swapchain->device->desc.physical_device, swapchain->surface,
+                                                          &present_mode_count, present_modes));
 
     // always supported
     swapchain->create_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
@@ -249,5 +269,53 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self, i3_rend
     if (!i3_vk_recreate_swapchain(swapchain))
         i3_vk_log_fatal("Failed to create swapchain");
 
+    // create semaphores
+    VkSemaphoreCreateInfo sem_ci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    i3_vk_check(vkCreateSemaphore(swapchain->device->handle, &sem_ci, NULL, &swapchain->acquire_sem));
+    i3_vk_check(vkCreateSemaphore(swapchain->device->handle, &sem_ci, NULL, &swapchain->present_sem));
+
     return &swapchain->iface;
+}
+
+uint32_t i3_vk_swapchain_acquire_image(i3_vk_swapchain_o* swapchain)
+{
+    assert(swapchain != NULL);
+
+    if (swapchain->out_of_date)
+        i3_vk_recreate_swapchain(swapchain);
+
+    // acquire image
+    uint32_t image_index = 0;
+
+    VkResult result = vkAcquireNextImageKHR(swapchain->device->handle, swapchain->handle, UINT64_MAX,
+                                            swapchain->acquire_sem, VK_NULL_HANDLE, &image_index);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+        swapchain->out_of_date = true;
+    else if (result != VK_SUCCESS)
+    {
+        i3_vk_log_fatal("Failed to acquire swapchain image: %d", result);
+        return UINT32_MAX;
+    }
+
+    return image_index;
+}
+
+void i3_vk_swapchain_present(i3_vk_swapchain_o* swapchain, uint32_t image_index)
+{
+    assert(swapchain != NULL);
+    assert(image_index < swapchain->image_count);
+
+    VkPresentInfoKHR present_info = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                                     .waitSemaphoreCount = 1,
+                                     .pWaitSemaphores = &swapchain->present_sem,
+                                     .swapchainCount = 1,
+                                     .pSwapchains = &swapchain->handle,
+                                     .pImageIndices = &image_index};
+
+    VkResult result = vkQueuePresentKHR(swapchain->device->graphics_queue, &present_info);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+        swapchain->out_of_date = true;
+    else if (result != VK_SUCCESS)
+        i3_vk_log_fatal("Failed to present swapchain image: %d", result);
 }

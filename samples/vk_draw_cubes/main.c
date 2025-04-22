@@ -285,10 +285,11 @@ int main()
 
         // destroy cmd buffer
         cmd_buffer->destroy(cmd_buffer->self);
+#endif
 
         // present image view to swapchain
         device->present(device->self, swapchain, image_view);
-#endif
+
         // perform cleanup
         device->end_frame(device->self);
 
