@@ -19,6 +19,7 @@ typedef struct i3_vk_swapchain_o
     // images
     uint32_t image_count;
     VkImage images[I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT];
+    VkExtent2D extent;
 
     // present info
     VkSemaphore acquire_sem;

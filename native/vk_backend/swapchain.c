@@ -104,6 +104,7 @@ bool i3_vk_recreate_swapchain(i3_vk_swapchain_o* swapchain)
 
     // image extents
     swapchain->create_info.imageExtent = surface_caps.currentExtent;
+    swapchain->extent = surface_caps.currentExtent;
 
     // old swapchain
     swapchain->create_info.oldSwapchain = swapchain->handle;
@@ -282,7 +283,8 @@ uint32_t i3_vk_swapchain_acquire_image(i3_vk_swapchain_o* swapchain)
     assert(swapchain != NULL);
 
     if (swapchain->out_of_date)
-        i3_vk_recreate_swapchain(swapchain);
+        if (!i3_vk_recreate_swapchain(swapchain))
+            return UINT32_MAX;
 
     // acquire image
     uint32_t image_index = 0;
@@ -292,11 +294,10 @@ uint32_t i3_vk_swapchain_acquire_image(i3_vk_swapchain_o* swapchain)
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
         swapchain->out_of_date = true;
-    else if (result != VK_SUCCESS)
-    {
-        i3_vk_log_fatal("Failed to acquire swapchain image: %d", result);
+    else if (result == VK_NOT_READY)
         return UINT32_MAX;
-    }
+    else
+        i3_vk_check(result);
 
     return image_index;
 }
@@ -316,6 +317,6 @@ void i3_vk_swapchain_present(i3_vk_swapchain_o* swapchain, uint32_t image_index)
     VkResult result = vkQueuePresentKHR(swapchain->device->graphics_queue, &present_info);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
         swapchain->out_of_date = true;
-    else if (result != VK_SUCCESS)
-        i3_vk_log_fatal("Failed to present swapchain image: %d", result);
+    else
+        i3_vk_check(result);
 }

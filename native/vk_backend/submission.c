@@ -1,9 +1,9 @@
 #include "submission.h"
 #include "buffer.h"
 #include "cmd_buffer.h"
+#include "image.h"
+#include "image_view.h"
 #include "swapchain.h"
-
-#include <stdio.h>
 
 typedef struct i3_vk_cmd_ctx_t
 {
@@ -175,6 +175,108 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
     // acquire swapchain image
     uint32_t image_index = i3_vk_swapchain_acquire_image(vk_swapchain);
 
+    if (image_index == UINT32_MAX)
+    {
+        i3_log_err(device->log, "Failed to acquire swapchain image");
+        return;
+    }
+
+    // allocate submission
+    i3_vk_submission_t* submission = i3_vk_alloc_submission(device);
+
+    // allocate command buffer
+    VkCommandBufferAllocateInfo alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = device->cmd_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    i3_vk_check(vkAllocateCommandBuffers(device->handle, &alloc_info, &submission->command_buffers[0]));
+    submission->cmd_buffer_count = 1;
+    VkCommandBuffer cmd_buffer = submission->command_buffers[0];
+
+    // begin command buffer recording
+    VkCommandBufferBeginInfo begin_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+    };
+
+    vkBeginCommandBuffer(cmd_buffer, &begin_info);
+
+    // get source image
+    i3_vk_image_view_o* vk_image_view = (i3_vk_image_view_o*)image_view->self;
+    i3_vk_image_o* src_image = vk_image_view->image;
+
+    // get destination image
+    VkImage dst_image = vk_swapchain->images[image_index];
+
+    // transition src_image to TRANSFER_SRC
+    // TODO
+
+    // transition dst_image to TRANSFER_DST
+    VkImageMemoryBarrier dst_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                        .srcAccessMask = 0,
+                                        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        .image = dst_image,
+                                        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                        .subresourceRange.levelCount = 1,
+                                        .subresourceRange.layerCount = 1};
+
+    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
+                         &dst_barrier);
+
+    // blit image to swapchain image
+    VkImageBlit region = {
+        .srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .srcSubresource.layerCount = 1,
+        .srcOffsets[1].x = src_image->desc.width,
+        .srcOffsets[1].y = src_image->desc.height,
+        .srcOffsets[1].z = 1,
+
+        .dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .dstSubresource.layerCount = 1,
+        .dstOffsets[1].x = vk_swapchain->extent.width,
+        .dstOffsets[1].y = vk_swapchain->extent.height,
+        .dstOffsets[1].z = 1,
+    };
+
+    vkCmdBlitImage(cmd_buffer, src_image->handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst_image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+
+    // transition dst_image to PRESENT_SRC
+    VkImageMemoryBarrier present_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                                            .dstAccessMask = 0,
+                                            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                            .image = dst_image,
+                                            .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                            .subresourceRange.levelCount = 1,
+                                            .subresourceRange.layerCount = 1};
+
+    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1,
+                         &present_barrier);
+
+    // end command buffer recording
+    vkEndCommandBuffer(cmd_buffer);
+
+    // submit the command buffer
+    VkPipelineStageFlags wait_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSubmitInfo submit_info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                                .waitSemaphoreCount = 1,
+                                .pWaitDstStageMask = &wait_mask,
+                                .pWaitSemaphores = &vk_swapchain->acquire_sem,
+                                .commandBufferCount = 1,
+                                .pCommandBuffers = &cmd_buffer,
+                                .signalSemaphoreCount = 1,
+                                .pSignalSemaphores = &vk_swapchain->present_sem};
+
+    vkQueueSubmit(device->graphics_queue, 1, &submit_info, submission->completion_fence);
+
     // present swapchain image
     i3_vk_swapchain_present(vk_swapchain, image_index);
+
+    // add the submission to the array
+    i3_array_push(&device->submissions, &submission);
 }
