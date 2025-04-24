@@ -56,7 +56,7 @@ static const i3_rbk_buffer_desc_t* i3_vk_buffer_get_desc(i3_rbk_buffer_o* self)
     return &buffer->desc;
 }
 
-static i3_rbk_resource_i* i3_vk_buffer_get_resource_i(i3_rbk_buffer_o* self)
+static i3_rbk_resource_i* i3_vk_buffer_get_resource(i3_rbk_buffer_o* self)
 {
     assert(self != NULL);
     i3_vk_buffer_o* buffer = (i3_vk_buffer_o*)self;
@@ -103,7 +103,7 @@ static i3_vk_buffer_o i3_vk_buffer_iface_ =
     .iface =
     {
         .get_desc = i3_vk_buffer_get_desc,
-        .get_resource_i = i3_vk_buffer_get_resource_i,
+        .get_resource = i3_vk_buffer_get_resource,
         .map = i3_vk_buffer_map,
         .unmap = i3_vk_buffer_unmap,
         .destroy = i3_vk_buffer_destroy,

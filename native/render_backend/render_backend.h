@@ -387,28 +387,28 @@ typedef struct i3_rbk_resource_i
 
 } i3_rbk_resource_i;
 
-#define i3_rbk_resource_add_ref(resource)                                        \
-    {                                                                            \
-        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
-        res__->add_ref(res__->self);                                             \
-    }                                                                            \
+#define i3_rbk_resource_add_ref(resource)                                      \
+    {                                                                          \
+        i3_rbk_resource_i* res__ = (resource)->get_resource((resource)->self); \
+        res__->add_ref(res__->self);                                           \
+    }                                                                          \
     while (0)
 
-#define i3_rbk_resource_release(resource)                                        \
-    {                                                                            \
-        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
-        res__->release(res__->self);                                             \
-    }                                                                            \
+#define i3_rbk_resource_release(resource)                                      \
+    {                                                                          \
+        i3_rbk_resource_i* res__ = (resource)->get_resource((resource)->self); \
+        res__->release(res__->self);                                           \
+    }                                                                          \
     while (0)
 
 #define i3_rbk_resource_get_use_count(resource) \
-    ((resource)->get_resource_i((resource)->self)->get_use_count((resource)->get_resource_i((resource)->self)->self))
+    ((resource)->get_resource((resource)->self)->get_use_count((resource)->get_resource((resource)->self)->self))
 
-#define i3_rbk_resource_set_debug_name(resource, name)                           \
-    {                                                                            \
-        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
-        res__->set_debug_name(res__->self, name);                                \
-    }                                                                            \
+#define i3_rbk_resource_set_debug_name(resource, name)                         \
+    {                                                                          \
+        i3_rbk_resource_i* res__ = (resource)->get_resource((resource)->self); \
+        res__->set_debug_name(res__->self, name);                              \
+    }                                                                          \
     while (0)
 
 // sampler
@@ -438,7 +438,7 @@ typedef struct i3_rbk_sampler_i
     i3_rbk_sampler_o* self;
 
     const i3_rbk_sampler_desc_t* (*get_desc)(i3_rbk_sampler_o* self);
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_sampler_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_sampler_o* self);
     void (*destroy)(i3_rbk_sampler_o* self);
 
 } i3_rbk_sampler_i;
@@ -457,7 +457,7 @@ typedef struct i3_rbk_buffer_i
     i3_rbk_buffer_o* self;
 
     const i3_rbk_buffer_desc_t* (*get_desc)(i3_rbk_buffer_o* self);
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_buffer_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_buffer_o* self);
 
     // map/unmap staging buffer
     void* (*map)(i3_rbk_buffer_o* self);
@@ -487,7 +487,7 @@ typedef struct i3_rbk_image_i
     i3_rbk_image_o* self;
 
     const i3_rbk_image_desc_t* (*get_desc)(i3_rbk_image_o* self);
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_image_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_image_o* self);
     void (*destroy)(i3_rbk_image_o* self);
 } i3_rbk_image_i;
 
@@ -537,7 +537,7 @@ typedef struct i3_rbk_descriptor_set_layout_o i3_rbk_descriptor_set_layout_o;
 typedef struct i3_rbk_descriptor_set_layout_i
 {
     i3_rbk_descriptor_set_layout_o* self;
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_descriptor_set_layout_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_descriptor_set_layout_o* self);
     void (*destroy)(i3_rbk_descriptor_set_layout_o* self);
 } i3_rbk_descriptor_set_layout_i;
 
@@ -562,7 +562,7 @@ typedef struct i3_rbk_pipeline_layout_o i3_rbk_pipeline_layout_o;
 typedef struct i3_rbk_pipeline_layout_i
 {
     i3_rbk_pipeline_layout_o* self;
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_pipeline_layout_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_pipeline_layout_o* self);
     void (*destroy)(i3_rbk_pipeline_layout_o* self);
 } i3_rbk_pipeline_layout_i;
 
@@ -587,7 +587,7 @@ typedef struct i3_rbk_framebuffer_o i3_rbk_framebuffer_o;
 typedef struct i3_rbk_framebuffer_i
 {
     i3_rbk_framebuffer_o* self;
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_framebuffer_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_framebuffer_o* self);
     void (*destroy)(i3_rbk_framebuffer_o* self);
 } i3_rbk_framebuffer_i;
 
@@ -605,7 +605,7 @@ typedef struct i3_rbk_shader_module_i
     i3_rbk_shader_module_o* self;
 
     const i3_rbk_shader_module_desc_t* (*get_desc)(i3_rbk_shader_module_o* self);
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_shader_module_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_shader_module_o* self);
     void (*destroy)(i3_rbk_shader_module_o* self);
 } i3_rbk_shader_module_i;
 
@@ -775,7 +775,7 @@ typedef struct i3_rbk_pipeline_i
 {
     i3_rbk_pipeline_o* self;
 
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_pipeline_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_pipeline_o* self);
     void (*destroy)(i3_rbk_pipeline_o* self);
 } i3_rbk_pipeline_i;
 
@@ -794,7 +794,7 @@ typedef struct i3_rbk_swapchain_i
     i3_rbk_swapchain_o* self;
 
     const i3_rbk_swapchain_desc_t* (*get_desc)(i3_rbk_swapchain_o* self);
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_swapchain_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_swapchain_o* self);
     void (*destroy)(i3_rbk_swapchain_o* self);
 } i3_rbk_swapchain_i;
 
@@ -805,7 +805,7 @@ typedef struct i3_rbk_cmd_buffer_i
 {
     i3_rbk_cmd_buffer_o* self;
 
-    i3_rbk_resource_i* (*get_resource_i)(i3_rbk_cmd_buffer_o* self);
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_cmd_buffer_o* self);
 
     void (*write_buffer)(i3_rbk_cmd_buffer_o* self,
                          i3_rbk_buffer_i* buffer,

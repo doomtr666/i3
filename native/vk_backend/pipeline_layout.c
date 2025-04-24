@@ -23,9 +23,8 @@ static void i3_vk_pipeline_layout_release(i3_rbk_resource_o* self)
         // destroy pipeline layout
         vkDestroyPipelineLayout(pipeline_layout->device->handle, pipeline_layout->handle, NULL);
 
-        // release descriptor set layouts
-        for (uint32_t i = 0; i < pipeline_layout->set_layout_count; ++i)
-            i3_rbk_resource_release(pipeline_layout->set_layouts[i]);
+        // destroy use list
+        i3_vk_use_list_destroy(&pipeline_layout->use_list);
 
         // free pipeline layout
         i3_memory_pool_free(&pipeline_layout->device->pipeline_layout_pool, pipeline_layout);
@@ -57,7 +56,7 @@ static void i3_vk_pipeline_layout_set_debug_name(i3_rbk_resource_o* self, const 
 
 // pipeline layout interface
 
-static i3_rbk_resource_i* i3_vk_pipeline_layout_get_resource_i(i3_rbk_pipeline_layout_o* self)
+static i3_rbk_resource_i* i3_vk_pipeline_layout_get_resource(i3_rbk_pipeline_layout_o* self)
 {
     assert(self != NULL);
     i3_vk_pipeline_layout_o* pipeline_layout = (i3_vk_pipeline_layout_o*)self;
@@ -84,7 +83,7 @@ static i3_vk_pipeline_layout_o i3_vk_pipeline_layout_iface_ =
     },
     .iface =
     {
-        .get_resource_i = i3_vk_pipeline_layout_get_resource_i,
+        .get_resource = i3_vk_pipeline_layout_get_resource,
         .destroy = i3_vk_pipeline_layout_destroy,
     },
 };
@@ -105,6 +104,12 @@ i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* s
     pipeline_layout->device = device;
     pipeline_layout->use_count = 1;
 
+    // initialize use list
+    i3_vk_use_list_init(&pipeline_layout->use_list, device);
+
+    i3_arena_t arena;
+    i3_arena_init(&arena, I3_KB);
+
     // create layout
     VkPipelineLayoutCreateInfo layout_ci = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -113,11 +118,11 @@ i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* s
     };
 
     //  descriptor set layouts
-    VkDescriptorSetLayout set_layouts[I3_RBK_PIPELINE_LAYOUT_MAX_DESCRIPTOR_SET_COUNT] = {0};
-    assert(desc->set_layout_count <= I3_RBK_PIPELINE_LAYOUT_MAX_DESCRIPTOR_SET_COUNT);
-
     if (desc->set_layout_count > 0)
     {
+        VkDescriptorSetLayout* set_layouts
+            = i3_arena_alloc(&arena, sizeof(VkDescriptorSetLayout) * desc->set_layout_count);
+
         for (uint32_t i = 0; i < desc->set_layout_count; ++i)
         {
             i3_rbk_descriptor_set_layout_i* set_layout = (i3_rbk_descriptor_set_layout_i*)desc->set_layouts[i];
@@ -125,17 +130,12 @@ i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* s
             // get handle
             set_layouts[i] = ((i3_vk_descriptor_set_layout_o*)set_layout->self)->handle;
 
-            // keep ref to descriptor set layout
-            pipeline_layout->set_layouts[i] = set_layout;
-            i3_rbk_resource_add_ref(set_layout);
+            // retain the set layout
+            i3_vk_use_list_add(&pipeline_layout->use_list, set_layout);
         }
 
         layout_ci.pSetLayouts = set_layouts;
-        pipeline_layout->set_layout_count = desc->set_layout_count;
     }
-
-    i3_arena_t arena;
-    i3_arena_init(&arena, I3_KB);
 
     if (desc->push_constant_range_count > 0)
     {

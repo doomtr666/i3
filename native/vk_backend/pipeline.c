@@ -1,10 +1,11 @@
 #include "native/core/arena.h"
 
-#include "pipeline.h"
 #include "convert.h"
 #include "framebuffer.h"
+#include "pipeline.h"
 #include "pipeline_layout.h"
 #include "shader_module.h"
+
 
 // resource interface
 
@@ -51,17 +52,17 @@ static void i3_vk_buffer_set_debug_name(i3_rbk_resource_o* self, const char* nam
 
     if (pipeline->device->backend->ext.VK_EXT_debug_utils_supported)
     {
-        VkDebugUtilsObjectNameInfoEXT name_info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        VkDebugUtilsObjectNameInfoEXT name_info = {.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                    .objectType = VK_OBJECT_TYPE_PIPELINE,
                                                    .objectHandle = (uintptr_t)pipeline->handle,
-                                                   .pObjectName = name };
+                                                   .pObjectName = name};
         pipeline->device->backend->ext.vkSetDebugUtilsObjectNameEXT(pipeline->device->handle, &name_info);
     }
 }
 
 // pipeline interface
 
-static i3_rbk_resource_i* i3_vk_pipeline_get_resource_i(i3_rbk_pipeline_o* self)
+static i3_rbk_resource_i* i3_vk_pipeline_get_resource(i3_rbk_pipeline_o* self)
 {
     assert(self != NULL);
     i3_vk_pipeline_o* pipeline = (i3_vk_pipeline_o*)self;
@@ -88,7 +89,7 @@ static i3_vk_pipeline_o i3_vk_pipeline_iface_ =
     },
     .iface =
     {
-        .get_resource_i = i3_vk_pipeline_get_resource_i,
+        .get_resource = i3_vk_pipeline_get_resource,
         .destroy = i3_vk_pipeline_destroy,
     },
 };
@@ -109,7 +110,9 @@ static i3_vk_pipeline_o* i3_vk_allocate_pipeline(i3_vk_device_o* device)
 }
 
 // create stages
-static VkPipelineShaderStageCreateInfo* i3_vk_create_stages(i3_arena_t *arena, uint32_t stage_count, const i3_rbk_pipeline_shader_stage_desc_t* descs)
+static VkPipelineShaderStageCreateInfo* i3_vk_create_stages(i3_arena_t* arena,
+                                                            uint32_t stage_count,
+                                                            const i3_rbk_pipeline_shader_stage_desc_t* descs)
 {
     assert(arena != NULL);
     assert(descs != NULL);
@@ -120,8 +123,7 @@ static VkPipelineShaderStageCreateInfo* i3_vk_create_stages(i3_arena_t *arena, u
     for (uint32_t i = 0; i < stage_count; ++i)
     {
         // create stage
-        ci[i] = (VkPipelineShaderStageCreateInfo)
-        {
+        ci[i] = (VkPipelineShaderStageCreateInfo){
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = i3_vk_convert_shader_stage(descs[i].stage),
             .module = ((i3_vk_shader_module_o*)descs[i].shader_module->self)->handle,
@@ -133,7 +135,9 @@ static VkPipelineShaderStageCreateInfo* i3_vk_create_stages(i3_arena_t *arena, u
 }
 
 // vertex input state
-static VkPipelineVertexInputStateCreateInfo* i3_vk_create_vertex_input_states(i3_arena_t* arena, const i3_rbk_pipeline_vertex_input_state_t* desc)
+static VkPipelineVertexInputStateCreateInfo* i3_vk_create_vertex_input_states(
+    i3_arena_t* arena,
+    const i3_rbk_pipeline_vertex_input_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
@@ -141,12 +145,12 @@ static VkPipelineVertexInputStateCreateInfo* i3_vk_create_vertex_input_states(i3
     VkPipelineVertexInputStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineVertexInputStateCreateInfo));
 
     // create binding descriptions
-    VkVertexInputBindingDescription* bindings = i3_arena_alloc(arena, sizeof(VkVertexInputBindingDescription) * desc->binding_count);
+    VkVertexInputBindingDescription* bindings
+        = i3_arena_alloc(arena, sizeof(VkVertexInputBindingDescription) * desc->binding_count);
     for (uint32_t i = 0; i < desc->binding_count; i++)
     {
         const i3_rbk_pipeline_vertex_input_binding_desc_t* binding = &desc->bindings[i];
-        bindings[i] = (VkVertexInputBindingDescription)
-        {
+        bindings[i] = (VkVertexInputBindingDescription){
             .binding = binding->binding,
             .stride = binding->stride,
             .inputRate = i3_vk_convert_vertex_input_rate(binding->input_rate),
@@ -154,12 +158,12 @@ static VkPipelineVertexInputStateCreateInfo* i3_vk_create_vertex_input_states(i3
     }
 
     // create attribute descriptions
-    VkVertexInputAttributeDescription* attributes = i3_arena_alloc(arena, sizeof(VkVertexInputAttributeDescription) * desc->attribute_count);
+    VkVertexInputAttributeDescription* attributes
+        = i3_arena_alloc(arena, sizeof(VkVertexInputAttributeDescription) * desc->attribute_count);
     for (uint32_t i = 0; i < desc->attribute_count; i++)
     {
         const i3_rbk_pipeline_vertex_input_attribute_desc_t* attribute = &desc->attributes[i];
-        attributes[i] = (VkVertexInputAttributeDescription)
-        {
+        attributes[i] = (VkVertexInputAttributeDescription){
             .location = attribute->location,
             .binding = attribute->binding,
             .format = i3_vk_convert_format(attribute->format),
@@ -168,8 +172,7 @@ static VkPipelineVertexInputStateCreateInfo* i3_vk_create_vertex_input_states(i3
     }
 
     // create vertex input state
-    *ci = (VkPipelineVertexInputStateCreateInfo)
-    {
+    *ci = (VkPipelineVertexInputStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount = desc->binding_count,
         .pVertexBindingDescriptions = bindings,
@@ -181,15 +184,16 @@ static VkPipelineVertexInputStateCreateInfo* i3_vk_create_vertex_input_states(i3
 }
 
 // input assembly state
-static VkPipelineInputAssemblyStateCreateInfo* i3_vk_create_input_assembly_states(i3_arena_t* arena, const i3_rbk_pipeline_input_assembly_state_t* desc)
+static VkPipelineInputAssemblyStateCreateInfo* i3_vk_create_input_assembly_states(
+    i3_arena_t* arena,
+    const i3_rbk_pipeline_input_assembly_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
 
     VkPipelineInputAssemblyStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineInputAssemblyStateCreateInfo));
 
-    *ci = (VkPipelineInputAssemblyStateCreateInfo)
-    {
+    *ci = (VkPipelineInputAssemblyStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .topology = i3_vk_convert_primitive_topology(desc->topology),
         .primitiveRestartEnable = desc->primitive_restart_enable ? VK_TRUE : VK_FALSE,
@@ -199,15 +203,16 @@ static VkPipelineInputAssemblyStateCreateInfo* i3_vk_create_input_assembly_state
 }
 
 // tessellation state
-static VkPipelineTessellationStateCreateInfo* i3_vk_create_tessellation_states(i3_arena_t* arena, const i3_rbk_pipeline_tessellation_state_t* desc)
+static VkPipelineTessellationStateCreateInfo* i3_vk_create_tessellation_states(
+    i3_arena_t* arena,
+    const i3_rbk_pipeline_tessellation_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
 
     VkPipelineTessellationStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineTessellationStateCreateInfo));
 
-    *ci = (VkPipelineTessellationStateCreateInfo)
-    {
+    *ci = (VkPipelineTessellationStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO,
         .patchControlPoints = desc->path_control_points,
     };
@@ -216,29 +221,28 @@ static VkPipelineTessellationStateCreateInfo* i3_vk_create_tessellation_states(i
 }
 
 // viewport state
-static VkPipelineViewportStateCreateInfo* i3_vk_create_viewport_states(i3_arena_t* arena, const i3_rbk_pipeline_viewport_state_t* desc)
+static VkPipelineViewportStateCreateInfo* i3_vk_create_viewport_states(i3_arena_t* arena,
+                                                                       const i3_rbk_pipeline_viewport_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
 
     VkPipelineViewportStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineViewportStateCreateInfo));
 
-    *ci = (VkPipelineViewportStateCreateInfo)
-    {
+    *ci = (VkPipelineViewportStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
         .viewportCount = desc->viewport_count,
         .scissorCount = desc->scissor_count,
     };
 
     // create viewports
-    if(desc->viewport_count > 0)
+    if (desc->viewport_count > 0)
     {
         VkViewport* viewports = i3_arena_alloc(arena, sizeof(VkViewport) * desc->viewport_count);
         for (uint32_t i = 0; i < desc->viewport_count; i++)
         {
             const i3_rbk_viewport_t* viewport = &desc->viewports[i];
-            viewports[i] = (VkViewport)
-            {
+            viewports[i] = (VkViewport){
                 .x = viewport->x,
                 .y = viewport->y,
                 .width = viewport->width,
@@ -252,16 +256,15 @@ static VkPipelineViewportStateCreateInfo* i3_vk_create_viewport_states(i3_arena_
     }
 
     // create scissors
-    if(desc->scissor_count > 0)
+    if (desc->scissor_count > 0)
     {
         VkRect2D* scissors = i3_arena_alloc(arena, sizeof(VkRect2D) * desc->scissor_count);
         for (uint32_t i = 0; i < desc->scissor_count; i++)
         {
             const i3_rbk_rect_t* rect = &desc->scissors[i];
-            scissors[i] = (VkRect2D)
-            {
-                .offset = { rect->offset.x, rect->offset.y },
-                .extent = { rect->extent.width, rect->extent.height },
+            scissors[i] = (VkRect2D){
+                .offset = {rect->offset.x, rect->offset.y},
+                .extent = {rect->extent.width, rect->extent.height},
             };
         }
 
@@ -272,15 +275,16 @@ static VkPipelineViewportStateCreateInfo* i3_vk_create_viewport_states(i3_arena_
 }
 
 // rasterization state
-static VkPipelineRasterizationStateCreateInfo* i3_vk_create_rasterization_states(i3_arena_t* arena, const i3_rbk_pipeline_rasterization_state_t* desc)
+static VkPipelineRasterizationStateCreateInfo* i3_vk_create_rasterization_states(
+    i3_arena_t* arena,
+    const i3_rbk_pipeline_rasterization_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
 
     VkPipelineRasterizationStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineRasterizationStateCreateInfo));
 
-    *ci = (VkPipelineRasterizationStateCreateInfo)
-    {
+    *ci = (VkPipelineRasterizationStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .depthClampEnable = desc->depth_clamp_enable ? VK_TRUE : VK_FALSE,
         .rasterizerDiscardEnable = desc->rasterizer_discard_enable ? VK_TRUE : VK_FALSE,
@@ -298,15 +302,16 @@ static VkPipelineRasterizationStateCreateInfo* i3_vk_create_rasterization_states
 }
 
 // multisample state
-static VkPipelineMultisampleStateCreateInfo* i3_vk_create_multisample_states(i3_arena_t* arena, const i3_rbk_pipeline_multisample_state_t* desc)
+static VkPipelineMultisampleStateCreateInfo* i3_vk_create_multisample_states(
+    i3_arena_t* arena,
+    const i3_rbk_pipeline_multisample_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
 
     VkPipelineMultisampleStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineMultisampleStateCreateInfo));
 
-    *ci = (VkPipelineMultisampleStateCreateInfo)
-    {
+    *ci = (VkPipelineMultisampleStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .rasterizationSamples = i3_vk_convert_sample_count(desc->rasterization_samples),
         .sampleShadingEnable = desc->sample_shading_enable ? VK_TRUE : VK_FALSE,
@@ -320,7 +325,9 @@ static VkPipelineMultisampleStateCreateInfo* i3_vk_create_multisample_states(i3_
 }
 
 // depth stencil state
-static VkPipelineDepthStencilStateCreateInfo* i3_vk_create_depth_stencil_states(i3_arena_t* arena, const i3_rbk_pipeline_depth_stencil_state_t* desc)
+static VkPipelineDepthStencilStateCreateInfo* i3_vk_create_depth_stencil_states(
+    i3_arena_t* arena,
+    const i3_rbk_pipeline_depth_stencil_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
@@ -363,31 +370,33 @@ static VkPipelineDepthStencilStateCreateInfo* i3_vk_create_depth_stencil_states(
 }
 
 // color blend state
-static VkPipelineColorBlendStateCreateInfo* i3_vk_create_color_blend_states(i3_arena_t* arena, const i3_rbk_pipeline_color_blend_state_t* desc)
+static VkPipelineColorBlendStateCreateInfo* i3_vk_create_color_blend_states(
+    i3_arena_t* arena,
+    const i3_rbk_pipeline_color_blend_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
 
     VkPipelineColorBlendStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineColorBlendStateCreateInfo));
 
-    *ci = (VkPipelineColorBlendStateCreateInfo)
-    {
+    *ci = (VkPipelineColorBlendStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .logicOpEnable = desc->logic_op_enable ? VK_TRUE : VK_FALSE,
         .logicOp = i3_vk_convert_logic_op(desc->logic_op),
         .attachmentCount = desc->attachment_count,
-        .blendConstants = { desc->blend_constants[0], desc->blend_constants[1], desc->blend_constants[2], desc->blend_constants[3] },
+        .blendConstants
+        = {desc->blend_constants[0], desc->blend_constants[1], desc->blend_constants[2], desc->blend_constants[3]},
     };
 
     // create attachments
     if (desc->attachment_count > 0)
     {
-        VkPipelineColorBlendAttachmentState* attachments = i3_arena_alloc(arena, sizeof(VkPipelineColorBlendAttachmentState) * desc->attachment_count);
+        VkPipelineColorBlendAttachmentState* attachments
+            = i3_arena_alloc(arena, sizeof(VkPipelineColorBlendAttachmentState) * desc->attachment_count);
         for (uint32_t i = 0; i < desc->attachment_count; i++)
         {
             const i3_rbk_pipeline_color_blend_attachment_state_t* attachment = &desc->attachments[i];
-            attachments[i] = (VkPipelineColorBlendAttachmentState)
-            {
+            attachments[i] = (VkPipelineColorBlendAttachmentState){
                 .blendEnable = attachment->blend_enable ? VK_TRUE : VK_FALSE,
                 .srcColorBlendFactor = i3_vk_convert_blend_factor(attachment->src_color_blend_factor),
                 .dstColorBlendFactor = i3_vk_convert_blend_factor(attachment->dst_color_blend_factor),
@@ -406,17 +415,17 @@ static VkPipelineColorBlendStateCreateInfo* i3_vk_create_color_blend_states(i3_a
 }
 
 // dynamic state
-static VkPipelineDynamicStateCreateInfo* i3_vk_create_dynamic_states(i3_arena_t* arena, const i3_rbk_pipeline_dynamic_state_t* desc)
+static VkPipelineDynamicStateCreateInfo* i3_vk_create_dynamic_states(i3_arena_t* arena,
+                                                                     const i3_rbk_pipeline_dynamic_state_t* desc)
 {
     assert(arena != NULL);
     assert(desc != NULL);
 
     VkPipelineDynamicStateCreateInfo* ci = i3_arena_alloc(arena, sizeof(VkPipelineDynamicStateCreateInfo));
 
-    *ci = (VkPipelineDynamicStateCreateInfo)
-    {
+    *ci = (VkPipelineDynamicStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .dynamicStateCount = desc->dynamic_state_count, 
+        .dynamicStateCount = desc->dynamic_state_count,
     };
 
     // create dynamic states
@@ -433,7 +442,8 @@ static VkPipelineDynamicStateCreateInfo* i3_vk_create_dynamic_states(i3_arena_t*
 }
 
 // create graphics pipeline
-i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self, const i3_rbk_graphics_pipeline_desc_t* desc)
+i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
+                                                         const i3_rbk_graphics_pipeline_desc_t* desc)
 {
     assert(self != NULL);
     assert(desc != NULL);
@@ -454,15 +464,14 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self, 
     i3_rbk_resource_add_ref(desc->layout);
 
     // create pipeline
-    VkGraphicsPipelineCreateInfo pipeline_ci =
-    {
+    VkGraphicsPipelineCreateInfo pipeline_ci = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .layout = ((i3_vk_pipeline_layout_o*)desc->layout->self)->handle,
         .renderPass = ((i3_vk_framebuffer_o*)desc->framebuffer->self)->render_pass,
     };
 
     // create stages
-    if(desc->stage_count > 0 && desc->stages != NULL)
+    if (desc->stage_count > 0 && desc->stages != NULL)
     {
         pipeline_ci.pStages = i3_vk_create_stages(&arena, desc->stage_count, desc->stages);
         pipeline_ci.stageCount = desc->stage_count;
@@ -499,7 +508,7 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self, 
     // color blend state
     if (desc->color_blend != NULL)
         pipeline_ci.pColorBlendState = i3_vk_create_color_blend_states(&arena, desc->color_blend);
-        
+
     // dynamic state
     if (desc->dynamic != NULL)
         pipeline_ci.pDynamicState = i3_vk_create_dynamic_states(&arena, desc->dynamic);
@@ -514,7 +523,8 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self, 
 }
 
 // create compute pipeline
-i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self, const i3_rbk_compute_pipeline_desc_t* desc)
+i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self,
+                                                        const i3_rbk_compute_pipeline_desc_t* desc)
 {
     assert(self != NULL);
     assert(desc != NULL);
@@ -528,11 +538,10 @@ i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self, c
 
     // create pipeline layout
     pipeline->layout = desc->layout;
-    //i3_rbk_resource_add_ref(desc->layout);
+    // i3_rbk_resource_add_ref(desc->layout);
 
     // create pipeline
-    VkComputePipelineCreateInfo pipeline_ci =
-    {
+    VkComputePipelineCreateInfo pipeline_ci = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
         .layout = ((i3_vk_pipeline_layout_o*)desc->layout->self)->handle,
     };

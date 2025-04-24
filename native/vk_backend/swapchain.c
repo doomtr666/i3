@@ -60,7 +60,7 @@ static const i3_rbk_swapchain_desc_t* i3_vk_swapchain_get_desc(i3_rbk_swapchain_
     return &swapchain->desc;
 }
 
-static i3_rbk_resource_i* i3_vk_swapchain_get_resource_i(i3_rbk_swapchain_o* self)
+static i3_rbk_resource_i* i3_vk_swapchain_get_resource(i3_rbk_swapchain_o* self)
 {
     assert(self != NULL);
     i3_vk_swapchain_o* swapchain = (i3_vk_swapchain_o*)self;
@@ -88,7 +88,7 @@ static i3_vk_swapchain_o i3_vk_swapchain_iface_ =
     .iface =
     {
         .get_desc = i3_vk_swapchain_get_desc,
-        .get_resource_i = i3_vk_swapchain_get_resource_i,
+        .get_resource = i3_vk_swapchain_get_resource,
         .destroy = i3_vk_swapchain_destroy,
     }
 };

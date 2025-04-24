@@ -41,10 +41,10 @@ static void i3_vk_sampler_set_debug_name(i3_rbk_resource_o* self, const char* na
 
     if (sampler->device->backend->ext.VK_EXT_debug_utils_supported)
     {
-        VkDebugUtilsObjectNameInfoEXT name_info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        VkDebugUtilsObjectNameInfoEXT name_info = {.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                    .objectType = VK_OBJECT_TYPE_SAMPLER,
                                                    .objectHandle = (uintptr_t)sampler->handle,
-                                                   .pObjectName = name };
+                                                   .pObjectName = name};
         sampler->device->backend->ext.vkSetDebugUtilsObjectNameEXT(sampler->device->handle, &name_info);
     }
 }
@@ -60,7 +60,7 @@ static const i3_rbk_sampler_desc_t* i3_vk_sampler_get_desc(i3_rbk_sampler_o* sel
     return &sampler->desc;
 }
 
-static i3_rbk_resource_i* i3_vk_sampler_get_resource_i(i3_rbk_sampler_o* self)
+static i3_rbk_resource_i* i3_vk_sampler_get_resource(i3_rbk_sampler_o* self)
 {
     assert(self != NULL);
 
@@ -90,7 +90,7 @@ static i3_vk_sampler_o i3_vk_sampler_iface_ =
     .iface =
     {
         .get_desc = i3_vk_sampler_get_desc,
-        .get_resource_i = i3_vk_sampler_get_resource_i,
+        .get_resource = i3_vk_sampler_get_resource,
         .destroy = i3_vk_sampler_destroy,
     },
 };
@@ -137,4 +137,3 @@ i3_rbk_sampler_i* i3_vk_device_create_sampler(i3_rbk_device_o* self, const i3_rb
 
     return &sampler->iface;
 }
-

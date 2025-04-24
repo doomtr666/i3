@@ -47,7 +47,7 @@ static void i3_vk_cmd_buffer_set_debug_name(i3_rbk_resource_o* self, const char*
 
 // cmd buffer interface
 
-static i3_rbk_resource_i* i3_vk_cmd_buffer_get_resource_i(i3_rbk_cmd_buffer_o* self)
+static i3_rbk_resource_i* i3_vk_cmd_buffer_get_resource(i3_rbk_cmd_buffer_o* self)
 {
     assert(self != NULL);
     i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
@@ -137,7 +137,7 @@ static i3_vk_cmd_buffer_o i3_vk_cmd_buffer_iface_ =
     },
     .iface =
     {
-        .get_resource_i = i3_vk_cmd_buffer_get_resource_i,
+        .get_resource = i3_vk_cmd_buffer_get_resource,
         .write_buffer = i3_vk_cmd_buffer_write_buffer,
         .copy_buffer = i3_vk_cmd_buffer_copy_buffer,
         .destroy = i3_vk_cmd_buffer_destroy,

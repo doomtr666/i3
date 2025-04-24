@@ -40,17 +40,18 @@ static void i3_vk_descriptor_set_layout_set_debug_name(i3_rbk_resource_o* self, 
 
     if (descriptor_set_layout->device->backend->ext.VK_EXT_debug_utils_supported)
     {
-        VkDebugUtilsObjectNameInfoEXT name_info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        VkDebugUtilsObjectNameInfoEXT name_info = {.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                    .objectType = VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                                                    .objectHandle = (uintptr_t)descriptor_set_layout->handle,
-                                                   .pObjectName = name };
-        descriptor_set_layout->device->backend->ext.vkSetDebugUtilsObjectNameEXT(descriptor_set_layout->device->handle, &name_info);
+                                                   .pObjectName = name};
+        descriptor_set_layout->device->backend->ext.vkSetDebugUtilsObjectNameEXT(descriptor_set_layout->device->handle,
+                                                                                 &name_info);
     }
 }
 
 // descriptor set layout interface
 
-static i3_rbk_resource_i* i3_vk_descriptor_set_layout_get_resource_i(i3_rbk_descriptor_set_layout_o* self)
+static i3_rbk_resource_i* i3_vk_descriptor_set_layout_get_resource(i3_rbk_descriptor_set_layout_o* self)
 {
     assert(self != NULL);
     i3_vk_descriptor_set_layout_o* descriptor_set_layout = (i3_vk_descriptor_set_layout_o*)self;
@@ -77,13 +78,15 @@ static i3_vk_descriptor_set_layout_o i3_vk_descriptor_set_layout_iface_ =
     },
     .iface =
     {
-        .get_resource_i = i3_vk_descriptor_set_layout_get_resource_i,
+        .get_resource = i3_vk_descriptor_set_layout_get_resource,
         .destroy = i3_vk_descriptor_set_layout_destroy,
     },
 };
 
 // create descriptor set layout
-i3_rbk_descriptor_set_layout_i* i3_vk_device_create_descriptor_set_layout(i3_rbk_device_o* self, const i3_rbk_descriptor_set_layout_desc_t* desc)
+i3_rbk_descriptor_set_layout_i* i3_vk_device_create_descriptor_set_layout(
+    i3_rbk_device_o* self,
+    const i3_rbk_descriptor_set_layout_desc_t* desc)
 {
     assert(self != NULL);
     assert(desc != NULL);
@@ -98,8 +101,7 @@ i3_rbk_descriptor_set_layout_i* i3_vk_device_create_descriptor_set_layout(i3_rbk
     descriptor_set_layout->use_count = 1;
 
     // create layout
-    VkDescriptorSetLayoutCreateInfo layout_ci =
-    {
+    VkDescriptorSetLayoutCreateInfo layout_ci = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .bindingCount = desc->binding_count,
     };
@@ -107,14 +109,14 @@ i3_rbk_descriptor_set_layout_i* i3_vk_device_create_descriptor_set_layout(i3_rbk
     i3_arena_t arena;
     i3_arena_init(&arena, I3_KB);
 
-    if(desc->binding_count > 0)
+    if (desc->binding_count > 0)
     {
-        VkDescriptorSetLayoutBinding* bindings = i3_arena_alloc(&arena, sizeof(VkDescriptorSetLayoutBinding) * desc->binding_count);
+        VkDescriptorSetLayoutBinding* bindings
+            = i3_arena_alloc(&arena, sizeof(VkDescriptorSetLayoutBinding) * desc->binding_count);
         for (uint32_t i = 0; i < desc->binding_count; i++)
         {
             const i3_rbk_descriptor_set_layout_binding_t* binding = &desc->bindings[i];
-            bindings[i] = (VkDescriptorSetLayoutBinding)
-            {
+            bindings[i] = (VkDescriptorSetLayoutBinding){
                 .binding = binding->binding,
                 .descriptorType = i3_vk_convert_descriptor_type(binding->descriptor_type),
                 .descriptorCount = binding->descriptor_count,

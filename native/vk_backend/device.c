@@ -23,8 +23,8 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     // wait  for  pending submissions
     while (i3_array_count(&device->submissions) > 0)
     {
-        vkDeviceWaitIdle(device->handle);
         i3_vk_device_end_frame(self);
+        vkDeviceWaitIdle(device->handle);
     }
 
     // destroy submissions array

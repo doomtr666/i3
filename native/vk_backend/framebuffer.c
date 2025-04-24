@@ -23,6 +23,10 @@ static void i3_vk_framebuffer_release(i3_rbk_resource_o* self)
     {
         vkDestroyRenderPass(framebuffer->device->handle, framebuffer->render_pass, NULL);
         vkDestroyFramebuffer(framebuffer->device->handle, framebuffer->handle, NULL);
+
+        // destroy use list
+        i3_vk_use_list_destroy(&framebuffer->use_list);
+
         i3_memory_pool_free(&framebuffer->device->framebuffer_pool, framebuffer);
     }
 }
@@ -42,16 +46,16 @@ static void i3_vk_framebuffer_set_debug_name(i3_rbk_resource_o* self, const char
 
     if (framebuffer->device->backend->ext.VK_EXT_debug_utils_supported)
     {
-        VkDebugUtilsObjectNameInfoEXT name_info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        VkDebugUtilsObjectNameInfoEXT name_info = {.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                    .objectType = VK_OBJECT_TYPE_FRAMEBUFFER,
                                                    .objectHandle = (uintptr_t)framebuffer->handle,
-                                                   .pObjectName = name };
+                                                   .pObjectName = name};
         framebuffer->device->backend->ext.vkSetDebugUtilsObjectNameEXT(framebuffer->device->handle, &name_info);
     }
 }
 
 //  framebuffer interface
-static i3_rbk_resource_i* i3_vk_framebuffer_get_resource_i(i3_rbk_framebuffer_o* self)
+static i3_rbk_resource_i* i3_vk_framebuffer_get_resource(i3_rbk_framebuffer_o* self)
 {
     assert(self != NULL);
     i3_vk_framebuffer_o* framebuffer = (i3_vk_framebuffer_o*)self;
@@ -78,7 +82,7 @@ static i3_vk_framebuffer_o i3_vk_framebuffer_iface_ =
     },
     .iface =
     {
-        .get_resource_i = i3_vk_framebuffer_get_resource_i,
+        .get_resource = i3_vk_framebuffer_get_resource,
         .destroy = i3_vk_framebuffer_destroy,
     },
 };
@@ -98,6 +102,9 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
     framebuffer->device = device;
     framebuffer->use_count = 1;
 
+    // intialize use list
+    i3_vk_use_list_init(&framebuffer->use_list, device);
+
     i3_arena_t arena;
     i3_arena_init(&arena, I3_KB);
 
@@ -110,18 +117,20 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
     uint32_t i;
     for (i = 0; i < desc->color_attachment_count; i++)
     {
-        const i3_rbk_image_view_desc_t * image_view_desc = desc->color_attachments[i].image_view->get_desc(desc->color_attachments[i].image_view->self);
-        i3_rbk_image_i *image = desc->color_attachments[i].image_view->get_image(desc->color_attachments[i].image_view->self);
-        const i3_rbk_image_desc_t *image_desc = image->get_desc(image->self);
+        // retain image view
+        i3_rbk_image_view_i* image_view = desc->color_attachments[i].image_view;
+        i3_vk_use_list_add(&framebuffer->use_list, image_view);
 
-        attachment_ref[i] = (VkAttachmentReference)
-        {
+        const i3_rbk_image_view_desc_t* image_view_desc = image_view->get_desc(image_view->self);
+        i3_rbk_image_i* image = image_view->get_image(image_view->self);
+        const i3_rbk_image_desc_t* image_desc = image->get_desc(image->self);
+
+        attachment_ref[i] = (VkAttachmentReference){
             .attachment = i,
             .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         };
 
-        attachments[i] = (VkAttachmentDescription)
-        {
+        attachments[i] = (VkAttachmentDescription){
             .format = i3_vk_convert_format(image_view_desc->format),
             .samples = image_desc->samples,
             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -135,20 +144,22 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
         image_views[i] = ((i3_vk_image_view_o*)desc->color_attachments[i].image_view->self)->handle;
     }
 
-    if(desc->depth_attachment)
+    if (desc->depth_attachment)
     {
-        const i3_rbk_image_view_desc_t * image_view_desc = desc->depth_attachment->image_view->get_desc(desc->depth_attachment->image_view->self);
-        i3_rbk_image_i *image = desc->depth_attachment->image_view->get_image(desc->depth_attachment->image_view->self);
-        const i3_rbk_image_desc_t *image_desc = image->get_desc(image->self);
+        // retain image view
+        i3_rbk_image_view_i* image_view = desc->depth_attachment->image_view;
+        i3_vk_use_list_add(&framebuffer->use_list, image_view);
 
-        attachment_ref[i] = (VkAttachmentReference)
-        {
+        const i3_rbk_image_view_desc_t* image_view_desc = image_view->get_desc(image_view->self);
+        i3_rbk_image_i* image = image_view->get_image(image_view->self);
+        const i3_rbk_image_desc_t* image_desc = image->get_desc(image->self);
+
+        attachment_ref[i] = (VkAttachmentReference){
             .attachment = i,
             .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
 
-        attachments[i] = (VkAttachmentDescription)
-        {
+        attachments[i] = (VkAttachmentDescription){
             .format = i3_vk_convert_format(image_view_desc->format),
             .samples = image_desc->samples,
             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -163,16 +174,14 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
     }
 
     // create render pass
-    VkSubpassDescription subpass = 
-    {
+    VkSubpassDescription subpass = {
         .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .colorAttachmentCount = desc->color_attachment_count,
         .pColorAttachments = attachment_ref,
         .pDepthStencilAttachment = desc->depth_attachment ? &attachment_ref[i] : NULL,
     };
 
-    VkRenderPassCreateInfo render_pass_ci =
-    {
+    VkRenderPassCreateInfo render_pass_ci = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .subpassCount = 1,
         .pSubpasses = &subpass,
@@ -183,8 +192,7 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
     i3_vk_check(vkCreateRenderPass(device->handle, &render_pass_ci, NULL, &framebuffer->render_pass));
 
     // create framebuffer
-    VkFramebufferCreateInfo framebuffer_ci =
-    {
+    VkFramebufferCreateInfo framebuffer_ci = {
         .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
         .width = desc->width,
         .height = desc->height,

@@ -184,6 +184,10 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
     // allocate submission
     i3_vk_submission_t* submission = i3_vk_alloc_submission(device);
 
+    // retain swapchain and image view
+    i3_vk_use_list_add(&submission->use_list, swapchain);
+    i3_vk_use_list_add(&submission->use_list, image_view);
+
     // allocate command buffer
     VkCommandBufferAllocateInfo alloc_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,

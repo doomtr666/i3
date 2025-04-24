@@ -38,10 +38,10 @@ static void i3_vk_shader_module_set_debug_name(i3_rbk_resource_o* self, const ch
 
     if (module->device->backend->ext.VK_EXT_debug_utils_supported)
     {
-        VkDebugUtilsObjectNameInfoEXT name_info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        VkDebugUtilsObjectNameInfoEXT name_info = {.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                    .objectType = VK_OBJECT_TYPE_SHADER_MODULE,
                                                    .objectHandle = (uintptr_t)module->handle,
-                                                   .pObjectName = name };
+                                                   .pObjectName = name};
         module->device->backend->ext.vkSetDebugUtilsObjectNameEXT(module->device->handle, &name_info);
     }
 }
@@ -56,7 +56,7 @@ static const i3_rbk_shader_module_desc_t* i3_vk_shader_module_get_desc(i3_rbk_sh
     return &module->desc;
 }
 
-static i3_rbk_resource_i* i3_vk_shader_module_get_resource_i(i3_rbk_shader_module_o* self)
+static i3_rbk_resource_i* i3_vk_shader_module_get_resource(i3_rbk_shader_module_o* self)
 {
     assert(self != NULL);
     i3_vk_shader_module_o* module = (i3_vk_shader_module_o*)self;
@@ -84,12 +84,13 @@ static i3_vk_shader_module_o i3_vk_shader_module_iface_ =
     .iface =
     {
         .get_desc = i3_vk_shader_module_get_desc,
-        .get_resource_i = i3_vk_shader_module_get_resource_i,
+        .get_resource = i3_vk_shader_module_get_resource,
         .destroy = i3_vk_shader_module_destroy,
     },
 };
 
-i3_rbk_shader_module_i* i3_vk_device_create_shader_module(i3_rbk_device_o* self, const i3_rbk_shader_module_desc_t* desc)
+i3_rbk_shader_module_i* i3_vk_device_create_shader_module(i3_rbk_device_o* self,
+                                                          const i3_rbk_shader_module_desc_t* desc)
 {
     assert(self != NULL);
     assert(desc != NULL);
@@ -106,12 +107,9 @@ i3_rbk_shader_module_i* i3_vk_device_create_shader_module(i3_rbk_device_o* self,
     module->desc = *desc;
     module->use_count = 1;
 
-    VkShaderModuleCreateInfo shader_module_ci = 
-    { 
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = desc->code_size,
-        .pCode = (const uint32_t*)desc->code 
-    };
+    VkShaderModuleCreateInfo shader_module_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+                                                 .codeSize = desc->code_size,
+                                                 .pCode = (const uint32_t*)desc->code};
 
     i3_vk_check(vkCreateShaderModule(device->handle, &shader_module_ci, NULL, &module->handle));
 

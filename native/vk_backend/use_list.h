@@ -22,11 +22,11 @@ static inline void i3_vk_use_list_init(i3_vk_use_list_t* list, i3_vk_device_o* d
 static inline void i3_vk_use_list_destroy(i3_vk_use_list_t* list);
 static inline void i3_vk_use_list_add_resource(i3_vk_use_list_t* list, i3_rbk_resource_i* resource);
 
-#define i3_vk_use_list_add(list, resource)                                       \
-    {                                                                            \
-        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
-        i3_vk_use_list_add_resource(list, res__);                                \
-    }                                                                            \
+#define i3_vk_use_list_add(list, resource)                                     \
+    {                                                                          \
+        i3_rbk_resource_i* res__ = (resource)->get_resource((resource)->self); \
+        i3_vk_use_list_add_resource(list, res__);                              \
+    }                                                                          \
     while (0)
 
 // implementation
@@ -78,9 +78,9 @@ static inline void i3_vk_use_list_add_resource(i3_vk_use_list_t* list, i3_rbk_re
     resource->add_ref(resource->self);
 }
 
-#define i3_vk_use_list_add(list, resource)                                       \
-    {                                                                            \
-        i3_rbk_resource_i* res__ = (resource)->get_resource_i((resource)->self); \
-        i3_vk_use_list_add_resource(list, res__);                                \
-    }                                                                            \
+#define i3_vk_use_list_add(list, resource)                                     \
+    {                                                                          \
+        i3_rbk_resource_i* res__ = (resource)->get_resource((resource)->self); \
+        i3_vk_use_list_add_resource(list, res__);                              \
+    }                                                                          \
     while (0)
