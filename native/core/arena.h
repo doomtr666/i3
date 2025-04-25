@@ -6,7 +6,7 @@
 typedef struct i3_arena_t i3_arena_t;
 
 static inline void i3_arena_init(i3_arena_t* arena, uint32_t block_size);
-static inline void i3_arena_free(i3_arena_t* arena);
+static inline void i3_arena_destroy(i3_arena_t* arena);
 static inline void* i3_arena_alloc(i3_arena_t* arena, uint32_t size);
 static inline uint32_t i3_arena_block_size(i3_arena_t* arena);
 static inline uint32_t i3_arena_allocated(i3_arena_t* arena);
@@ -34,7 +34,7 @@ static inline void i3_arena_init(i3_arena_t* arena, uint32_t block_size)
     arena->block_end = NULL;
 }
 
-static inline void i3_arena_free(i3_arena_t* arena)
+static inline void i3_arena_destroy(i3_arena_t* arena)
 {
     assert(arena != NULL);
 
@@ -46,7 +46,7 @@ static inline void i3_arena_free(i3_arena_t* arena)
     }
 
     // free array
-    i3_array_free(&arena->blocks);
+    i3_array_destroy(&arena->blocks);
 }
 
 static inline void* i3_arena_alloc(i3_arena_t* arena, uint32_t size)

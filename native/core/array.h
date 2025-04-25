@@ -7,7 +7,7 @@ typedef struct i3_array_t i3_array_t;
 static inline void i3_array_init(i3_array_t* array, uint32_t element_size);
 static inline void i3_array_init_capacity(i3_array_t* array, uint32_t element_size, uint32_t capacity);
 static inline void i3_array_init_count(i3_array_t* array, uint32_t element_size, uint32_t count);
-static inline void i3_array_free(i3_array_t* array);
+static inline void i3_array_destroy(i3_array_t* array);
 static inline uint32_t i3_array_push(i3_array_t* array, void* element);
 static inline void i3_array_pop(i3_array_t* array);
 static inline void* i3_array_addn(i3_array_t* array, uint32_t count);
@@ -75,7 +75,7 @@ static inline void i3_array_init_count(i3_array_t* array, uint32_t element_size,
     i3_array_resize(array, count);
 }
 
-static inline void i3_array_free(i3_array_t* array)
+static inline void i3_array_destroy(i3_array_t* array)
 {
     assert(array != NULL);
 

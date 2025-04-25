@@ -131,7 +131,7 @@ i3_rbk_descriptor_set_layout_i* i3_vk_device_create_descriptor_set_layout(
 
     i3_vk_check(vkCreateDescriptorSetLayout(device->handle, &layout_ci, NULL, &descriptor_set_layout->handle));
 
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 
     return &descriptor_set_layout->iface;
 }

@@ -6,7 +6,6 @@
 #include "pipeline_layout.h"
 #include "shader_module.h"
 
-
 // resource interface
 
 static void i3_vk_pipeline_add_ref(i3_rbk_resource_o* self)
@@ -517,7 +516,7 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
     i3_vk_check(vkCreateGraphicsPipelines(device->handle, VK_NULL_HANDLE, 1, &pipeline_ci, NULL, &pipeline->handle));
 
     // free arena
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 
     return &pipeline->iface;
 }
@@ -553,7 +552,7 @@ i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self,
     i3_vk_check(vkCreateComputePipelines(device->handle, VK_NULL_HANDLE, 1, &pipeline_ci, NULL, &pipeline->handle));
 
     // free arena
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 
     return &pipeline->iface;
 }

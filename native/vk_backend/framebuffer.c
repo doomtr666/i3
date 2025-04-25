@@ -204,7 +204,7 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
 
     i3_vk_check(vkCreateFramebuffer(device->handle, &framebuffer_ci, NULL, &framebuffer->handle));
 
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 
     return &framebuffer->iface;
 }

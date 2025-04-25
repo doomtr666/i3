@@ -101,10 +101,12 @@ bool i3_vk_recreate_swapchain(i3_vk_swapchain_o* swapchain)
     VkSurfaceCapabilitiesKHR surface_caps;
     i3_vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(swapchain->device->desc.physical_device, swapchain->surface,
                                                           &surface_caps));
-
     // image extents
     swapchain->create_info.imageExtent = surface_caps.currentExtent;
     swapchain->extent = surface_caps.currentExtent;
+
+    if (swapchain->extent.width == 0 || swapchain->extent.height == 0)
+        return false;
 
     // old swapchain
     swapchain->create_info.oldSwapchain = swapchain->handle;
@@ -288,7 +290,6 @@ uint32_t i3_vk_swapchain_acquire_image(i3_vk_swapchain_o* swapchain)
 
     // acquire image
     uint32_t image_index = 0;
-
     VkResult result = vkAcquireNextImageKHR(swapchain->device->handle, swapchain->handle, UINT64_MAX,
                                             swapchain->acquire_sem, VK_NULL_HANDLE, &image_index);
 
@@ -319,4 +320,18 @@ void i3_vk_swapchain_present(i3_vk_swapchain_o* swapchain, uint32_t image_index)
         swapchain->out_of_date = true;
     else
         i3_vk_check(result);
+}
+
+VkSemaphore i3_vk_swapchain_get_acquire_semaphore(i3_vk_swapchain_o* swapchain)
+{
+    assert(swapchain != NULL);
+
+    return swapchain->acquire_sem;
+}
+
+VkSemaphore i3_vk_swapchain_get_present_semaphore(i3_vk_swapchain_o* swapchain)
+{
+    assert(swapchain != NULL);
+
+    return swapchain->present_sem;
 }

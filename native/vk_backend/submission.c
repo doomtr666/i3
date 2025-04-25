@@ -177,7 +177,7 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
 
     if (image_index == UINT32_MAX)
     {
-        i3_log_err(device->log, "Failed to acquire swapchain image");
+        // i3_log_err(device->log, "Failed to acquire swapchain image");
         return;
     }
 
@@ -266,15 +266,18 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
     vkEndCommandBuffer(cmd_buffer);
 
     // submit the command buffer
-    VkPipelineStageFlags wait_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkPipelineStageFlags wait_mask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    VkSemaphore acquire_sem = i3_vk_swapchain_get_acquire_semaphore(vk_swapchain);
+    VkSemaphore present_sem = i3_vk_swapchain_get_present_semaphore(vk_swapchain);
+    VkSemaphore signal_sems[] = {i3_vk_swapchain_get_present_semaphore(vk_swapchain)};
     VkSubmitInfo submit_info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                                 .waitSemaphoreCount = 1,
                                 .pWaitDstStageMask = &wait_mask,
-                                .pWaitSemaphores = &vk_swapchain->acquire_sem,
+                                .pWaitSemaphores = &acquire_sem,
                                 .commandBufferCount = 1,
                                 .pCommandBuffers = &cmd_buffer,
                                 .signalSemaphoreCount = 1,
-                                .pSignalSemaphores = &vk_swapchain->present_sem};
+                                .pSignalSemaphores = &present_sem};
 
     vkQueueSubmit(device->graphics_queue, 1, &submit_info, submission->completion_fence);
 

@@ -15,7 +15,7 @@ TEST(array, init_free)
     EXPECT_EQ(i3_array_element_size(&array), sizeof(int));
     EXPECT_EQ(i3_array_data(&array), nullptr);
 
-    i3_array_free(&array);
+    i3_array_destroy(&array);
 }
 
 TEST(array, push)
@@ -46,7 +46,7 @@ TEST(array, push)
     EXPECT_EQ(*(int*)i3_array_at(&array, 0), 1);
     EXPECT_EQ(*(int*)i3_array_at(&array, 1), 2);
 
-    i3_array_free(&array);
+    i3_array_destroy(&array);
 }
 
 TEST(array, addn)
@@ -98,7 +98,7 @@ TEST(array, addn)
     EXPECT_EQ(*(int*)i3_array_at(&array, 8), 9);
     EXPECT_EQ(*(int*)i3_array_at(&array, 9), 10);
 
-    i3_array_free(&array);
+    i3_array_destroy(&array);
 }
 
 TEST(array, front_back_at)
@@ -134,7 +134,7 @@ TEST(array, front_back_at)
     EXPECT_EQ(*(int*)i3_array_at(&array, 3), 4);
     EXPECT_EQ(*(int*)i3_array_at(&array, 4), 5);
 
-    i3_array_free(&array);
+    i3_array_destroy(&array);
 }
 
 TEST(array, resize)
@@ -146,5 +146,5 @@ TEST(array, resize)
     for (uint32_t i = 0; i < 16; i++)
         *((int*)i3_array_at(&array, i)) = i;
 
-    i3_array_free(&array);
+    i3_array_destroy(&array);
 }

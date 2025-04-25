@@ -28,7 +28,7 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     }
 
     // destroy submissions array
-    i3_array_free(&device->submissions);
+    i3_array_destroy(&device->submissions);
 
     // destroy resource pools
     i3_memory_pool_destroy(&device->use_list_block_pool);
@@ -167,8 +167,8 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
     i3_vk_check(vkCreateDevice(device_desc->physical_device, &device_ci, NULL, &device->handle));
 
     // cleanup
-    i3_array_free(&queues_ci);
-    i3_array_free(&enabled_exts);
+    i3_array_destroy(&queues_ci);
+    i3_array_destroy(&enabled_exts);
     i3_free(qfam_props);
     i3_free(ext_props);
 

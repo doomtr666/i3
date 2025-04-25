@@ -155,7 +155,7 @@ i3_rbk_pipeline_layout_i* i3_vk_device_create_pipeline_layout(i3_rbk_device_o* s
 
     i3_vk_check(vkCreatePipelineLayout(device->handle, &layout_ci, NULL, &pipeline_layout->handle));
 
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 
     return &pipeline_layout->iface;
 }

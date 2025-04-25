@@ -19,6 +19,7 @@ static void i3_vk_buffer_release(i3_rbk_resource_o* self)
     if (buffer->use_count == 0)
     {
         vmaDestroyBuffer(buffer->device->vma, buffer->handle, buffer->allocation);
+        i3_vk_destroy_buffer_barrier_info(&buffer->barrier_info);
         i3_memory_pool_free(&buffer->device->buffer_pool, buffer);
     }
 }
@@ -164,6 +165,9 @@ i3_rbk_buffer_i* i3_vk_device_create_buffer(i3_rbk_device_o* self, const i3_rbk_
     VmaAllocationCreateInfo alloc_ci = {.usage = memory_usage};
 
     i3_vk_check(vmaCreateBuffer(device->vma, &buffer_ci, &alloc_ci, &buffer->handle, &buffer->allocation, NULL));
+
+    // init barrier info
+    i3_vk_init_buffer_barrier_info(&buffer->barrier_info, desc->size);
 
     return &buffer->iface;
 }

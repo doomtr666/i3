@@ -23,6 +23,7 @@ static void i3_vk_image_release(i3_rbk_resource_o* self)
     if (image->use_count == 0)
     {
         vmaDestroyImage(image->device->vma, image->handle, image->allocation);
+        i3_vk_destroy_image_barrier_info(&image->barrier_info);
         i3_memory_pool_free(&image->device->image_pool, image);
     }
 }
@@ -137,6 +138,9 @@ i3_rbk_image_i* i3_vk_device_create_image(i3_rbk_device_o* self, const i3_rbk_im
     VmaAllocationCreateInfo alloc_ci = {.usage = VMA_MEMORY_USAGE_GPU_ONLY};
 
     i3_vk_check(vmaCreateImage(device->vma, &image_ci, &alloc_ci, &image->handle, &image->allocation, NULL));
+
+    // create barrier info
+    i3_vk_init_image_barrier_info(&image->barrier_info, desc->mip_levels * desc->array_layers);
 
     return &image->iface;
 }

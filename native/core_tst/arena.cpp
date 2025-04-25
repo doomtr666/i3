@@ -9,7 +9,7 @@ TEST(arena, init_free)
 {
     i3_arena_t arena;
     i3_arena_init(&arena, 1024);
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 }
 
 TEST(arena, alloc_multiple)
@@ -30,7 +30,7 @@ TEST(arena, alloc_multiple)
     EXPECT_EQ(i3_arena_allocated(&arena), 128);
     EXPECT_EQ(i3_arena_allocation_count(&arena), 2);
 
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 }
 
 TEST(arena, alloc_large)
@@ -54,5 +54,5 @@ TEST(arena, alloc_large)
     EXPECT_EQ(i3_arena_allocated(&arena), 1024 + 788);
     EXPECT_EQ(i3_arena_allocation_count(&arena), 2);
 
-    i3_arena_free(&arena);
+    i3_arena_destroy(&arena);
 }
