@@ -20,8 +20,13 @@ static void i3_vk_swapchain_release(i3_rbk_resource_o* self)
     if (swapchain->use_count == 0)
     {
         // destroy semaphores
-        vkDestroySemaphore(swapchain->device->handle, swapchain->acquire_sem, NULL);
-        vkDestroySemaphore(swapchain->device->handle, swapchain->present_sem, NULL);
+        for (uint32_t i = 0; i < swapchain->sem_count; i++)
+        {
+            vkDestroySemaphore(swapchain->device->handle, swapchain->acquire_sems[i], NULL);
+            vkDestroySemaphore(swapchain->device->handle, swapchain->present_sems[i], NULL);
+        }
+
+        // destroy swapchain
         vkDestroySwapchainKHR(swapchain->device->handle, swapchain->handle, NULL);
         i3_free(swapchain);
     }
@@ -273,9 +278,14 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self,
         i3_vk_log_fatal("Failed to create swapchain");
 
     // create semaphores
-    VkSemaphoreCreateInfo sem_ci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    i3_vk_check(vkCreateSemaphore(swapchain->device->handle, &sem_ci, NULL, &swapchain->acquire_sem));
-    i3_vk_check(vkCreateSemaphore(swapchain->device->handle, &sem_ci, NULL, &swapchain->present_sem));
+    swapchain->sem_count = 8;
+
+    for (uint32_t i = 0; i < swapchain->sem_count; i++)
+    {
+        VkSemaphoreCreateInfo sem_ci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        i3_vk_check(vkCreateSemaphore(swapchain->device->handle, &sem_ci, NULL, &swapchain->acquire_sems[i]));
+        i3_vk_check(vkCreateSemaphore(swapchain->device->handle, &sem_ci, NULL, &swapchain->present_sems[i]));
+    }
 
     return &swapchain->iface;
 }
@@ -288,17 +298,26 @@ uint32_t i3_vk_swapchain_acquire_image(i3_vk_swapchain_o* swapchain)
         if (!i3_vk_recreate_swapchain(swapchain))
             return UINT32_MAX;
 
+    // set up current semaphores
+    swapchain->acquire_sem = swapchain->acquire_sems[swapchain->sem_index];
+    swapchain->present_sem = swapchain->present_sems[swapchain->sem_index];
+
     // acquire image
     uint32_t image_index = 0;
     VkResult result = vkAcquireNextImageKHR(swapchain->device->handle, swapchain->handle, UINT64_MAX,
                                             swapchain->acquire_sem, VK_NULL_HANDLE, &image_index);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+    {
+        i3_log_dbg(swapchain->log, "vkAcquireNextImageKHR: Swapchain is out of date, need to recreate it");
         swapchain->out_of_date = true;
+    }
     else if (result == VK_NOT_READY)
         return UINT32_MAX;
     else
         i3_vk_check(result);
+
+    swapchain->sem_index = (swapchain->sem_index + 1) % swapchain->sem_count;
 
     return image_index;
 }

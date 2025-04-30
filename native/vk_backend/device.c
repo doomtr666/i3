@@ -16,16 +16,25 @@
 #include "swapchain.h"
 #include "use_list.h"
 
+static void i3_vk_device_wait_idle(i3_rbk_device_o* self)
+{
+    assert(self != NULL);
+    i3_vk_device_o* device = (i3_vk_device_o*)self;
+
+    // wait for device idle
+    vkDeviceWaitIdle(device->handle);
+
+    // remove pending submissions
+    while (i3_array_count(&device->submissions) > 0)
+        i3_vk_device_end_frame(self);
+}
+
 static void i3_vk_device_destroy(i3_rbk_device_o* self)
 {
     i3_vk_device_o* device = (i3_vk_device_o*)self;
 
-    // wait  for  pending submissions
-    while (i3_array_count(&device->submissions) > 0)
-    {
-        i3_vk_device_end_frame(self);
-        vkDeviceWaitIdle(device->handle);
-    }
+    // wait for device idle
+    i3_vk_device_wait_idle(self);
 
     // destroy submissions array
     i3_array_destroy(&device->submissions);
@@ -74,6 +83,7 @@ static i3_vk_device_o i3_vk_device_iface_
                  .submit_cmd_buffers = i3_vk_device_submit_cmd_buffers,
                  .present = i3_vk_device_present,
                  .end_frame = i3_vk_device_end_frame,
+                 .wait_idle = i3_vk_device_wait_idle,
                  .destroy = i3_vk_device_destroy}};
 
 i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc* device_desc)

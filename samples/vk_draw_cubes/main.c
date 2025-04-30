@@ -49,6 +49,15 @@ int main()
     // create default device
     i3_rbk_device_i* device = backend->create_device(backend->self, 0);
 
+    // create swapchain
+    i3_rbk_swapchain_desc_t swapchain_desc = {
+        .requested_image_count = 2,
+        .srgb = false,
+        .vsync = true,
+    };
+
+    i3_rbk_swapchain_i* swapchain = device->create_swapchain(device->self, window, &swapchain_desc);
+
     // create sampler
     i3_rbk_sampler_desc_t sampler_desc = {.mag_filter = I3_RBK_FILTER_LINEAR,
                                           .min_filter = I3_RBK_FILTER_LINEAR,
@@ -105,15 +114,6 @@ int main()
     };
 
     i3_rbk_image_view_i* image_view = device->create_image_view(device->self, image, &image_view_info);
-
-    // create swapchain
-    i3_rbk_swapchain_desc_t swapchain_desc = {
-        .requested_image_count = 2,
-        .srgb = false,
-        .vsync = false,
-    };
-
-    i3_rbk_swapchain_i* swapchain = device->create_swapchain(device->self, window, &swapchain_desc);
 
     // create framebuffer
     i3_rbk_framebuffer_attachment_desc_t framebuffer_attachment = {
@@ -296,17 +296,21 @@ int main()
         i3_render_window_poll_events();
     }
 
+    // wait for last frame to complete
+    device->wait_idle(device->self);
+
     frame_buffer->destroy(frame_buffer->self);
     shader_module->destroy(shader_module->self);
     descriptor_set_layout->destroy(descriptor_set_layout->self);
     pipeline_layout->destroy(pipeline_layout->self);
     pipeline->destroy(pipeline->self);
-    swapchain->destroy(swapchain->self);
     image_view->destroy(image_view->self);
     image->destroy(image->self);
     vertex_buffer->destroy(vertex_buffer->self);
     index_buffer->destroy(index_buffer->self);
     sampler->destroy(sampler->self);
+
+    swapchain->destroy(swapchain->self);
     device->destroy(device->self);
     window->destroy(window->self);
     backend->destroy(backend->self);

@@ -885,6 +885,9 @@ struct i3_rbk_device_i
     // end frame
     void (*end_frame)(i3_rbk_device_o* self);
 
+    // wait idle
+    void (*wait_idle)(i3_rbk_device_o* self);
+
     // destroy device
     void (*destroy)(i3_rbk_device_o* self);
 };

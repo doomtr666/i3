@@ -3,6 +3,7 @@
 #include "device.h"
 
 #define I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT 16
+#define I3_VK_SWAPCHAIN_MAX_SEM_COUNT (2 * I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT)
 
 typedef struct i3_vk_swapchain_o
 {
@@ -21,10 +22,15 @@ typedef struct i3_vk_swapchain_o
     VkImage images[I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT];
     VkExtent2D extent;
 
+    // semaphores
+    uint32_t sem_count;
+    VkSemaphore acquire_sems[I3_VK_SWAPCHAIN_MAX_SEM_COUNT];
+    VkSemaphore present_sems[I3_VK_SWAPCHAIN_MAX_SEM_COUNT];
+
     // current semaphores
+    uint32_t sem_index;
     VkSemaphore acquire_sem;
     VkSemaphore present_sem;
-    uint32_t current_sem_index;
 
     bool out_of_date;
 

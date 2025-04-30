@@ -12,10 +12,26 @@ typedef struct i3_vk_cmd_ctx_t
     VkCommandBuffer cmd_buffer;
 } i3_vk_cmd_ctx_t;
 
+// barrier
+void i3_vk_cmd_decode_barrier(void* ctx, i3_vk_cmd_barrier_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    i3_log_dbg(cmd_ctx->logger, "Decoding barrier command, %d buffer barriers, %d image barriers",
+               cmd->barrier.buffer_barrier_count, cmd->barrier.image_barrier_count);
+
+    // TODO: apply barriers
+}
+
 void i3_vk_cmd_decode_copy_buffer(void* ctx, i3_vk_cmd_copy_buffer_t* cmd)
 {
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
     i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
-    assert(cmd_ctx != NULL);
 
     VkBufferCopy copy_region = {
         .srcOffset = cmd->src_offset,
@@ -29,7 +45,7 @@ void i3_vk_cmd_decode_copy_buffer(void* ctx, i3_vk_cmd_copy_buffer_t* cmd)
     vkCmdCopyBuffer(cmd_ctx->cmd_buffer, src_buffer->handle, dst_buffer->handle, 1, &copy_region);
 }
 
-i3_vk_submission_t* i3_vk_alloc_submission(i3_vk_device_o* device)
+i3_vk_submission_t* i3_vk_submission_alloc(i3_vk_device_o* device)
 {
     i3_vk_submission_t* submission = i3_memory_pool_alloc(&device->submission_pool);
     assert(submission != NULL);
@@ -47,7 +63,7 @@ i3_vk_submission_t* i3_vk_alloc_submission(i3_vk_device_o* device)
     return submission;
 }
 
-void i3_vk_free_submission(i3_vk_device_o* device, i3_vk_submission_t* submission)
+void i3_vk_submission_free(i3_vk_device_o* device, i3_vk_submission_t* submission)
 {
     assert(device != NULL);
     assert(submission != NULL);
@@ -65,6 +81,14 @@ void i3_vk_free_submission(i3_vk_device_o* device, i3_vk_submission_t* submissio
     i3_memory_pool_free(&device->submission_pool, submission);
 }
 
+void i3_vk_submission_resolve_barriers(i3_vk_submission_t* submission, i3_rbk_cmd_buffer_i* cmd_buffer)
+{
+    assert(submission != NULL);
+    assert(cmd_buffer != NULL);
+
+    // TODO: resolve barriers
+}
+
 void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
                                      i3_rbk_cmd_buffer_i** cmd_buffers,
                                      uint32_t cmd_buffer_count)
@@ -77,9 +101,22 @@ void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
     i3_vk_device_o* device = (i3_vk_device_o*)self;
 
     // allocate a submission
-    i3_vk_submission_t* submission = i3_vk_alloc_submission(device);
+    i3_vk_submission_t* submission = i3_vk_submission_alloc(device);
 
-    // allocate command buffers
+    // resolve barriers
+    // this loop has a dependency on the order of command buffers in the submission
+    for (uint32_t j = 0; j < cmd_buffer_count; ++j)
+    {
+        i3_rbk_cmd_buffer_i* cmd_buffer = cmd_buffers[j];
+
+        // retain the command buffer
+        i3_vk_use_list_add(&submission->use_list, cmd_buffer);
+
+        // resolve cmd_buffer barriers
+        i3_vk_submission_resolve_barriers(submission, cmd_buffer);
+    }
+
+    // allocate vk command buffers
     VkCommandBufferAllocateInfo alloc_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool = device->cmd_pool,
@@ -90,12 +127,10 @@ void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
     submission->cmd_buffer_count = cmd_buffer_count;
 
     // decode command buffers for the submission
+    // this loop can be parallelized
     for (uint32_t j = 0; j < cmd_buffer_count; ++j)
     {
         i3_rbk_cmd_buffer_i* cmd_buffer = cmd_buffers[j];
-
-        // retain the command buffer
-        i3_vk_use_list_add(&submission->use_list, cmd_buffer);
 
         // decode the command buffer
         i3_vk_cmd_buffer_o* vk_cmd_buffer = (i3_vk_cmd_buffer_o*)cmd_buffer->self;
@@ -140,12 +175,8 @@ void i3_vk_device_end_frame(i3_rbk_device_o* self)
         i3_vk_submission_t* submission = *(i3_vk_submission_t**)i3_array_at(&device->submissions, i);
         assert(submission != NULL);
 
-        // i3_log_dbg(device->log, "Checking submission %p", submission);
-
         if (vkGetFenceStatus(device->handle, submission->completion_fence) == VK_SUCCESS)
         {
-            // i3_log_dbg(device->log, "Submission %p completed", submission);
-
             // swap last with the current one
             i3_vk_submission_t** submissions = i3_array_data(&device->submissions);
             submissions[i] = submissions[i3_array_count(&device->submissions) - 1];
@@ -154,7 +185,7 @@ void i3_vk_device_end_frame(i3_rbk_device_o* self)
             i3_array_pop(&device->submissions);
 
             // free the submission
-            i3_vk_free_submission(device, submission);
+            i3_vk_submission_free(device, submission);
         }
         else
         {
@@ -174,15 +205,11 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
 
     // acquire swapchain image
     uint32_t image_index = i3_vk_swapchain_acquire_image(vk_swapchain);
-
     if (image_index == UINT32_MAX)
-    {
-        // i3_log_err(device->log, "Failed to acquire swapchain image");
         return;
-    }
 
     // allocate submission
-    i3_vk_submission_t* submission = i3_vk_alloc_submission(device);
+    i3_vk_submission_t* submission = i3_vk_submission_alloc(device);
 
     // retain swapchain and image view
     i3_vk_use_list_add(&submission->use_list, swapchain);
@@ -214,18 +241,47 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
     VkImage dst_image = vk_swapchain->images[image_index];
 
     // transition src_image to TRANSFER_SRC
-    // TODO
+    const i3_rbk_image_view_desc_t* view_info = image_view->get_desc(image_view->self);
+
+    uint32_t src_subimage_index
+        = view_info->base_array_layer * src_image->desc.array_layers + view_info->base_mip_level;
+    i3_vk_subimage_usage_t* src_subimage_info
+        = i3_array_at(&src_image->barrier_info.sub_image_barrier_infos, src_subimage_index);
+
+    VkImageMemoryBarrier src_barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = src_subimage_info->access_mask,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .oldLayout = src_subimage_info->layout,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .image = src_image->handle,
+        .subresourceRange.aspectMask = view_info->aspect_mask,
+        .subresourceRange.baseArrayLayer = view_info->base_array_layer,
+        .subresourceRange.layerCount = 1,
+        .subresourceRange.baseMipLevel = view_info->base_mip_level,
+        .subresourceRange.levelCount = 1,
+    };
+
+    vkCmdPipelineBarrier(cmd_buffer, src_subimage_info->stage_mask, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                         1, &src_barrier);
+
+    // update image barrier info
+    src_subimage_info->access_mask = VK_ACCESS_TRANSFER_READ_BIT;
+    src_subimage_info->stage_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    src_subimage_info->layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
     // transition dst_image to TRANSFER_DST
-    VkImageMemoryBarrier dst_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                        .srcAccessMask = 0,
-                                        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                        .image = dst_image,
-                                        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                        .subresourceRange.levelCount = 1,
-                                        .subresourceRange.layerCount = 1};
+    VkImageMemoryBarrier dst_barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .image = dst_image,
+        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .subresourceRange.levelCount = 1,
+        .subresourceRange.layerCount = 1,
+    };
 
     vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
                          &dst_barrier);
@@ -266,7 +322,7 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
     vkEndCommandBuffer(cmd_buffer);
 
     // submit the command buffer
-    VkPipelineStageFlags wait_mask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    VkPipelineStageFlags wait_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSemaphore acquire_sem = i3_vk_swapchain_get_acquire_semaphore(vk_swapchain);
     VkSemaphore present_sem = i3_vk_swapchain_get_present_semaphore(vk_swapchain);
     VkSemaphore signal_sems[] = {i3_vk_swapchain_get_present_semaphore(vk_swapchain)};

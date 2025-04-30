@@ -1,5 +1,6 @@
 #pragma once
 
+#include "barrier.h"
 #include "device.h"
 
 #define I3_VK_CMD_LIST_BLOCK_CAPACITY 1024
@@ -30,6 +31,11 @@ static inline uint32_t i3_vk_cmd_list_read_id(i3_vk_cmd_list_t* list);
 // command list
 
 #define I3_VK_CMDS()                              \
+    /* barrier*/                                  \
+    I3_VK_CMD_BEGIN(barrier)                      \
+    I3_VK_CMD_FIELD(i3_vk_barrier_t, barrier)     \
+    I3_VK_CMD_END(barrier)                        \
+    /* copy buffer */                             \
     I3_VK_CMD_BEGIN(copy_buffer)                  \
     I3_VK_CMD_FIELD(i3_rbk_buffer_i*, src_buffer) \
     I3_VK_CMD_FIELD(i3_rbk_buffer_i*, dst_buffer) \

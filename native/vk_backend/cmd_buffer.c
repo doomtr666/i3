@@ -55,6 +55,19 @@ static i3_rbk_resource_i* i3_vk_cmd_buffer_get_resource(i3_rbk_cmd_buffer_o* sel
     return &cmd_buffer->base;
 }
 
+// barrier
+static i3_vk_barrier_t* i3_vk_cmd_add_barriers(i3_vk_cmd_buffer_o* cmd_buffer, VkShaderStageFlagBits stage_mask)
+{
+    assert(cmd_buffer != NULL);
+
+    i3_vk_cmd_barrier_t* cmd = i3_vk_cmd_write_barrier(&cmd_buffer->cmd_list);
+    i3_vk_barrier_t* barrier = &cmd->barrier;
+    i3_vk_barrier_init(barrier, stage_mask);
+    i3_dlist_append(&cmd_buffer->barriers, barrier);
+
+    return barrier;
+}
+
 // copy buffer
 static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
                                          i3_rbk_buffer_i* src_buffer,
@@ -72,6 +85,26 @@ static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
     // add resources to the use list
     i3_vk_use_list_add(&cmd_buffer->use_list, src_buffer);
     i3_vk_use_list_add(&cmd_buffer->use_list, dst_buffer);
+
+    // add barriers
+    i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    i3_vk_buffer_barrier_t* src_barrier = i3_vk_add_buffer_barrier(barriers);
+    *src_barrier = (i3_vk_buffer_barrier_t){
+        .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+        .access_mask = VK_ACCESS_TRANSFER_READ_BIT,
+        .buffer = src_buffer,
+        .offset = src_offset,
+        .size = size,
+    };
+
+    i3_vk_buffer_barrier_t* dst_barrier = i3_vk_add_buffer_barrier(barriers);
+    *dst_barrier = (i3_vk_buffer_barrier_t){
+        .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+        .access_mask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .buffer = dst_buffer,
+        .offset = dst_offset,
+        .size = size,
+    };
 
     // emit command
     i3_vk_cmd_copy_buffer_t* cmd = i3_vk_cmd_write_copy_buffer(&cmd_buffer->cmd_list);
