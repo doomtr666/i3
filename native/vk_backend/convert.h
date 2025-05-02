@@ -76,3 +76,6 @@ VkDynamicState i3_vk_convert_dynamic_state(i3_rbk_dynamic_state_t state);
 
 // descriptor type
 VkDescriptorType i3_vk_convert_descriptor_type(i3_rbk_descriptor_type_t type);
+
+// index type
+VkIndexType i3_vk_convert_index_type(i3_rbk_index_type_t type);

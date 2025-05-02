@@ -28,25 +28,107 @@ static inline void i3_vk_cmd_list_write_id(i3_vk_cmd_list_t* list, uint32_t id);
 static inline void* i3_vk_cmd_list_read(i3_vk_cmd_list_t* list, uint32_t size);
 static inline uint32_t i3_vk_cmd_list_read_id(i3_vk_cmd_list_t* list);
 
-// command list
+#define I3_VK_BIND_MAX_VERTEX_BUFFERS 16
+#define I3_VK_PUSH_CONSTANT_SIZE 128
+#define I3_VK_MAX_VIEWPORTS 16
+#define I3_VK_MAX_SCISSORS 16
 
-#define I3_VK_CMDS()                              \
-    /* barrier*/                                  \
-    I3_VK_CMD_BEGIN(barrier)                      \
-    I3_VK_CMD_FIELD(i3_vk_barrier_t, barrier)     \
-    I3_VK_CMD_END(barrier)                        \
-    /* copy buffer */                             \
-    I3_VK_CMD_BEGIN(copy_buffer)                  \
-    I3_VK_CMD_FIELD(i3_rbk_buffer_i*, src_buffer) \
-    I3_VK_CMD_FIELD(i3_rbk_buffer_i*, dst_buffer) \
-    I3_VK_CMD_FIELD(uint32_t, src_offset)         \
-    I3_VK_CMD_FIELD(uint32_t, dst_offset)         \
-    I3_VK_CMD_FIELD(uint32_t, size)               \
-    I3_VK_CMD_END(copy_buffer)
+// command list
+#define I3_VK_CMDS()                                                      \
+    /* barrier*/                                                          \
+    I3_VK_CMD_BEGIN(barrier)                                              \
+    I3_VK_CMD_FIELD(i3_vk_barrier_t, barrier)                             \
+    I3_VK_CMD_END(barrier)                                                \
+    /* copy buffer */                                                     \
+    I3_VK_CMD_BEGIN(copy_buffer)                                          \
+    I3_VK_CMD_FIELD(VkBuffer, src_buffer)                                 \
+    I3_VK_CMD_FIELD(VkBuffer, dst_buffer)                                 \
+    I3_VK_CMD_FIELD(uint32_t, src_offset)                                 \
+    I3_VK_CMD_FIELD(uint32_t, dst_offset)                                 \
+    I3_VK_CMD_FIELD(uint32_t, size)                                       \
+    I3_VK_CMD_END(copy_buffer)                                            \
+    /* bind vertex buffers */                                             \
+    I3_VK_CMD_BEGIN(bind_vertex_buffers)                                  \
+    I3_VK_CMD_FIELD(uint32_t, first_binding)                              \
+    I3_VK_CMD_FIELD(uint32_t, binding_count)                              \
+    I3_VK_CMD_ARRAY(VkBuffer, buffers, I3_VK_BIND_MAX_VERTEX_BUFFERS)     \
+    I3_VK_CMD_ARRAY(VkDeviceSize, offsets, I3_VK_BIND_MAX_VERTEX_BUFFERS) \
+    I3_VK_CMD_END(bind_vertex_buffers)                                    \
+    /* bind index buffer */                                               \
+    I3_VK_CMD_BEGIN(bind_index_buffer)                                    \
+    I3_VK_CMD_FIELD(VkBuffer, buffer)                                     \
+    I3_VK_CMD_FIELD(VkDeviceSize, offset)                                 \
+    I3_VK_CMD_FIELD(VkIndexType, index_type)                              \
+    I3_VK_CMD_END(bind_index_buffer)                                      \
+    /* bind pipeline */                                                   \
+    I3_VK_CMD_BEGIN(bind_pipeline)                                        \
+    I3_VK_CMD_FIELD(VkPipelineBindPoint, bind_point)                      \
+    I3_VK_CMD_FIELD(VkPipeline, pipeline)                                 \
+    I3_VK_CMD_END(bind_pipeline)                                          \
+    /* set viewports */                                                   \
+    I3_VK_CMD_BEGIN(set_viewports)                                        \
+    I3_VK_CMD_FIELD(uint32_t, first_viewport)                             \
+    I3_VK_CMD_FIELD(uint32_t, viewport_count)                             \
+    I3_VK_CMD_ARRAY(VkViewport, viewports, I3_VK_MAX_VIEWPORTS)           \
+    I3_VK_CMD_END(set_viewports)                                          \
+    /* set scissors */                                                    \
+    I3_VK_CMD_BEGIN(set_scissors)                                         \
+    I3_VK_CMD_FIELD(uint32_t, first_scissor)                              \
+    I3_VK_CMD_FIELD(uint32_t, scissor_count)                              \
+    I3_VK_CMD_ARRAY(VkRect2D, scissors, I3_VK_MAX_SCISSORS)               \
+    I3_VK_CMD_END(set_scissors)                                           \
+    /* begin rendering */                                                 \
+    I3_VK_CMD_BEGIN(begin_rendering)                                      \
+    I3_VK_CMD_FIELD(VkFramebuffer, framebuffer)                           \
+    I3_VK_CMD_FIELD(VkRenderPass, render_pass)                            \
+    I3_VK_CMD_FIELD(VkRect2D, render_area)                                \
+    I3_VK_CMD_END(begin_rendering)                                        \
+    /* end rendering */                                                   \
+    I3_VK_CMD_BEGIN(end_rendering)                                        \
+    I3_VK_CMD_FIELD(int, dummy)                                           \
+    I3_VK_CMD_END(end_rendering)                                          \
+    /* push constants */                                                  \
+    I3_VK_CMD_BEGIN(push_constants)                                       \
+    I3_VK_CMD_FIELD(VkPipelineLayout, layout)                             \
+    I3_VK_CMD_FIELD(VkShaderStageFlags, stage_flags)                      \
+    I3_VK_CMD_FIELD(uint32_t, offset)                                     \
+    I3_VK_CMD_FIELD(uint32_t, size)                                       \
+    I3_VK_CMD_FIELD(uint8_t, data[I3_VK_PUSH_CONSTANT_SIZE])              \
+    I3_VK_CMD_END(push_constants)                                         \
+    /* draw */                                                            \
+    I3_VK_CMD_BEGIN(draw)                                                 \
+    I3_VK_CMD_FIELD(uint32_t, vertex_count)                               \
+    I3_VK_CMD_FIELD(uint32_t, instance_count)                             \
+    I3_VK_CMD_FIELD(uint32_t, first_vertex)                               \
+    I3_VK_CMD_FIELD(uint32_t, first_instance)                             \
+    I3_VK_CMD_END(draw)                                                   \
+    /* draw indexed */                                                    \
+    I3_VK_CMD_BEGIN(draw_indexed)                                         \
+    I3_VK_CMD_FIELD(uint32_t, index_count)                                \
+    I3_VK_CMD_FIELD(uint32_t, instance_count)                             \
+    I3_VK_CMD_FIELD(uint32_t, first_index)                                \
+    I3_VK_CMD_FIELD(int32_t, vertex_offset)                               \
+    I3_VK_CMD_FIELD(uint32_t, first_instance)                             \
+    I3_VK_CMD_END(draw_indexed)                                           \
+    /* draw indirect */                                                   \
+    I3_VK_CMD_BEGIN(draw_indirect)                                        \
+    I3_VK_CMD_FIELD(VkBuffer, buffer)                                     \
+    I3_VK_CMD_FIELD(uint32_t, offset)                                     \
+    I3_VK_CMD_FIELD(uint32_t, draw_count)                                 \
+    I3_VK_CMD_FIELD(uint32_t, stride)                                     \
+    I3_VK_CMD_END(draw_indirect)                                          \
+    /* draw indexed indirect */                                           \
+    I3_VK_CMD_BEGIN(draw_indexed_indirect)                                \
+    I3_VK_CMD_FIELD(VkBuffer, buffer)                                     \
+    I3_VK_CMD_FIELD(uint32_t, offset)                                     \
+    I3_VK_CMD_FIELD(uint32_t, draw_count)                                 \
+    I3_VK_CMD_FIELD(uint32_t, stride)                                     \
+    I3_VK_CMD_END(draw_indexed_indirect)
 
 // command ids
 #define I3_VK_CMD_BEGIN(name) I3_VK_CMD_##name,
 #define I3_VK_CMD_FIELD(type, name)
+#define I3_VK_CMD_ARRAY(type, name, size)
 #define I3_VK_CMD_END(name)
 
 typedef enum
@@ -56,6 +138,7 @@ typedef enum
 
 #undef I3_VK_CMD_BEGIN
 #undef I3_VK_CMD_FIELD
+#undef I3_VK_CMD_ARRAY
 #undef I3_VK_CMD_END
 
 // command structures parameters
@@ -63,6 +146,9 @@ typedef enum
     typedef struct            \
     {
 #define I3_VK_CMD_FIELD(type, name) type name;
+#define I3_VK_CMD_ARRAY(type, name, size) \
+    uint32_t name##_count;                \
+    type name[size];
 #define I3_VK_CMD_END(name) \
     }                       \
     i3_vk_cmd_##name##_t;
@@ -71,6 +157,7 @@ I3_VK_CMDS()
 
 #undef I3_VK_CMD_BEGIN
 #undef I3_VK_CMD_FIELD
+#undef I3_VK_CMD_ARRAY
 #undef I3_VK_CMD_END
 
 // write functions
@@ -83,23 +170,27 @@ I3_VK_CMDS()
         return cmd;                                                                                                  \
     }
 #define I3_VK_CMD_FIELD(type, name)
+#define I3_VK_CMD_ARRAY(type, name, size)
 #define I3_VK_CMD_END(name)
 
 I3_VK_CMDS()
 
 #undef I3_VK_CMD_BEGIN
 #undef I3_VK_CMD_FIELD
+#undef I3_VK_CMD_ARRAY
 #undef I3_VK_CMD_END
 
 // forward declarations of decode functions
 #define I3_VK_CMD_BEGIN(name) void i3_vk_cmd_decode_##name(void* ctx, i3_vk_cmd_##name##_t* cmd);
 #define I3_VK_CMD_FIELD(type, name)
+#define I3_VK_CMD_ARRAY(type, name, size)
 #define I3_VK_CMD_END(name)
 
 I3_VK_CMDS()
 
 #undef I3_VK_CMD_BEGIN
 #undef I3_VK_CMD_FIELD
+#undef I3_VK_CMD_ARRAY
 #undef I3_VK_CMD_END
 
 // decode functions
@@ -112,6 +203,7 @@ I3_VK_CMDS()
         break;                                                                                  \
     }
 #define I3_VK_CMD_FIELD(type, name)
+#define I3_VK_CMD_ARRAY(type, name, size)
 #define I3_VK_CMD_END(name)
 
 static inline void i3_vk_cmd_decode(void* ctx, i3_vk_cmd_list_t* cmd_list)
@@ -141,6 +233,7 @@ static inline void i3_vk_cmd_decode(void* ctx, i3_vk_cmd_list_t* cmd_list)
 
 #undef I3_VK_CMD_BEGIN
 #undef I3_VK_CMD_FIELD
+#undef I3_VK_CMD_ARRAY
 #undef I3_VK_CMD_END
 
 // implementation

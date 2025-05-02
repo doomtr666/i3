@@ -53,7 +53,7 @@ int main()
     i3_rbk_swapchain_desc_t swapchain_desc = {
         .requested_image_count = 2,
         .srgb = false,
-        .vsync = true,
+        .vsync = false,
     };
 
     i3_rbk_swapchain_i* swapchain = device->create_swapchain(device->self, window, &swapchain_desc);
@@ -147,9 +147,17 @@ int main()
         = device->create_descriptor_set_layout(device->self, &descriptor_set_layout_desc);
 
     // create pipeline layout
+    i3_rbk_push_constant_range_t push_constant_range = {
+        .stage_flags = I3_RBK_SHADER_STAGE_VERTEX,
+        .offset = 0,
+        .size = sizeof(float) * 16,
+    };
+
     i3_rbk_pipeline_layout_desc_t pipeline_layout_desc = {
-        .set_layout_count = 1,
-        .set_layouts = &descriptor_set_layout,
+        //.set_layout_count = 1,
+        //.set_layouts = &descriptor_set_layout,
+        .push_constant_range_count = 1,
+        .push_constant_ranges = &push_constant_range,
     };
 
     i3_rbk_pipeline_layout_i* pipeline_layout = device->create_pipeline_layout(device->self, &pipeline_layout_desc);
@@ -276,16 +284,37 @@ int main()
 
     while (!window->should_close(window->self))
     {
-#if 0        
         // create cmd buffer
         i3_rbk_cmd_buffer_i* cmd_buffer = device->create_cmd_buffer(device->self);
+
+        i3_rbk_rect_t render_area = {.offset = {0, 0}, .extent = {800, 600}};
+        i3_rbk_rect_t scissor = {.offset = {0, 0}, .extent = {800, 600}};
+        i3_rbk_viewport_t viewport
+            = {.x = 0.0f, .y = 0.0f, .width = 800.0f, .height = 600.0f, .min_depth = 0.0f, .max_depth = 1.0f};
+
+        cmd_buffer->bind_vertex_buffers(cmd_buffer->self, 0, 1, &vertex_buffer, NULL);
+        cmd_buffer->bind_index_buffer(cmd_buffer->self, index_buffer, 0, I3_RBK_INDEX_TYPE_UINT32);
+
+        cmd_buffer->bind_pipeline(cmd_buffer->self, pipeline);
+
+        cmd_buffer->set_viewports(cmd_buffer->self, 0, 1, &viewport);
+        cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &scissor);
+
+        float mat[16] = {0};
+
+        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(mat), mat);
+
+        cmd_buffer->begin_rendering(cmd_buffer->self, frame_buffer, &render_area);
+
+        cmd_buffer->draw_indexed(cmd_buffer->self, sizeof(cube_index_data) / sizeof(uint32_t), 1, 0, 0, 0);
+
+        cmd_buffer->end_rendering(cmd_buffer->self);
 
         // submit cmd buffer
         device->submit_cmd_buffers(device->self, &cmd_buffer, 1);
 
         // destroy cmd buffer
         cmd_buffer->destroy(cmd_buffer->self);
-#endif
 
         // present image view to swapchain
         device->present(device->self, swapchain, image_view);

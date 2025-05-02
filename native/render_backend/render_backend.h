@@ -327,6 +327,13 @@ typedef enum
     I3_RBK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,
 } i3_rbk_descriptor_type_t;
 
+// index type
+typedef enum
+{
+    I3_RBK_INDEX_TYPE_UINT16 = 0,
+    I3_RBK_INDEX_TYPE_UINT32,
+} i3_rbk_index_type_t;
+
 // viewport
 typedef struct i3_rbk_viewport_t
 {
@@ -819,6 +826,67 @@ typedef struct i3_rbk_cmd_buffer_i
                         uint32_t src_offset,
                         uint32_t dst_offset,
                         uint32_t size);
+
+    void (*bind_vertex_buffers)(i3_rbk_cmd_buffer_o* self,
+                                uint32_t first_binding,
+                                uint32_t binding_count,
+                                i3_rbk_buffer_i** buffers,
+                                const uint32_t* offsets);
+
+    void (*bind_index_buffer)(i3_rbk_cmd_buffer_o* self,
+                              i3_rbk_buffer_i* buffer,
+                              uint32_t offset,
+                              i3_rbk_index_type_t index_type);
+
+    void (*bind_pipeline)(i3_rbk_cmd_buffer_o* self, i3_rbk_pipeline_i* pipeline);
+
+    void (*set_viewports)(i3_rbk_cmd_buffer_o* self,
+                          uint32_t first_viewport,
+                          uint32_t viewport_count,
+                          const i3_rbk_viewport_t* viewports);
+
+    void (*set_scissors)(i3_rbk_cmd_buffer_o* self,
+                         uint32_t first_scissor,
+                         uint32_t scissor_count,
+                         const i3_rbk_rect_t* scissors);
+
+    void (*begin_rendering)(i3_rbk_cmd_buffer_o* self,
+                            i3_rbk_framebuffer_i* framebuffer,
+                            const i3_rbk_rect_t* render_area);
+
+    void (*end_rendering)(i3_rbk_cmd_buffer_o* self);
+
+    void (*push_constants)(i3_rbk_cmd_buffer_o* self,
+                           i3_rbk_pipeline_layout_i* layout,
+                           i3_rbk_shader_stage_flags_t stage_flags,
+                           uint32_t offset,
+                           uint32_t size,
+                           const void* data);
+
+    void (*draw)(i3_rbk_cmd_buffer_o* self,
+                 uint32_t vertex_count,
+                 uint32_t instance_count,
+                 uint32_t first_vertex,
+                 uint32_t first_instance);
+
+    void (*draw_indexed)(i3_rbk_cmd_buffer_o* self,
+                         uint32_t index_count,
+                         uint32_t instance_count,
+                         uint32_t first_index,
+                         int32_t vertex_offset,
+                         uint32_t first_instance);
+
+    void (*draw_indirect)(i3_rbk_cmd_buffer_o* self,
+                          i3_rbk_buffer_i* buffer,
+                          uint32_t offset,
+                          uint32_t draw_count,
+                          uint32_t stride);
+
+    void (*draw_indexed_indirect)(i3_rbk_cmd_buffer_o* self,
+                                  i3_rbk_buffer_i* buffer,
+                                  uint32_t offset,
+                                  uint32_t draw_count,
+                                  uint32_t stride);
 
     void (*destroy)(i3_rbk_cmd_buffer_o* self);
 } i3_rbk_cmd_buffer_i;

@@ -278,7 +278,7 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self,
         i3_vk_log_fatal("Failed to create swapchain");
 
     // create semaphores
-    swapchain->sem_count = 8;
+    swapchain->sem_count = 16;
 
     for (uint32_t i = 0; i < swapchain->sem_count; i++)
     {

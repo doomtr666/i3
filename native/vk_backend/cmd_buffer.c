@@ -1,5 +1,11 @@
 #include "cmd_buffer.h"
 
+#include "buffer.h"
+#include "convert.h"
+#include "framebuffer.h"
+#include "pipeline.h"
+#include "pipeline_layout.h"
+
 // resource interface
 
 static void i3_vk_cmd_buffer_add_ref(i3_rbk_resource_o* self)
@@ -86,6 +92,7 @@ static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
     i3_vk_use_list_add(&cmd_buffer->use_list, src_buffer);
     i3_vk_use_list_add(&cmd_buffer->use_list, dst_buffer);
 
+#if 0    
     // add barriers
     i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT);
     i3_vk_buffer_barrier_t* src_barrier = i3_vk_add_buffer_barrier(barriers);
@@ -105,11 +112,12 @@ static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
         .offset = dst_offset,
         .size = size,
     };
+#endif
 
     // emit command
     i3_vk_cmd_copy_buffer_t* cmd = i3_vk_cmd_write_copy_buffer(&cmd_buffer->cmd_list);
-    cmd->src_buffer = src_buffer;
-    cmd->dst_buffer = dst_buffer;
+    cmd->src_buffer = ((i3_vk_buffer_o*)src_buffer->self)->handle;
+    cmd->dst_buffer = ((i3_vk_buffer_o*)dst_buffer->self)->handle;
     cmd->src_offset = src_offset;
     cmd->dst_offset = dst_offset;
     cmd->size = size;
@@ -151,6 +159,267 @@ static void i3_vk_cmd_buffer_write_buffer(i3_rbk_cmd_buffer_o* self,
     staging_buffer->destroy(staging_buffer->self);
 }
 
+// bind vertex buffers
+static void i3_vk_cmd_buffer_bind_vertex_buffers(i3_rbk_cmd_buffer_o* self,
+                                                 uint32_t first_binding,
+                                                 uint32_t binding_count,
+                                                 const i3_rbk_buffer_i** buffers,
+                                                 const uint32_t* offsets)
+{
+    assert(self != NULL);
+    assert(buffers != NULL);
+
+    assert(binding_count <= I3_VK_BIND_MAX_VERTEX_BUFFERS);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+    i3_vk_cmd_bind_vertex_buffers_t* cmd = i3_vk_cmd_write_bind_vertex_buffers(&cmd_buffer->cmd_list);
+
+    cmd->first_binding = first_binding;
+    cmd->binding_count = binding_count;
+
+    for (uint32_t i = 0; i < binding_count; i++)
+    {
+        // retain the buffer
+        if (buffers[i] != NULL)
+        {
+            i3_vk_use_list_add(&cmd_buffer->use_list, buffers[i]);
+            cmd->buffers[i] = ((i3_vk_buffer_o*)buffers[i]->self)->handle;
+        }
+        else
+            cmd->buffers[i] = VK_NULL_HANDLE;
+
+        if (offsets != NULL)
+            cmd->offsets[i] = offsets[i];
+        else
+            cmd->offsets[i] = 0;
+    }
+}
+
+// bind index buffer
+static void i3_vk_cmd_buffer_bind_index_buffer(i3_rbk_cmd_buffer_o* self,
+                                               i3_rbk_buffer_i* buffer,
+                                               uint32_t offset,
+                                               i3_rbk_index_type_t index_type)
+{
+    assert(self != NULL);
+    assert(buffer != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the buffer
+    i3_vk_use_list_add(&cmd_buffer->use_list, buffer);
+
+    i3_vk_cmd_bind_index_buffer_t* cmd = i3_vk_cmd_write_bind_index_buffer(&cmd_buffer->cmd_list);
+    cmd->buffer = ((i3_vk_buffer_o*)buffer->self)->handle;
+    cmd->offset = offset;
+    cmd->index_type = i3_vk_convert_index_type(index_type);
+}
+
+// bind pipeline
+static void i3_vk_cmd_buffer_bind_pipeline(i3_rbk_cmd_buffer_o* self, i3_rbk_pipeline_i* pipeline)
+{
+    assert(self != NULL);
+    assert(pipeline != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the pipeline
+    i3_vk_use_list_add(&cmd_buffer->use_list, pipeline);
+
+    i3_vk_cmd_bind_pipeline_t* cmd = i3_vk_cmd_write_bind_pipeline(&cmd_buffer->cmd_list);
+    cmd->bind_point = ((i3_vk_pipeline_o*)pipeline->self)->bind_point;
+    cmd->pipeline = ((i3_vk_pipeline_o*)pipeline->self)->handle;
+}
+
+// set viewports
+static void i3_vk_cmd_buffer_set_viewports(i3_rbk_cmd_buffer_o* self,
+                                           uint32_t first_viewport,
+                                           uint32_t viewport_count,
+                                           const i3_rbk_viewport_t* viewports)
+{
+    assert(self != NULL);
+    assert(viewports != NULL);
+    assert(viewport_count > 0 && viewport_count <= I3_VK_MAX_VIEWPORTS);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+    i3_vk_cmd_set_viewports_t* cmd = i3_vk_cmd_write_set_viewports(&cmd_buffer->cmd_list);
+    cmd->first_viewport = first_viewport;
+    cmd->viewport_count = viewport_count;
+
+    for (uint32_t i = 0; i < viewport_count; i++)
+    {
+        cmd->viewports[i].x = viewports[i].x;
+        cmd->viewports[i].y = viewports[i].y;
+        cmd->viewports[i].width = viewports[i].width;
+        cmd->viewports[i].height = viewports[i].height;
+        cmd->viewports[i].minDepth = viewports[i].min_depth;
+        cmd->viewports[i].maxDepth = viewports[i].max_depth;
+    }
+}
+
+// set scissors
+static void i3_vk_cmd_buffer_set_scissors(i3_rbk_cmd_buffer_o* self,
+                                          uint32_t first_scissor,
+                                          uint32_t scissor_count,
+                                          const i3_rbk_rect_t* scissors)
+{
+    assert(self != NULL);
+    assert(scissors != NULL);
+    assert(scissor_count > 0 && scissor_count <= I3_VK_MAX_SCISSORS);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+    i3_vk_cmd_set_scissors_t* cmd = i3_vk_cmd_write_set_scissors(&cmd_buffer->cmd_list);
+    cmd->first_scissor = first_scissor;
+    cmd->scissor_count = scissor_count;
+
+    for (uint32_t i = 0; i < scissor_count; i++)
+    {
+        cmd->scissors[i].offset.x = scissors[i].offset.x;
+        cmd->scissors[i].offset.y = scissors[i].offset.y;
+        cmd->scissors[i].extent.width = scissors[i].extent.width;
+        cmd->scissors[i].extent.height = scissors[i].extent.height;
+    }
+}
+
+// begin rendering
+void i3_vk_cmd_buffer_begin_rendering(i3_rbk_cmd_buffer_o* self,
+                                      i3_rbk_framebuffer_i* framebuffer,
+                                      const i3_rbk_rect_t* render_area)
+{
+    assert(self != NULL);
+    assert(framebuffer != NULL);
+    assert(render_area != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the framebuffer
+    i3_vk_use_list_add(&cmd_buffer->use_list, framebuffer);
+
+    i3_vk_cmd_begin_rendering_t* cmd = i3_vk_cmd_write_begin_rendering(&cmd_buffer->cmd_list);
+    cmd->framebuffer = ((i3_vk_framebuffer_o*)framebuffer->self)->handle;
+    cmd->render_pass = ((i3_vk_framebuffer_o*)framebuffer->self)->render_pass;
+    cmd->render_area.offset.x = render_area->offset.x;
+    cmd->render_area.offset.y = render_area->offset.y;
+    cmd->render_area.extent.width = render_area->extent.width;
+    cmd->render_area.extent.height = render_area->extent.height;
+}
+
+// end rendering
+static void i3_vk_cmd_buffer_end_rendering(i3_rbk_cmd_buffer_o* self)
+{
+    assert(self != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+    i3_vk_cmd_end_rendering_t* cmd = i3_vk_cmd_write_end_rendering(&cmd_buffer->cmd_list);
+}
+
+// push constants
+static void i3_vk_cmd_buffer_push_constants(i3_rbk_cmd_buffer_o* self,
+                                            i3_rbk_pipeline_layout_i* layout,
+                                            i3_rbk_shader_stage_flags_t stage_flags,
+                                            uint32_t offset,
+                                            uint32_t size,
+                                            const void* data)
+{
+    assert(self != NULL);
+    assert(layout != NULL);
+    assert(data != NULL);
+    assert(size > 0);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the laout
+    i3_vk_use_list_add(&cmd_buffer->use_list, layout);
+
+    i3_vk_cmd_push_constants_t* cmd = i3_vk_cmd_write_push_constants(&cmd_buffer->cmd_list);
+    cmd->layout = ((i3_vk_pipeline_layout_o*)layout->self)->handle;
+    cmd->stage_flags = i3_vk_convert_shader_stage_flags(stage_flags);
+    cmd->offset = offset;
+    cmd->size = size;
+    memcpy(cmd->data, data, size);
+}
+
+// draw
+static void i3_vk_cmd_buffer_draw(i3_rbk_cmd_buffer_o* self,
+                                  uint32_t vertex_count,
+                                  uint32_t instance_count,
+                                  uint32_t first_vertex,
+                                  uint32_t first_instance)
+{
+    assert(self != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+    i3_vk_cmd_draw_t* cmd = i3_vk_cmd_write_draw(&cmd_buffer->cmd_list);
+    cmd->vertex_count = vertex_count;
+    cmd->instance_count = instance_count;
+    cmd->first_vertex = first_vertex;
+    cmd->first_instance = first_instance;
+}
+
+// draw indexed
+static void i3_vk_cmd_buffer_draw_indexed(i3_rbk_cmd_buffer_o* self,
+                                          uint32_t index_count,
+                                          uint32_t instance_count,
+                                          uint32_t first_index,
+                                          int32_t vertex_offset,
+                                          uint32_t first_instance)
+{
+    assert(self != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+    i3_vk_cmd_draw_indexed_t* cmd = i3_vk_cmd_write_draw_indexed(&cmd_buffer->cmd_list);
+    cmd->index_count = index_count;
+    cmd->instance_count = instance_count;
+    cmd->first_index = first_index;
+    cmd->vertex_offset = vertex_offset;
+    cmd->first_instance = first_instance;
+}
+
+// draw indirect
+static void i3_vk_cmd_buffer_draw_indirect(i3_rbk_cmd_buffer_o* self,
+                                           i3_rbk_buffer_i* buffer,
+                                           uint32_t offset,
+                                           uint32_t draw_count,
+                                           uint32_t stride)
+{
+    assert(self != NULL);
+    assert(buffer != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the buffer
+    i3_vk_use_list_add(&cmd_buffer->use_list, buffer);
+
+    i3_vk_cmd_draw_indirect_t* cmd = i3_vk_cmd_write_draw_indirect(&cmd_buffer->cmd_list);
+    cmd->buffer = ((i3_vk_buffer_o*)buffer->self)->handle;
+    cmd->offset = offset;
+    cmd->draw_count = draw_count;
+    cmd->stride = stride;
+}
+
+// draw indexed indirect
+static void i3_vk_cmd_buffer_draw_indexed_indirect(i3_rbk_cmd_buffer_o* self,
+                                                   i3_rbk_buffer_i* buffer,
+                                                   uint32_t offset,
+                                                   uint32_t draw_count,
+                                                   uint32_t stride)
+{
+    assert(self != NULL);
+    assert(buffer != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the buffer
+    i3_vk_use_list_add(&cmd_buffer->use_list, buffer);
+
+    i3_vk_cmd_draw_indexed_indirect_t* cmd = i3_vk_cmd_write_draw_indexed_indirect(&cmd_buffer->cmd_list);
+    cmd->buffer = ((i3_vk_buffer_o*)buffer->self)->handle;
+    cmd->offset = offset;
+    cmd->draw_count = draw_count;
+    cmd->stride = stride;
+}
+
+// destroy command buffer
 static void i3_vk_cmd_buffer_destroy(i3_rbk_cmd_buffer_o* self)
 {
     assert(self != NULL);
@@ -173,6 +442,18 @@ static i3_vk_cmd_buffer_o i3_vk_cmd_buffer_iface_ =
         .get_resource = i3_vk_cmd_buffer_get_resource,
         .write_buffer = i3_vk_cmd_buffer_write_buffer,
         .copy_buffer = i3_vk_cmd_buffer_copy_buffer,
+        .bind_vertex_buffers = i3_vk_cmd_buffer_bind_vertex_buffers,
+        .bind_index_buffer = i3_vk_cmd_buffer_bind_index_buffer,
+        .bind_pipeline = i3_vk_cmd_buffer_bind_pipeline,
+        .set_viewports = i3_vk_cmd_buffer_set_viewports,
+        .set_scissors = i3_vk_cmd_buffer_set_scissors,
+        .begin_rendering = i3_vk_cmd_buffer_begin_rendering,
+        .end_rendering = i3_vk_cmd_buffer_end_rendering,
+        .push_constants = i3_vk_cmd_buffer_push_constants,
+        .draw = i3_vk_cmd_buffer_draw,
+        .draw_indexed = i3_vk_cmd_buffer_draw_indexed,
+        .draw_indirect = i3_vk_cmd_buffer_draw_indirect,
+        .draw_indexed_indirect = i3_vk_cmd_buffer_draw_indexed_indirect,
         .destroy = i3_vk_cmd_buffer_destroy,
     },
 };

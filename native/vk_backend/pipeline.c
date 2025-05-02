@@ -449,6 +449,7 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
 
     i3_vk_device_o* device = (i3_vk_device_o*)self;
     i3_vk_pipeline_o* pipeline = i3_vk_allocate_pipeline(device);
+    pipeline->bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
 
     // allocate arena
     i3_arena_t arena;
@@ -530,6 +531,7 @@ i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self,
 
     i3_vk_device_o* device = (i3_vk_device_o*)self;
     i3_vk_pipeline_o* pipeline = i3_vk_allocate_pipeline(device);
+    pipeline->bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
 
     // allocate arena
     i3_arena_t arena;

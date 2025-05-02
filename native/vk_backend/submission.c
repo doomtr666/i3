@@ -1,8 +1,10 @@
 #include "submission.h"
 #include "buffer.h"
 #include "cmd_buffer.h"
+#include "framebuffer.h"
 #include "image.h"
 #include "image_view.h"
+#include "pipeline.h"
 #include "swapchain.h"
 
 typedef struct i3_vk_cmd_ctx_t
@@ -26,6 +28,7 @@ void i3_vk_cmd_decode_barrier(void* ctx, i3_vk_cmd_barrier_t* cmd)
     // TODO: apply barriers
 }
 
+// copy buffer
 void i3_vk_cmd_decode_copy_buffer(void* ctx, i3_vk_cmd_copy_buffer_t* cmd)
 {
     assert(ctx != NULL);
@@ -39,10 +42,147 @@ void i3_vk_cmd_decode_copy_buffer(void* ctx, i3_vk_cmd_copy_buffer_t* cmd)
         .size = cmd->size,
     };
 
-    i3_vk_buffer_o* src_buffer = (i3_vk_buffer_o*)cmd->src_buffer->self;
-    i3_vk_buffer_o* dst_buffer = (i3_vk_buffer_o*)cmd->dst_buffer->self;
+    vkCmdCopyBuffer(cmd_ctx->cmd_buffer, cmd->src_buffer, cmd->dst_buffer, 1, &copy_region);
+}
 
-    vkCmdCopyBuffer(cmd_ctx->cmd_buffer, src_buffer->handle, dst_buffer->handle, 1, &copy_region);
+// bind vertex buffers
+void i3_vk_cmd_decode_bind_vertex_buffers(void* ctx, i3_vk_cmd_bind_vertex_buffers_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdBindVertexBuffers(cmd_ctx->cmd_buffer, cmd->first_binding, cmd->binding_count, cmd->buffers, cmd->offsets);
+}
+
+// bind index buffer
+void i3_vk_cmd_decode_bind_index_buffer(void* ctx, i3_vk_cmd_bind_index_buffer_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdBindIndexBuffer(cmd_ctx->cmd_buffer, cmd->buffer, cmd->offset, cmd->index_type);
+}
+
+// bind pipeline
+void i3_vk_cmd_decode_bind_pipeline(void* ctx, i3_vk_cmd_bind_pipeline_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdBindPipeline(cmd_ctx->cmd_buffer, cmd->bind_point, cmd->pipeline);
+}
+
+// set viewports
+void i3_vk_cmd_decode_set_viewports(void* ctx, i3_vk_cmd_set_viewports_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdSetViewport(cmd_ctx->cmd_buffer, cmd->first_viewport, cmd->viewport_count, cmd->viewports);
+}
+
+// set scissor
+void i3_vk_cmd_decode_set_scissors(void* ctx, i3_vk_cmd_set_scissors_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdSetScissor(cmd_ctx->cmd_buffer, cmd->first_scissor, cmd->scissor_count, cmd->scissors);
+}
+
+// begin rendering
+void i3_vk_cmd_decode_begin_rendering(void* ctx, i3_vk_cmd_begin_rendering_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    VkRenderPassBeginInfo render_pass_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = cmd->render_pass,
+        .framebuffer = cmd->framebuffer,
+        .renderArea = cmd->render_area,
+    };
+
+    vkCmdBeginRenderPass(cmd_ctx->cmd_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+}
+
+// end rendering
+void i3_vk_cmd_decode_end_rendering(void* ctx, i3_vk_cmd_end_rendering_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdEndRenderPass(cmd_ctx->cmd_buffer);
+}
+
+// push constants
+void i3_vk_cmd_decode_push_constants(void* ctx, i3_vk_cmd_push_constants_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdPushConstants(cmd_ctx->cmd_buffer, cmd->layout, cmd->stage_flags, cmd->offset, cmd->size, cmd->data);
+}
+
+// draw
+void i3_vk_cmd_decode_draw(void* ctx, i3_vk_cmd_draw_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdDraw(cmd_ctx->cmd_buffer, cmd->vertex_count, cmd->instance_count, cmd->first_vertex, cmd->first_instance);
+}
+
+// draw indexed
+void i3_vk_cmd_decode_draw_indexed(void* ctx, i3_vk_cmd_draw_indexed_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdDrawIndexed(cmd_ctx->cmd_buffer, cmd->index_count, cmd->instance_count, cmd->first_index, cmd->vertex_offset,
+                     cmd->first_instance);
+}
+
+// draw indirect
+void i3_vk_cmd_decode_draw_indirect(void* ctx, i3_vk_cmd_draw_indirect_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdDrawIndirect(cmd_ctx->cmd_buffer, cmd->buffer, cmd->offset, cmd->draw_count, cmd->stride);
+}
+
+// draw indexed indirect
+void i3_vk_cmd_decode_draw_indexed_indirect(void* ctx, i3_vk_cmd_draw_indexed_indirect_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdDrawIndexedIndirect(cmd_ctx->cmd_buffer, cmd->buffer, cmd->offset, cmd->draw_count, cmd->stride);
 }
 
 i3_vk_submission_t* i3_vk_submission_alloc(i3_vk_device_o* device)
