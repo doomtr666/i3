@@ -7,7 +7,11 @@ typedef struct i3_hashtable_t i3_hashtable_t;
 static inline void i3_hashtable_init(i3_hashtable_t* ht);
 static inline void i3_hashtable_free(i3_hashtable_t* ht);
 static inline void i3_hashtable_clear(i3_hashtable_t* ht);
-static inline bool i3_hashtable_insert_hash(i3_hashtable_t* ht, uint32_t hash, const void* key, uint32_t key_size, void* value);
+static inline bool i3_hashtable_insert_hash(i3_hashtable_t* ht,
+                                            uint32_t hash,
+                                            const void* key,
+                                            uint32_t key_size,
+                                            void* value);
 static inline void* i3_hashtable_find_hash(i3_hashtable_t* ht, uint32_t hash, const void* key, uint32_t key_size);
 static inline bool i3_hashtable_remove_hash(i3_hashtable_t* ht, uint32_t hash, const void* key, uint32_t key_size);
 static inline bool i3_hashtable_insert(i3_hashtable_t* ht, const void* key, uint32_t key_size, void* value);
@@ -39,7 +43,7 @@ struct i3_hashtable_t
     uint32_t count;
 };
 
-typedef uint32_t(*i3_hashtable_hash_key)(const void* key);
+typedef uint32_t (*i3_hashtable_hash_key)(const void* key);
 typedef bool (*i3_hashtable_compare_key)(const void* key1, const void* key2);
 
 static inline uint32_t i3_hashmap_wrap__(uint32_t hash, uint32_t capacity)
@@ -47,7 +51,7 @@ static inline uint32_t i3_hashmap_wrap__(uint32_t hash, uint32_t capacity)
     return hash & (capacity - 1);
 }
 
-void i3_hashtable_grow__(i3_hashtable_t* ht)
+static inline void i3_hashtable_grow__(i3_hashtable_t* ht)
 {
     assert(ht != NULL);
 
@@ -98,7 +102,6 @@ static inline void i3_hashtable_free(i3_hashtable_t* ht)
     i3_free(ht->entries);
 }
 
-
 static inline void i3_hashtable_clear(i3_hashtable_t* ht)
 {
     assert(ht != NULL);
@@ -111,7 +114,11 @@ static inline void i3_hashtable_clear(i3_hashtable_t* ht)
     ht->count = 0;
 }
 
-static inline bool i3_hashtable_insert_hash(i3_hashtable_t* ht, uint32_t hash, const void* key, uint32_t key_size, void* value)
+static inline bool i3_hashtable_insert_hash(i3_hashtable_t* ht,
+                                            uint32_t hash,
+                                            const void* key,
+                                            uint32_t key_size,
+                                            void* value)
 {
     assert(ht != NULL);
     assert(key != NULL);
@@ -183,7 +190,8 @@ static inline bool i3_hashtable_remove_hash(i3_hashtable_t* ht, uint32_t hash, c
 
     for (;;)
     {
-        if (ht->entries[index].hash == hash && ht->entries[index].key_size == key_size && memcmp(ht->entries[index].key, key, key_size) == 0)
+        if (ht->entries[index].hash == hash && ht->entries[index].key_size == key_size &&
+            memcmp(ht->entries[index].key, key, key_size) == 0)
         {
             ht->entries[index].key = NULL;
             ht->entries[index].value = NULL;
