@@ -1,0 +1,9 @@
+cc_test(
+    name = "math_tst",
+    srcs = glob(["*.cpp"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//native/math",
+        "@vcpkg//:gtest",
+    ],
+)
