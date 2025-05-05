@@ -125,6 +125,45 @@ class MatrixGenerator : GeneratorBase
         }
     }
 
+    void GenerateStr(int rows, int cols, bool decl = true)
+    {
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+
+        Write($"static inline const char* {name}_str({type} m)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"static char buffer[{rows * cols * 16}];", 1);
+            Write($"snprintf(buffer, sizeof(buffer), \"[", 1);
+            for (int i = 0; i < rows; ++i)
+            {
+                Write("[");
+                for (int j = 0; j < cols; ++j)
+                {
+                    if (j != 0)
+                        Write(" ");
+                    Write("%f");
+                }
+                Write("]");
+            }
+
+            Write("]\"");
+
+            for (int i = 0; i < rows; ++i)
+                for (int j = 0; j < cols; ++j)
+                    Write($", m.m{i}{j}");
+            WriteLine(");");
+            WriteLine("return buffer;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
     void GenerateMatrixFunction(int rows, int cols, bool decl = true)
     {
         if (!decl)
@@ -133,6 +172,7 @@ class MatrixGenerator : GeneratorBase
         GenerateSet(rows, cols, decl);
         if (rows == cols)
             GenerateIndentity(rows, cols, decl);
+        GenerateStr(rows, cols, decl);
     }
 
     void GenerateMatrix(int rows, int cols)
