@@ -4,7 +4,7 @@ using System.Collections.Generic;
 class MatrixGenerator : GeneratorBase
 {
     // Matrix types
-    List<Tuple<int,int>> matrixSizes = [
+    List<Tuple<int, int>> matrixSizes = [
         new Tuple<int,int>(3, 3),
         new Tuple<int,int>(3, 4),
         new Tuple<int,int>(4, 3),
@@ -13,7 +13,7 @@ class MatrixGenerator : GeneratorBase
 
     string MatrixName(int rows, int cols)
     {
-        if(rows == cols)
+        if (rows == cols)
             return $"i3_mat{rows}";
         return $"i3_mat{rows}{cols}";
     }
@@ -22,7 +22,6 @@ class MatrixGenerator : GeneratorBase
     {
         return $"{MatrixName(rows, cols)}_t";
     }
-
 
     void GenerateHeader()
     {
@@ -33,9 +32,107 @@ class MatrixGenerator : GeneratorBase
         WriteLine();
     }
 
-    void GenerateMatrixFunction(int rows, int cools, bool decl = true)
+    void GenerateConstructor(int rows, int cols, bool decl)
     {
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
 
+        Write($"static inline {type} {name}(");
+        for (int i = 0; i < rows; ++i)
+        {
+            for (int j = 0; j < cols; ++j)
+            {
+                if (i != 0 || j != 0)
+                    Write(", ");
+                Write($"float m{i}{j}");
+            }
+        }
+
+        Write(")");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{type} r;", 1);
+            for (int i = 0; i < rows; ++i)
+                for (int j = 0; j < cols; ++j)
+                    WriteLine($"r.m{i}{j} = m{i}{j};", 1);
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateSet(int rows, int cols, bool decl)
+    {
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+
+        Write($"static inline {type} {name}_set(float v)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{type} r;", 1);
+            for (int i = 0; i < rows; ++i)
+                for (int j = 0; j < cols; ++j)
+                    WriteLine($"r.m{i}{j} = v;", 1);
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+
+        Write($"static inline {type} {name}_zero()");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"return {name}_set(0);", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateIndentity(int rows, int cols, bool decl)
+    {
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+
+        Write($"static inline {type} {name}_identity()");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{type} r;", 1);
+            for (int i = 0; i < rows; ++i)
+                for (int j = 0; j < cols; ++j)
+                    WriteLine($"r.m{i}{j} = {(i == j ? 1.0f : 0.0f)};", 1);
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateMatrixFunction(int rows, int cols, bool decl = true)
+    {
+        if (!decl)
+            WriteLine($"// implementation of {MatrixType(rows, cols)}");
+        GenerateConstructor(rows, cols, decl);
+        GenerateSet(rows, cols, decl);
+        if (rows == cols)
+            GenerateIndentity(rows, cols, decl);
     }
 
     void GenerateMatrix(int rows, int cols)
@@ -48,13 +145,13 @@ class MatrixGenerator : GeneratorBase
         WriteLine("{");
         WriteLine("union", 1);
         WriteLine("{", 1);
-        WriteLine($"float m[{rows*cols}];", 2);
-        WriteLine("struct",2);
+        WriteLine($"float m[{rows * cols}];", 2);
+        WriteLine("struct", 2);
         WriteLine("{", 2);
         for (int i = 0; i < rows; ++i)
         {
-            Write("float ",3);
-            for(int j = 0; j < cols; ++j)
+            Write("float ", 3);
+            for (int j = 0; j < cols; ++j)
             {
                 if (j != 0)
                     Write(", ");
@@ -63,15 +160,17 @@ class MatrixGenerator : GeneratorBase
             WriteLine(";");
         }
         WriteLine("};", 2);
-        WriteLine("struct",2);
+        WriteLine("struct", 2);
         WriteLine("{", 2);
-        for(int i = 0; i < rows; ++i)
-            WriteLine($"{VectorGenerator.VectorType(cols)} v{i};",3);
+        for (int i = 0; i < rows; ++i)
+            WriteLine($"{VectorGenerator.VectorType(cols)} v{i};", 3);
         WriteLine("};", 2);
         WriteLine("};", 1);
         WriteLine($"}} {matrixType};");
         WriteLine();
+
         GenerateMatrixFunction(rows, cols);
+        WriteLine();
     }
 
     public override void Generate()
