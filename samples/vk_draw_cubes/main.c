@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "native/core/log.h"
+#include "native/math/vec.h"
 #include "native/vk_backend/vk_backend.h"
 
 #include <direct.h>

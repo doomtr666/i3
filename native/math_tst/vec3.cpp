@@ -72,9 +72,9 @@ TEST(vec3, max)
 
 TEST(vec3, clamp)
 {
-    EXPECT_TRUE(i3_vec3_eq(i3_vec3_clamp({1, 2, 3}, 0, 2), {1, 2, 2}, 1e-6f));
-    EXPECT_TRUE(i3_vec3_eq(i3_vec3_clamp({-1, -2, -3}, 0, 2), {0, 0, 0}, 1e-6f));
-    EXPECT_TRUE(i3_vec3_eq(i3_vec3_clamp({3, 4, 5}, 0, 2), {2, 2, 2}, 1e-6f));
+    EXPECT_TRUE(i3_vec3_eq(i3_vec3_clamp({1, 2, 3}, {0, 0, 0}, {2, 2, 2}), {1, 2, 2}, 1e-6f));
+    EXPECT_TRUE(i3_vec3_eq(i3_vec3_clamp({-1, -2, -3}, {0, 0, 0}, {2, 2, 2}), {0, 0, 0}, 1e-6f));
+    EXPECT_TRUE(i3_vec3_eq(i3_vec3_clamp({3, 4, 5}, {0, 0, 0}, {2, 2, 2}), {2, 2, 2}, 1e-6f));
 }
 
 TEST(vec3, saturate)

@@ -1,0 +1,10 @@
+load(
+    "@rules_dotnet//dotnet:defs.bzl",
+    "csharp_binary",
+)
+
+csharp_binary(
+    name = "mathlib_generator",
+    srcs = glob(["*.cs"]),
+    target_frameworks = ["net9.0"],
+)

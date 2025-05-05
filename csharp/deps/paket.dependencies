@@ -1,0 +1,5 @@
+
+# dependencies for mathlib_generator
+group mathlib_generator
+    source https://api.nuget.org/v3/index.json
+    storage: none

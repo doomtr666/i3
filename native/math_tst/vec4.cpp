@@ -57,13 +57,6 @@ TEST(vec4, len)
 
 TEST(vec4, normalize)
 {
-    i3_vec4_t vec = {3, 4, 5, 6};
-    i3_vec4_t norm = i3_vec4_normalize(vec);
-
-    std::cout << i3_vec4_dump(norm) << std::endl;
-
-    // len = sqrt(3^2 + 4^2 + 5^2 + 6^2) = sqrt(86) = 9.273618495
-    // normalize = {3, 4, 5, 6} / 9.273618495 = {0.323607f, 0.430143f, 0.537679f, 0.645215f}
     EXPECT_TRUE(i3_vec4_eq(i3_vec4_normalize({3, 4, 5, 6}), {0.323498f, 0.431331f, 0.539164f, 0.646997f}, 1e-6f));
 }
 
@@ -79,9 +72,9 @@ TEST(vec4, max)
 
 TEST(vec4, clamp)
 {
-    EXPECT_TRUE(i3_vec4_eq(i3_vec4_clamp({1, 2, 3, 4}, 0, 5), {1, 2, 3, 4}, 1e-6f));
-    EXPECT_TRUE(i3_vec4_eq(i3_vec4_clamp({-1, -2, -3, -4}, 0, 5), {0, 0, 0, 0}, 1e-6f));
-    EXPECT_TRUE(i3_vec4_eq(i3_vec4_clamp({6, 7, 8, 9}, 0, 5), {5, 5, 5, 5}, 1e-6f));
+    EXPECT_TRUE(i3_vec4_eq(i3_vec4_clamp({1, 2, 3, 4}, {0, 0, 0, 0}, {5, 5, 5, 5}), {1, 2, 3, 4}, 1e-6f));
+    EXPECT_TRUE(i3_vec4_eq(i3_vec4_clamp({-1, -2, -3, -4}, {0, 0, 0, 0}, {5, 5, 5, 5}), {0, 0, 0, 0}, 1e-6f));
+    EXPECT_TRUE(i3_vec4_eq(i3_vec4_clamp({6, 7, 8, 9}, {0, 0, 0, 0}, {5, 5, 5, 5}), {5, 5, 5, 5}, 1e-6f));
 }
 
 TEST(vec4, saturate)
