@@ -17,6 +17,38 @@ typedef struct i3_vec2_t
     };
 } i3_vec2_t;
 
+// i3_vec3_t
+typedef struct i3_vec3_t
+{
+    union
+    {
+        float v[3];
+        struct
+        {
+            float x;
+            float y;
+            float z;
+        };
+    };
+} i3_vec3_t;
+
+// i3_vec4_t
+typedef struct i3_vec4_t
+{
+    union
+    {
+        float v[4];
+        struct
+        {
+            float x;
+            float y;
+            float z;
+            float w;
+        };
+    };
+} i3_vec4_t;
+
+// i3_vec2_t
 static inline i3_vec2_t i3_vec2(float x, float y);
 static inline i3_vec2_t i3_vec2_set(float v);
 static inline i3_vec2_t i3_vec2_zero();
@@ -41,20 +73,6 @@ static inline bool i3_vec2_neq(i3_vec2_t a, i3_vec2_t b, float epsilon);
 static inline const char* i3_vec2_str(i3_vec2_t a);
 
 // i3_vec3_t
-typedef struct i3_vec3_t
-{
-    union
-    {
-        float v[3];
-        struct
-        {
-            float x;
-            float y;
-            float z;
-        };
-    };
-} i3_vec3_t;
-
 static inline i3_vec3_t i3_vec3(float x, float y, float z);
 static inline i3_vec3_t i3_vec3_set(float v);
 static inline i3_vec3_t i3_vec3_zero();
@@ -80,21 +98,6 @@ static inline bool i3_vec3_neq(i3_vec3_t a, i3_vec3_t b, float epsilon);
 static inline const char* i3_vec3_str(i3_vec3_t a);
 
 // i3_vec4_t
-typedef struct i3_vec4_t
-{
-    union
-    {
-        float v[4];
-        struct
-        {
-            float x;
-            float y;
-            float z;
-            float w;
-        };
-    };
-} i3_vec4_t;
-
 static inline i3_vec4_t i3_vec4(float x, float y, float z, float w);
 static inline i3_vec4_t i3_vec4_set(float v);
 static inline i3_vec4_t i3_vec4_zero();

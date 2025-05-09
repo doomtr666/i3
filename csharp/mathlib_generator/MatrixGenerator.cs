@@ -5,17 +5,23 @@ class MatrixGenerator : GeneratorBase
 {
     // Matrix types
     List<Tuple<int, int>> matrixSizes = [
+        new Tuple<int,int>(2, 2),
         new Tuple<int,int>(3, 3),
         new Tuple<int,int>(3, 4),
         new Tuple<int,int>(4, 3),
         new Tuple<int,int>(4, 4)
     ];
 
-    string MatrixName(int rows, int cols)
+    string MatrixBaseName(int rows, int cols)
     {
         if (rows == cols)
-            return $"i3_mat{rows}";
-        return $"i3_mat{rows}{cols}";
+            return $"mat{rows}";
+        return $"mat{rows}{cols}";
+    }
+
+    string MatrixName(int rows, int cols)
+    {
+        return $"i3_{MatrixBaseName(rows, cols)}";
     }
 
     string MatrixType(int rows, int cols)
@@ -104,6 +110,9 @@ class MatrixGenerator : GeneratorBase
 
     void GenerateIndentity(int rows, int cols, bool decl)
     {
+        if (rows != cols)
+            return;
+
         string name = MatrixName(rows, cols);
         string type = MatrixType(rows, cols);
 
@@ -125,6 +134,334 @@ class MatrixGenerator : GeneratorBase
         }
     }
 
+    void GenerateTranspose(int rows, int cols, bool decl)
+    {
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+        string rtype = MatrixType(cols, rows);
+
+        Write($"static inline {rtype} {name}_transpose({type} m)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{rtype} r;", 1);
+            for (int i = 0; i < cols; ++i)
+                for (int j = 0; j < rows; ++j)
+                    WriteLine($"r.m{i}{j} = m.m{j}{i};", 1);
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateMult(int m, int n, int l, bool decl)
+    {
+        string aname = MatrixName(m, n);
+        string bname = MatrixBaseName(n, l);
+        string atype = MatrixType(m, n);
+        string btype = MatrixType(n, l);
+        string rtype = MatrixType(m, l);
+
+        if (m == n && n == l)
+            Write($"static inline {rtype} {aname}_mult({atype} a, {btype} b)");
+        else
+            Write($"static inline {rtype} {aname}_mult_{bname}({atype} a, {btype} b)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{rtype} r;", 1);
+            for (int i = 0; i < m; ++i)
+                for (int j = 0; j < l; ++j)
+                {
+                    Write($"r.m{i}{j} = ", 1);
+                    for (int k = 0; k < n; ++k)
+                    {
+                        if (k != 0)
+                            Write(" + ");
+                        Write($"a.m{i}{k} * b.m{k}{j}");
+                    }
+                    WriteLine(";");
+                }
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateMatMultVec(int rows, int cols, bool decl)
+    {
+        string mname = MatrixBaseName(rows, cols);
+        string mtype = MatrixType(rows, cols);
+
+        string vname = VectorGenerator.VectorBaseName(cols);
+        string vtype = VectorGenerator.VectorType(cols);
+
+        string rtype = VectorGenerator.VectorType(rows);
+
+        Write($"static inline {rtype} i3_{mname}_mult_{vname}({mtype} m, {vtype} v)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{rtype} r;", 1);
+            for (int i = 0; i < rows; ++i)
+            {
+                Write($"r.{VectorGenerator.VectorCoord(i)} = ", 1);
+                for (int j = 0; j < cols; ++j)
+                {
+                    if (j != 0)
+                        Write(" + ");
+                    Write($"m.m{i}{j} * v.{VectorGenerator.VectorCoord(j)}");
+                }
+                WriteLine(";");
+            }
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateVecMultMat(int rows, int cols, bool decl)
+    {
+        string mname = MatrixBaseName(rows, cols);
+        string mtype = MatrixType(rows, cols);
+
+        string vname = VectorGenerator.VectorBaseName(rows);
+        string vtype = VectorGenerator.VectorType(rows);
+
+        string rtype = VectorGenerator.VectorType(cols);
+
+        Write($"static inline {rtype} i3_{vname}_mult_{mname}({vtype} v, {mtype} m)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{rtype} r;", 1);
+            for (int i = 0; i < cols; ++i)
+            {
+                Write($"r.{VectorGenerator.VectorCoord(i)} = ", 1);
+                for (int j = 0; j < rows; ++j)
+                {
+                    if (j != 0)
+                        Write(" + ");
+                    Write($"v.{VectorGenerator.VectorCoord(j)} * m.m{j}{i}");
+                }
+                WriteLine(";");
+            }
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+
+    }
+
+
+    void GenerateSubMat(int rows, int cols, bool decl)
+    {
+        if (rows != cols || rows <= 2)
+            return;
+
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+        string rtype = MatrixType(rows - 1, cols - 1);
+
+        Write($"static inline {rtype} {name}_submat({type} m, int row, int col)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{rtype} r;", 1);
+            WriteLine($"for(int i=0;i<{rows - 1};i++)", 1);
+            WriteLine($"for(int j=0;j<{cols - 1};j++)", 2);
+            WriteLine("{", 3);
+            WriteLine("int ii = i < row ? i : i + 1;", 4);
+            WriteLine("int jj = j < col ? j : j + 1;", 4);
+            WriteLine($"r.m[i * {cols - 1} + j] = m.m[ii * {cols} + jj];", 4);
+            WriteLine("}", 3);
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateMinor(int rows, int cols, bool decl)
+    {
+        if (rows != cols || rows <= 2)
+            return;
+
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+        string mname = MatrixName(rows - 1, cols - 1);
+
+        Write($"static inline float {name}_minor({type} m, int row, int col)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"return {mname}_det({name}_submat(m, row, col));", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateDeterminant(int rows, int cols, bool decl)
+    {
+        if (rows != cols)
+            return;
+
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+
+        Write($"static inline float {name}_det({type} m)");
+
+        if (decl)
+            WriteLine(";");
+        else if (rows == 2)
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine("return m.m00 * m.m11 - m.m01 * m.m10;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+        else
+        {
+
+            WriteLine();
+            WriteLine("{");
+            Write("return ", 1);
+            for (int j = 0; j < cols; ++j)
+            {
+                if (j != 0)
+                {
+                    if ((j & 1) != 0)
+                        Write(" - ");
+                    else
+                        Write(" + ");
+                }
+                Write($"m.m0{j} * {name}_minor(m, 0, {j})");
+            }
+            WriteLine(";");
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateInvert(int rows, int cols, bool decl)
+    {
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+
+        if (rows != cols)
+            return;
+
+        Write($"static inline {type} {name}_invert({type} m)");
+        if (decl)
+            WriteLine(";");
+        else if (rows == 2)
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"float det = {name}_det(m);", 1);
+            WriteLine($"{type} r;", 1);
+            WriteLine($"r.m00 = m.m11 / det;", 1);
+            WriteLine($"r.m01 = -m.m01 / det;", 1);
+            WriteLine($"r.m10 = -m.m10 / det;", 1);
+            WriteLine($"r.m11 = m.m00 / det;", 1);
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"{type} c,r;", 1);
+
+            // cofactor matrix
+            for (int i = 0; i < rows; ++i)
+                for (int j = 0; j < cols; ++j)
+                {
+                    var sign = ((i + j) & 1) != 0 ? "-" : "";
+                    WriteLine($"c.m{i}{j} = {sign}{name}_minor(m, {i}, {j});", 1);
+                }
+
+            // determinant
+            Write($"float det = ", 1);
+
+            for (int j = 0; j < cols; ++j)
+            {
+                if (j != 0)
+                    Write(" + ");
+                Write($"m.m0{j} * c.m0{j}");
+            }
+            WriteLine(";");
+
+            // transpose and divide by determinant
+            for (int i = 0; i < rows; ++i)
+                for (int j = 0; j < cols; ++j)
+                    WriteLine($"r.m{i}{j} = c.m{j}{i} / det;", 1);
+
+            WriteLine("return r;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
+    void GenerateEq(int rows, int cols, bool decl)
+    {
+        string name = MatrixName(rows, cols);
+        string type = MatrixType(rows, cols);
+
+        Write($"static inline bool {name}_eq({type} a, {type} b, float epsilon)");
+
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"for(int i=0;i<{rows * cols};++i)", 1);
+            WriteLine($"if (!i3_eqf(a.m[i], b.m[i], epsilon))", 2);
+            WriteLine("return false;", 3);
+            WriteLine("return true;", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+
+        Write($"static inline bool {name}_neq({type} a, {type} b, float epsilon)");
+        if (decl)
+            WriteLine(";");
+        else
+        {
+            WriteLine();
+            WriteLine("{");
+            WriteLine($"return !{name}_eq(a, b, epsilon);", 1);
+            WriteLine("}");
+            WriteLine();
+        }
+    }
+
     void GenerateStr(int rows, int cols, bool decl = true)
     {
         string name = MatrixName(rows, cols);
@@ -139,20 +476,22 @@ class MatrixGenerator : GeneratorBase
             WriteLine();
             WriteLine("{");
             WriteLine($"static char buffer[{rows * cols * 16}];", 1);
-            Write($"snprintf(buffer, sizeof(buffer), \"[", 1);
+            Write($"snprintf(buffer, sizeof(buffer), \"{{", 1);
             for (int i = 0; i < rows; ++i)
             {
-                Write("[");
+                if (i != 0)
+                    Write(", ");
+                Write("{");
                 for (int j = 0; j < cols; ++j)
                 {
                     if (j != 0)
-                        Write(" ");
+                        Write(", ");
                     Write("%f");
                 }
-                Write("]");
+                Write("}");
             }
 
-            Write("]\"");
+            Write("}\"");
 
             for (int i = 0; i < rows; ++i)
                 for (int j = 0; j < cols; ++j)
@@ -166,13 +505,29 @@ class MatrixGenerator : GeneratorBase
 
     void GenerateMatrixFunction(int rows, int cols, bool decl = true)
     {
-        if (!decl)
+        if (decl)
+            WriteLine($"// {MatrixType(rows, cols)}");
+        else
             WriteLine($"// implementation of {MatrixType(rows, cols)}");
+
+
         GenerateConstructor(rows, cols, decl);
         GenerateSet(rows, cols, decl);
-        if (rows == cols)
-            GenerateIndentity(rows, cols, decl);
+        GenerateIndentity(rows, cols, decl);
+        GenerateTranspose(rows, cols, decl);
+        foreach (var sizes in matrixSizes)
+            if (sizes.Item1 == cols)
+                GenerateMult(rows, cols, sizes.Item2, decl);
+        GenerateMatMultVec(rows, cols, decl);
+        GenerateVecMultMat(rows, cols, decl);
+        GenerateSubMat(rows, cols, decl);
+        GenerateMinor(rows, cols, decl);
+        GenerateDeterminant(rows, cols, decl);
+        GenerateInvert(rows, cols, decl);
+        GenerateEq(rows, cols, decl);
         GenerateStr(rows, cols, decl);
+        if (decl)
+            WriteLine();
     }
 
     void GenerateMatrix(int rows, int cols)
@@ -208,9 +563,6 @@ class MatrixGenerator : GeneratorBase
         WriteLine("};", 1);
         WriteLine($"}} {matrixType};");
         WriteLine();
-
-        GenerateMatrixFunction(rows, cols);
-        WriteLine();
     }
 
     public override void Generate()
@@ -219,6 +571,9 @@ class MatrixGenerator : GeneratorBase
 
         foreach (var size in matrixSizes)
             GenerateMatrix(size.Item1, size.Item2);
+
+        foreach (var size in matrixSizes)
+            GenerateMatrixFunction(size.Item1, size.Item2, true);
 
         foreach (var size in matrixSizes)
             GenerateMatrixFunction(size.Item1, size.Item2, false);

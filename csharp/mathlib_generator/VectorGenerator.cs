@@ -25,9 +25,14 @@ class VectorGenerator : GeneratorBase
         new FunctionDesc { Name = "max", Function = "i3_maxf" },
     ];
 
+    public static string VectorBaseName(int size)
+    {
+        return $"vec{size}";
+    }
+
     public static string VectorName(int size)
     {
-        return $"i3_vec{size}";
+        return $"i3_{VectorBaseName(size)}";
     }
 
     public static string VectorType(int size)
@@ -133,7 +138,7 @@ class VectorGenerator : GeneratorBase
     }
 
     void GenerateUnaryFunction(int size, FunctionDesc func, bool decl = true)
-    {    
+    {
         // write prototype
         Write($"static inline {VectorType(size)} {VectorName(size)}_{func.Name}({VectorType(size)} a)");
 
@@ -141,11 +146,11 @@ class VectorGenerator : GeneratorBase
             WriteLine(";");
         else
         {
-            WriteLine();            
+            WriteLine();
             WriteLine("{");
             WriteLine($"{VectorType(size)} r;", 1);
 
-            for(int i=0; i < size; ++i)
+            for (int i = 0; i < size; ++i)
             {
                 if (func.Operation != null)
                     WriteLine($"r.{VectorCoord(i)} = {func.Operation}a.{VectorCoord(i)};", 1);
@@ -171,7 +176,7 @@ class VectorGenerator : GeneratorBase
             WriteLine();
             WriteLine("{");
             WriteLine($"{VectorType(size)} r;", 1);
-            for(int i=0; i < size; ++i)
+            for (int i = 0; i < size; ++i)
             {
                 if (func.Operation != null)
                     WriteLine($"r.{VectorCoord(i)} = a.{VectorCoord(i)} {func.Operation} b.{VectorCoord(i)};", 1);
@@ -196,7 +201,7 @@ class VectorGenerator : GeneratorBase
             WriteLine();
             WriteLine("{");
             WriteLine($"{VectorType(size)} r;", 1);
-            for(int i=0; i < size; ++i)
+            for (int i = 0; i < size; ++i)
                 WriteLine($"r.{VectorCoord(i)} = a.{VectorCoord(i)} * s;", 1);
             WriteLine("return r;", 1);
             WriteLine("}");
@@ -216,7 +221,7 @@ class VectorGenerator : GeneratorBase
             WriteLine();
             WriteLine("{");
             WriteLine($"{VectorType(size)} r;", 1);
-            for(int i=0; i < size; ++i)
+            for (int i = 0; i < size; ++i)
                 WriteLine($"r.{VectorCoord(i)} = i3_clampf(a.{VectorCoord(i)}, min.{VectorCoord(i)}, max.{VectorCoord(i)});", 1);
             WriteLine("return r;", 1);
             WriteLine("}");
@@ -236,7 +241,7 @@ class VectorGenerator : GeneratorBase
             WriteLine();
             WriteLine("{");
             WriteLine($"float r = 0.0f;", 1);
-            for(int i=0; i < size; ++i)
+            for (int i = 0; i < size; ++i)
                 WriteLine($"r += a.{VectorCoord(i)} * b.{VectorCoord(i)};", 1);
             WriteLine("return r;", 1);
             WriteLine("}");
@@ -291,7 +296,7 @@ class VectorGenerator : GeneratorBase
             WriteLine("{");
             WriteLine($"{VectorType(size)} r;", 1);
             WriteLine($"float len = {VectorName(size)}_len(a);", 1);
-            for(int i=0; i < size; ++i)
+            for (int i = 0; i < size; ++i)
                 WriteLine($"r.{VectorCoord(i)} = a.{VectorCoord(i)} / len;", 1);
             WriteLine("return r;", 1);
             WriteLine("}");
@@ -353,7 +358,7 @@ class VectorGenerator : GeneratorBase
             WriteLine();
         }
     }
-    
+
     void GenerateStrFunction(int size, bool decl = true)
     {
         // write prototype
@@ -388,8 +393,10 @@ class VectorGenerator : GeneratorBase
 
     void GenerateVectorFunctions(int size, bool decl = true)
     {
-        if(!decl)
+        if (!decl)
             WriteLine($"// implementation of {VectorType(size)}");
+        else
+            WriteLine($"// {VectorType(size)}");
 
         GenerateConstructor(size, decl);
         GenerateSetFunction(size, decl);
@@ -403,7 +410,7 @@ class VectorGenerator : GeneratorBase
         GenerateScaleFunction(size, decl);
         GenerateClampFunction(size, decl);
 
-        if(size == 3)
+        if (size == 3)
             GenerateCrossFunction(decl);
 
         GenerateDotFunction(size, decl);
@@ -416,11 +423,11 @@ class VectorGenerator : GeneratorBase
 
     void GenerateVectors()
     {
-        for(int i = 2; i <= 4; ++i)
+        for (int i = 2; i <= 4; ++i)
         {
             WriteLine($"// {VectorType(i)}");
             WriteLine($"typedef struct {VectorType(i)}");
-            WriteLine("{",0);
+            WriteLine("{", 0);
             WriteLine("union", 1);
             WriteLine("{", 1);
             WriteLine($"float v[{i}];", 2);
@@ -432,12 +439,15 @@ class VectorGenerator : GeneratorBase
             WriteLine("};", 1);
             WriteLine($"}} {VectorType(i)};");
             WriteLine();
+        }
 
+        for (int i = 2; i <= 4; ++i)
+        {
             GenerateVectorFunctions(i);
             WriteLine();
         }
 
-        for(int i = 2; i <= 4; ++i)
+        for (int i = 2; i <= 4; ++i)
             GenerateVectorFunctions(i, false);
     }
 

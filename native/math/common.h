@@ -1,7 +1,19 @@
 #pragma once
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
+
+// integer function
+static inline bool i3_is_odd(int a)
+{
+    return (a & 1) != 0;
+}
+
+static inline bool i3_is_even(int a)
+{
+    return (a & 1) == 0;
+}
 
 // math functions
 static inline float i3_absf(float a)
