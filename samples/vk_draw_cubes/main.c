@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 #include "native/core/log.h"
-#include "native/math/vec.h"
+#include "native/math/transform.h"
 #include "native/vk_backend/vk_backend.h"
 
 #include <direct.h>
@@ -222,7 +222,7 @@ int main()
     // rasterization state
     i3_rbk_pipeline_rasterization_state_t rasterization = {
         .polygon_mode = I3_RBK_POLYGON_MODE_FILL,
-        .cull_mode = I3_RBK_CULL_MODE_BACK_BIT,
+        .cull_mode = 0,  // I3_RBK_CULL_MODE_BACK_BIT,
         .front_face = I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depth_clamp_enable = false,
         .rasterizer_discard_enable = false,
@@ -291,7 +291,7 @@ int main()
         i3_rbk_rect_t render_area = {.offset = {0, 0}, .extent = {800, 600}};
         i3_rbk_rect_t scissor = {.offset = {0, 0}, .extent = {800, 600}};
         i3_rbk_viewport_t viewport
-            = {.x = 0.0f, .y = 0.0f, .width = 800.0f, .height = 600.0f, .min_depth = 0.0f, .max_depth = 1.0f};
+            = {.x = 0.0f, .y = 600.0f, .width = 800.0f, .height = -600.0f, .min_depth = 0.0f, .max_depth = 1.0f};
 
         cmd_buffer->bind_vertex_buffers(cmd_buffer->self, 0, 1, &vertex_buffer, NULL);
         cmd_buffer->bind_index_buffer(cmd_buffer->self, index_buffer, 0, I3_RBK_INDEX_TYPE_UINT32);
@@ -301,9 +301,15 @@ int main()
         cmd_buffer->set_viewports(cmd_buffer->self, 0, 1, &viewport);
         cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &scissor);
 
-        float mat[16] = {0};
+        i3_mat4_t world = i3_mat4_identity();
+        i3_mat4_t view = i3_mat4_transpose(i3_mat4_translation(i3_vec3(0.0f, 0.0f, -10.0f)));
+        i3_mat4_t proj
+            = i3_mat4_transpose(i3_mat4_persective_fov_rh(i3_deg_to_radf(45.0f), 800.0f / 600.0f, 0.1f, 100.0f));
 
-        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(mat), mat);
+        i3_mat4_t wvp = i3_mat4_mult(i3_mat4_mult(world, view), proj);
+        i3_mat4_t pvw = i3_mat4_mult(i3_mat4_mult(proj, view), world);
+
+        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(pvw), &pvw);
 
         cmd_buffer->begin_rendering(cmd_buffer->self, frame_buffer, &render_area);
 

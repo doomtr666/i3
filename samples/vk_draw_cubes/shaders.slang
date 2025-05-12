@@ -66,6 +66,6 @@ Fragment fragmentMain(
     float intensity = dot(normal, float3(1,0,0));
 
     Fragment output;
-    output.color = float4(intensity * float3(1,1,1), 1.0);
+    output.color = float4(1,0,0,1) * (0.5f * intensity + 0.5f); //float4(intensity * float3(1,1,1), 1.0);
     return output;
 }

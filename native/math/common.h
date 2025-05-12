@@ -4,6 +4,11 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+static const float I3_PI = 3.14159265358979323846f;
+static const float I3_2_PI = 6.28318530717958647692f;
+static const float I3_PI_OVER_2 = 1.57079632679489661923f;
+static const float I3_PI_OVER_4 = 0.78539816339744830962f;
+
 // integer function
 static inline bool i3_is_odd(int a)
 {
@@ -21,12 +26,42 @@ static inline float i3_absf(float a)
     return (a < 0.0f) ? -a : a;
 }
 
+static inline float i3_squaref(float a)
+{
+    return a * a;
+}
+
 static inline float i3_sqrtf(float a)
 {
     return sqrtf(a);
 }
 
-// equal wih in epsilon
+static inline float i3_sinf(float a)
+{
+    return sinf(a);
+}
+
+static inline float i3_cosf(float a)
+{
+    return cosf(a);
+}
+
+static inline float i3_tanf(float a)
+{
+    return tanf(a);
+}
+
+static inline float i3_deg_to_radf(float a)
+{
+    return a * (I3_PI / 180.0f);
+}
+
+static inline float i3_rad_to_degf(float a)
+{
+    return a * (180.0f / I3_PI);
+}
+
+// equal within epsilon
 static inline bool i3_eqf(float a, float b, float epsilon)
 {
     return i3_absf(a - b) < epsilon;
