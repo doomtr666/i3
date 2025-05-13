@@ -6,20 +6,24 @@ def _slangc_impl(ctx):
         out_file = src_file.basename.replace(".slang", ".spv")
         output = ctx.actions.declare_file(out_file)
 
+        args = ctx.actions.args()
+        if ctx.var["COMPILATION_MODE"] == "opt":
+            args.add("-O2")
+        else:
+            args.add("-O0")
+            args.add("-g2")
+
+        args.add("-matrix-layout-row-major")
+        args.add("-profile", "glsl_460")
+        args.add("-target", "spirv")
+        args.add("-o", output.path)
+        args.add(src_file.path)
+
         ctx.actions.run(
             inputs = [src_file],
             outputs = [output],
             executable = ctx.executable._compiler,
-            arguments = [
-                "-matrix-layout-row-major",
-                "-profile",
-                "glsl_460",
-                "-target",
-                "spirv",
-                "-o",
-                output.path,
-                src_file.path,
-            ],
+            arguments = [args],
         )
         outputs.append(output)
 
