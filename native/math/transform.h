@@ -170,7 +170,29 @@ static inline i3_mat4_t i3_mat4_rotation_axis(i3_vec3_t axis, float angle)
 
 static inline i3_mat4_t i3_mat4_rotation_quat(i3_quat_t q)
 {
-    // TODO
+    float qxx = q.b * q.b;
+    float qyy = q.c * q.c;
+    float qzz = q.d * q.d;
+
+    i3_mat4_t r;
+    r.m00 = 1.0f - 2.0f * (qyy + qzz);
+    r.m01 = 2.0f * (q.b * q.c + q.d * q.a);
+    r.m02 = 2.0f * (q.b * q.d - q.c * q.a);
+    r.m03 = 0.0f;
+    r.m10 = 2.0f * (q.b * q.c - q.d * q.a);
+    r.m11 = 1.0f - 2.0f * (qxx + qzz);
+    r.m12 = 2.0f * (q.c * q.d + q.b * q.a);
+    r.m13 = 0.0f;
+    r.m20 = 2.0f * (q.b * q.d + q.c * q.a);
+    r.m21 = 2.0f * (q.c * q.d - q.b * q.a);
+    r.m22 = 1.0f - 2.0f * (qxx + qyy);
+    r.m23 = 0.0f;
+    r.m30 = 0.0f;
+    r.m31 = 0.0f;
+    r.m32 = 0.0f;
+    r.m33 = 1.0f;
+
+    return r;
 }
 
 static inline i3_mat4_t i3_mat4_scale(i3_vec3_t scale)
