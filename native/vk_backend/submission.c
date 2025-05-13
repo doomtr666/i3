@@ -28,6 +28,25 @@ void i3_vk_cmd_decode_barrier(void* ctx, i3_vk_cmd_barrier_t* cmd)
     // TODO: apply barriers
 }
 
+void i3_vk_cmd_decode_clear_image(void* ctx, i3_vk_cmd_clear_image_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    VkImageSubresourceRange subresource_range = {
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+
+    vkCmdClearColorImage(cmd_ctx->cmd_buffer, cmd->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cmd->color, 1,
+                         &subresource_range);
+}
+
 // copy buffer
 void i3_vk_cmd_decode_copy_buffer(void* ctx, i3_vk_cmd_copy_buffer_t* cmd)
 {

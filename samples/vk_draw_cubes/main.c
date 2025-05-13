@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "native/core/log.h"
+#include "native/core/time.h"
 #include "native/math/transform.h"
 #include "native/vk_backend/vk_backend.h"
 
@@ -222,7 +223,7 @@ int main()
     // rasterization state
     i3_rbk_pipeline_rasterization_state_t rasterization = {
         .polygon_mode = I3_RBK_POLYGON_MODE_FILL,
-        .cull_mode = 0,  // I3_RBK_CULL_MODE_BACK_BIT,
+        .cull_mode = I3_RBK_CULL_MODE_BACK_BIT,
         .front_face = I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depth_clamp_enable = false,
         .rasterizer_discard_enable = false,
@@ -283,10 +284,18 @@ int main()
 
     i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
 
+    i3_game_time_t game_time;
+    i3_game_time_init(&game_time);
+
     while (!window->should_close(window->self))
     {
+        i3_game_time_update(&game_time);
+
         // create cmd buffer
         i3_rbk_cmd_buffer_i* cmd_buffer = device->create_cmd_buffer(device->self);
+
+        i3_rbk_clear_color_t clear_color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}};
+        cmd_buffer->clear_image(cmd_buffer->self, image, &clear_color);
 
         i3_rbk_rect_t render_area = {.offset = {0, 0}, .extent = {800, 600}};
         i3_rbk_rect_t scissor = {.offset = {0, 0}, .extent = {800, 600}};
@@ -301,15 +310,14 @@ int main()
         cmd_buffer->set_viewports(cmd_buffer->self, 0, 1, &viewport);
         cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &scissor);
 
-        i3_mat4_t world = i3_mat4_identity();
-        i3_mat4_t view = i3_mat4_transpose(i3_mat4_translation(i3_vec3(0.0f, 0.0f, -10.0f)));
-        i3_mat4_t proj
-            = i3_mat4_transpose(i3_mat4_persective_fov_rh(i3_deg_to_radf(45.0f), 800.0f / 600.0f, 0.1f, 100.0f));
+        i3_mat4_t world = i3_mat4_rotation_euler(i3_vec3(game_time.total_time, 2 * game_time.total_time, 0));
+        i3_mat4_t view = i3_mat4_translation(i3_vec3(0.0f, 0.0f, -10.0f));
+        i3_mat4_t proj = i3_mat4_persective_fov_rh(i3_deg_to_radf(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
 
         i3_mat4_t wvp = i3_mat4_mult(i3_mat4_mult(world, view), proj);
         i3_mat4_t pvw = i3_mat4_mult(i3_mat4_mult(proj, view), world);
 
-        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(pvw), &pvw);
+        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(wvp), &wvp);
 
         cmd_buffer->begin_rendering(cmd_buffer->self, frame_buffer, &render_area);
 
@@ -334,6 +342,8 @@ int main()
 
     // wait for last frame to complete
     device->wait_idle(device->self);
+
+    printf("avg fps: %.2f\n", 1.0f / (game_time.total_time / game_time.frame_count));
 
     frame_buffer->destroy(frame_buffer->self);
     shader_module->destroy(shader_module->self);

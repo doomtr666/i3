@@ -3,6 +3,7 @@
 #include "buffer.h"
 #include "convert.h"
 #include "framebuffer.h"
+#include "image.h"
 #include "pipeline.h"
 #include "pipeline_layout.h"
 
@@ -121,6 +122,30 @@ static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
     cmd->src_offset = src_offset;
     cmd->dst_offset = dst_offset;
     cmd->size = size;
+}
+
+// clear image
+void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self, i3_rbk_image_i* image, const i3_rbk_clear_color_t* color)
+{
+    assert(self != NULL);
+    assert(image != NULL);
+    assert(color != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the image
+    i3_vk_use_list_add(&cmd_buffer->use_list, image);
+
+    // add barriers
+    // TODO
+
+    // emit command
+    i3_vk_cmd_clear_image_t* cmd = i3_vk_cmd_write_clear_image(&cmd_buffer->cmd_list);
+    cmd->image = ((i3_vk_image_o*)image->self)->handle;
+    cmd->color.uint32[0] = color->uint32[0];
+    cmd->color.uint32[1] = color->uint32[1];
+    cmd->color.uint32[2] = color->uint32[2];
+    cmd->color.uint32[3] = color->uint32[3];
 }
 
 // write buffer
@@ -440,6 +465,7 @@ static i3_vk_cmd_buffer_o i3_vk_cmd_buffer_iface_ =
     .iface =
     {
         .get_resource = i3_vk_cmd_buffer_get_resource,
+        .clear_image = i3_vk_cmd_buffer_clear_image,
         .write_buffer = i3_vk_cmd_buffer_write_buffer,
         .copy_buffer = i3_vk_cmd_buffer_copy_buffer,
         .bind_vertex_buffers = i3_vk_cmd_buffer_bind_vertex_buffers,
