@@ -38,7 +38,7 @@ int main()
     i3_logger_i* vk_logger = i3_get_logger(I3_VK_BACKEND_LOGGER_NAME);
     vk_logger->set_level(vk_logger->self, I3_LOG_LEVEL_DEBUG);
 
-    i3_render_backend_i* backend = i3_vk_backend_create(true);
+    i3_render_backend_i* backend = i3_vk_backend_create();
     if (backend->get_device_count(backend->self) == 0)
     {
         i3_log_err(vk_logger, "No Vulkan devices found");

@@ -5,7 +5,6 @@
 #include "device.h"
 #include "instance_ext.h"
 
-
 static const i3_rbk_device_desc_t* i3_vk_backend_get_device_desc(i3_render_backend_o* self, uint32_t index)
 {
     assert(self != NULL);
@@ -112,8 +111,13 @@ static VkBool32 i3_vk_backend_instance_debug_callback(VkDebugUtilsMessageSeverit
     return VK_FALSE;
 }
 
-i3_render_backend_i* i3_vk_backend_create(bool enable_validation)
+i3_render_backend_i* i3_vk_backend_create()
 {
+    bool enable_validation = false;
+#ifdef I3_DEBUG
+    enable_validation = true;
+#endif
+
     i3_vk_backend_o* backend = i3_zalloc(sizeof(i3_vk_backend_o));
     assert(backend != NULL);
 
