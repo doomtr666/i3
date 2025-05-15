@@ -313,11 +313,9 @@ int main()
         i3_mat4_t world = i3_mat4_rotation_euler(i3_vec3(game_time.total_time, 2 * game_time.total_time, 0));
         i3_mat4_t view = i3_mat4_translation(i3_vec3(0.0f, 0.0f, -10.0f));
         i3_mat4_t proj = i3_mat4_persective_fov_rh(i3_deg_to_radf(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
-
-        i3_mat4_t wvp = i3_mat4_mult(i3_mat4_mult(world, view), proj);
         i3_mat4_t pvw = i3_mat4_mult(i3_mat4_mult(proj, view), world);
 
-        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(wvp), &wvp);
+        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(pvw), &pvw);
 
         cmd_buffer->begin_rendering(cmd_buffer->self, frame_buffer, &render_area);
 

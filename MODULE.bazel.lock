@@ -161,7 +161,7 @@
     },
     "//bazel:vulkan_sdk.bzl%vulkan_sdk": {
       "general": {
-        "bzlTransitiveDigest": "JCft/yBhiyHZJxEQpuK1JP+7SP4MzUlWeo7vCf0fkJM=",
+        "bzlTransitiveDigest": "l+Eplm49DLBxB/PS2N/xdMRtj5Jp5GMm44GVSknFdR8=",
         "usagesDigest": "F18xGFzPPmXMAGs6z7PUT3oHCQxasMrQKihzKBh/YxE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

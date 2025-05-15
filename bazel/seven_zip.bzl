@@ -1,4 +1,4 @@
-_ZZIP_VERSION = "2409"
+_7ZIP_VERSION = "2409"
 
 def extract_7zip(ctx, src, dst):
     # download older 7-zip
@@ -9,7 +9,7 @@ def extract_7zip(ctx, src, dst):
 
     # to unpack newer 7-zip
     ctx.download(
-        url = "https://www.7-zip.org/a/7z{0}-x64.exe".format(_ZZIP_VERSION),
+        url = "https://www.7-zip.org/a/7z{0}-x64.exe".format(_7ZIP_VERSION),
         output = "7z.exe",
     )
 
