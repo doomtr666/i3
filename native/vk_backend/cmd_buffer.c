@@ -4,6 +4,7 @@
 #include "convert.h"
 #include "framebuffer.h"
 #include "image.h"
+#include "image_view.h"
 #include "pipeline.h"
 #include "pipeline_layout.h"
 
@@ -48,6 +49,8 @@ static void i3_vk_cmd_buffer_set_debug_name(i3_rbk_resource_o* self, const char*
     assert(self != NULL);
     i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
 
+    // TODO:
+
     // i3_vk_set_debug_name(cmd_buffer->device->log, cmd_buffer->device->handle, VK_OBJECT_TYPE_COMMAND_BUFFER,
     // cmd_buffer->base.handle, name);
 }
@@ -75,6 +78,47 @@ static i3_vk_barrier_t* i3_vk_cmd_add_barriers(i3_vk_cmd_buffer_o* cmd_buffer, V
     return barrier;
 }
 
+// clear image
+void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self,
+                                  i3_rbk_image_view_i* image_view,
+                                  const i3_rbk_clear_color_t* color)
+{
+    assert(self != NULL);
+    assert(image_view != NULL);
+    assert(color != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the image view
+    i3_vk_use_list_add(&cmd_buffer->use_list, image_view);
+
+    // add barriers
+    i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    i3_vk_image_barrier_t* barrier = i3_vk_add_image_barrier(barriers);
+    *barrier = (i3_vk_image_barrier_t){
+        .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+        .access_mask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .image_view = image_view,
+        .layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    };
+
+    // emit command
+    i3_rbk_image_i* image = image_view->get_image(image_view->self);
+    const i3_rbk_image_view_desc_t* view_desc = image_view->get_desc(image_view->self);
+
+    i3_vk_cmd_clear_image_t* cmd = i3_vk_cmd_write_clear_image(&cmd_buffer->cmd_list);
+    cmd->image = ((i3_vk_image_o*)image->self)->handle;
+    cmd->subresource_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    cmd->subresource_range.baseArrayLayer = view_desc->base_array_layer;
+    cmd->subresource_range.layerCount = view_desc->layer_count;
+    cmd->subresource_range.baseMipLevel = view_desc->base_mip_level;
+    cmd->subresource_range.levelCount = view_desc->level_count;
+    cmd->color.uint32[0] = color->uint32[0];
+    cmd->color.uint32[1] = color->uint32[1];
+    cmd->color.uint32[2] = color->uint32[2];
+    cmd->color.uint32[3] = color->uint32[3];
+}
+
 // copy buffer
 static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
                                          i3_rbk_buffer_i* src_buffer,
@@ -93,7 +137,7 @@ static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
     i3_vk_use_list_add(&cmd_buffer->use_list, src_buffer);
     i3_vk_use_list_add(&cmd_buffer->use_list, dst_buffer);
 
-#if 0    
+#if 0
     // add barriers
     i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT);
     i3_vk_buffer_barrier_t* src_barrier = i3_vk_add_buffer_barrier(barriers);
@@ -122,30 +166,6 @@ static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
     cmd->src_offset = src_offset;
     cmd->dst_offset = dst_offset;
     cmd->size = size;
-}
-
-// clear image
-void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self, i3_rbk_image_i* image, const i3_rbk_clear_color_t* color)
-{
-    assert(self != NULL);
-    assert(image != NULL);
-    assert(color != NULL);
-
-    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
-
-    // retain the image
-    i3_vk_use_list_add(&cmd_buffer->use_list, image);
-
-    // add barriers
-    // TODO
-
-    // emit command
-    i3_vk_cmd_clear_image_t* cmd = i3_vk_cmd_write_clear_image(&cmd_buffer->cmd_list);
-    cmd->image = ((i3_vk_image_o*)image->self)->handle;
-    cmd->color.uint32[0] = color->uint32[0];
-    cmd->color.uint32[1] = color->uint32[1];
-    cmd->color.uint32[2] = color->uint32[2];
-    cmd->color.uint32[3] = color->uint32[3];
 }
 
 // write buffer
@@ -319,6 +339,35 @@ void i3_vk_cmd_buffer_begin_rendering(i3_rbk_cmd_buffer_o* self,
 
     // retain the framebuffer
     i3_vk_use_list_add(&cmd_buffer->use_list, framebuffer);
+
+    // add barriers
+    i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+    i3_vk_image_barrier_t* barrier = i3_vk_add_image_barrier(barriers);
+    i3_vk_framebuffer_o* fb = (i3_vk_framebuffer_o*)framebuffer->self;
+
+    // color attachments
+    for (uint32_t i = 0; i < fb->color_attachment_count; i++)
+    {
+        *barrier = (i3_vk_image_barrier_t){
+            .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+            .access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .image_view = fb->color_attachments[i],
+            .access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+    }
+
+    // depth attachment
+    if (fb->depth_attachment != NULL)
+    {
+        *barrier = (i3_vk_image_barrier_t){
+            .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+            .access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .image_view = fb->depth_attachment,
+            .access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+    }
 
     i3_vk_cmd_begin_rendering_t* cmd = i3_vk_cmd_write_begin_rendering(&cmd_buffer->cmd_list);
     cmd->framebuffer = ((i3_vk_framebuffer_o*)framebuffer->self)->handle;

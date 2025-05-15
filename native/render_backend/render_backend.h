@@ -835,7 +835,7 @@ typedef struct i3_rbk_cmd_buffer_i
                         uint32_t dst_offset,
                         uint32_t size);
 
-    void (*clear_image)(i3_rbk_cmd_buffer_o* self, i3_rbk_image_i* image, const i3_rbk_clear_color_t* color);
+    void (*clear_image)(i3_rbk_cmd_buffer_o* self, i3_rbk_image_view_i* image_view, const i3_rbk_clear_color_t* color);
 
     void (*bind_vertex_buffers)(i3_rbk_cmd_buffer_o* self,
                                 uint32_t first_binding,

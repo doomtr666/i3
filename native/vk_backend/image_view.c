@@ -62,7 +62,7 @@ static const i3_rbk_image_view_desc_t* i3_vk_image_view_get_desc(i3_rbk_image_vi
     assert(self != NULL);
     i3_vk_image_view_o* image_view = (i3_vk_image_view_o*)self;
 
-    return &image_view->info;
+    return &image_view->desc;
 }
 
 static i3_rbk_image_i* i3_vk_image_view_get_image(i3_rbk_image_view_o* self)
@@ -124,7 +124,7 @@ i3_rbk_image_view_i* i3_vk_device_create_image_view(i3_rbk_device_o* self,
     image_view->base.self = (i3_rbk_resource_o*)image_view;
     image_view->iface.self = (i3_rbk_image_view_o*)image_view;
     image_view->device = device;
-    image_view->info = *info;
+    image_view->desc = *info;
     image_view->image = (i3_vk_image_o*)image->self;
     image_view->use_count = 1;
 

@@ -53,12 +53,7 @@ typedef struct i3_vk_image_barrier_t
 {
     uint32_t queue_family_index;
     VkAccessFlags access_mask;
-    i3_rbk_image_i* image;
-    VkImageAspectFlags aspect_mask;
-    uint32_t base_mip_level;
-    uint32_t level_count;
-    uint32_t base_array_layer;
-    uint32_t layer_count;
+    i3_rbk_image_view_i* image_view;
     VkImageLayout layout;
 } i3_vk_image_barrier_t;
 

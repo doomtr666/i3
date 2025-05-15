@@ -21,11 +21,15 @@ void i3_vk_cmd_decode_barrier(void* ctx, i3_vk_cmd_barrier_t* cmd)
     assert(cmd != NULL);
 
     i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
-
-    i3_log_dbg(cmd_ctx->logger, "Decoding barrier command, %d buffer barriers, %d image barriers",
-               cmd->barrier.buffer_barrier_count, cmd->barrier.image_barrier_count);
-
-    // TODO: apply barriers
+#if 0
+    // apply resolved barriers
+    if (cmd->barrier.vk_buffer_barrier_count > 0 || cmd->barrier.vk_image_barrier_count > 0)
+    {
+        vkCmdPipelineBarrier(cmd_ctx->cmd_buffer, cmd->barrier.stage_mask, cmd->barrier.stage_mask, 0, 0, NULL,
+                             cmd->barrier.vk_buffer_barrier_count, cmd->barrier.vk_buffer_barriers,
+                             cmd->barrier.vk_image_barrier_count, cmd->barrier.vk_image_barriers);
+    }
+#endif
 }
 
 void i3_vk_cmd_decode_clear_image(void* ctx, i3_vk_cmd_clear_image_t* cmd)
@@ -35,16 +39,8 @@ void i3_vk_cmd_decode_clear_image(void* ctx, i3_vk_cmd_clear_image_t* cmd)
 
     i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
 
-    VkImageSubresourceRange subresource_range = {
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1,
-    };
-
     vkCmdClearColorImage(cmd_ctx->cmd_buffer, cmd->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cmd->color, 1,
-                         &subresource_range);
+                         &cmd->subresource_range);
 }
 
 // copy buffer

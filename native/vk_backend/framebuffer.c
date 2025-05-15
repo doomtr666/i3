@@ -93,6 +93,8 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
     assert(self != NULL);
     assert(desc != NULL);
 
+    assert(desc->color_attachment_count <= I3_VK_FRAMEBUFFER_MAX_COLOR_ATTACHMENTS);
+
     i3_vk_device_o* device = (i3_vk_device_o*)self;
     i3_vk_framebuffer_o* framebuffer = i3_memory_pool_alloc(&device->framebuffer_pool);
 
@@ -101,7 +103,7 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
     framebuffer->iface.self = (i3_rbk_framebuffer_o*)framebuffer;
     framebuffer->device = device;
     framebuffer->use_count = 1;
-
+    framebuffer->color_attachment_count = desc->color_attachment_count;
     // intialize use list
     i3_vk_use_list_init(&framebuffer->use_list, device);
 
@@ -142,6 +144,7 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
         };
 
         image_views[i] = ((i3_vk_image_view_o*)desc->color_attachments[i].image_view->self)->handle;
+        framebuffer->color_attachments[i] = image_view;
     }
 
     if (desc->depth_attachment)
@@ -171,6 +174,7 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
         };
 
         image_views[i] = ((i3_vk_image_view_o*)desc->depth_attachment->image_view->self)->handle;
+        framebuffer->depth_attachment = image_view;
     }
 
     // create render pass

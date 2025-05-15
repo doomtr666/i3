@@ -42,6 +42,7 @@ static inline uint32_t i3_vk_cmd_list_read_id(i3_vk_cmd_list_t* list);
     /* clear image */                                                     \
     I3_VK_CMD_BEGIN(clear_image)                                          \
     I3_VK_CMD_FIELD(VkImage, image)                                       \
+    I3_VK_CMD_FIELD(VkImageSubresourceRange, subresource_range)           \
     I3_VK_CMD_FIELD(VkClearColorValue, color)                             \
     I3_VK_CMD_END(clear_image)                                            \
     /* copy buffer */                                                     \
