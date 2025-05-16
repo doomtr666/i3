@@ -21,15 +21,13 @@ void i3_vk_cmd_decode_barrier(void* ctx, i3_vk_cmd_barrier_t* cmd)
     assert(cmd != NULL);
 
     i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
-#if 0
-    // apply resolved barriers
-    if (cmd->barrier.vk_buffer_barrier_count > 0 || cmd->barrier.vk_image_barrier_count > 0)
+
+    for (uint32_t i = 0; i < cmd->barrier.vk_subimage_barrier_count; i++)
     {
-        vkCmdPipelineBarrier(cmd_ctx->cmd_buffer, cmd->barrier.stage_mask, cmd->barrier.stage_mask, 0, 0, NULL,
-                             cmd->barrier.vk_buffer_barrier_count, cmd->barrier.vk_buffer_barriers,
-                             cmd->barrier.vk_image_barrier_count, cmd->barrier.vk_image_barriers);
+        vkCmdPipelineBarrier(cmd_ctx->cmd_buffer, cmd->barrier.vk_subimage_barriers[i].src_stage_mask,
+                             cmd->barrier.dst_stage_mask, 0, 0, NULL, 0, NULL, 1,
+                             &cmd->barrier.vk_subimage_barriers[i].vk_image_barrier);
     }
-#endif
 }
 
 void i3_vk_cmd_decode_clear_image(void* ctx, i3_vk_cmd_clear_image_t* cmd)
@@ -241,7 +239,76 @@ void i3_vk_submission_resolve_barriers(i3_vk_submission_t* submission, i3_rbk_cm
     assert(submission != NULL);
     assert(cmd_buffer != NULL);
 
-    // TODO: resolve barriers
+    i3_vk_cmd_buffer_o* buffer = (i3_vk_cmd_buffer_o*)cmd_buffer->self;
+    i3_vk_barrier_t* barrier = NULL;
+
+    i3_dlist_foreach(&buffer->barriers, barrier)
+    {
+        // resolve buffer barriers
+        // TODO:
+
+        // resolve image barriers
+        for (uint32_t i = 0; i < barrier->image_usage_count; ++i)
+        {
+            i3_vk_image_usage_t* image_barrier = &barrier->image_usages[i];
+
+            // get image view
+            i3_vk_image_view_o* image_view = (i3_vk_image_view_o*)image_barrier->image_view->self;
+            i3_vk_image_o* image = image_view->image;
+
+            // check if barrier is required
+            for (uint32_t j = image_view->desc.base_array_layer;
+                 j < image_view->desc.base_array_layer + image_view->desc.layer_count; j++)
+            {
+                // foreach level
+                for (uint32_t k = image_view->desc.base_mip_level;
+                     k < image_view->desc.base_mip_level + image_view->desc.level_count; k++)
+                {
+                    // compare subimage state
+                    i3_vk_subimage_state_t* subimage_state = i3_vk_get_subimage_state(&image->state, j, k);
+
+                    if (subimage_state->queue_family_index != image_barrier->queue_family_index
+                        || subimage_state->layout != image_barrier->layout
+                        || subimage_state->access_mask != image_barrier->access_mask
+                        || subimage_state->stage_mask != barrier->dst_stage_mask)
+                    {
+                        assert(barrier->vk_subimage_barrier_count < I3_VK_BARRIER_MAX_RESOURCE_COUNT);
+                        i3_vk_subimage_barrier_t* resolved_barrier
+                            = &barrier->vk_subimage_barriers[barrier->vk_subimage_barrier_count++];
+                        *resolved_barrier = (i3_vk_subimage_barrier_t)
+                        {
+                            .src_stage_mask = subimage_state->stage_mask,
+                            .vk_image_barrier = 
+                            {
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                .srcAccessMask = subimage_state->access_mask,
+                                .dstAccessMask = image_barrier->access_mask,
+                                .oldLayout = subimage_state->layout,
+                                .newLayout = image_barrier->layout,
+                                .srcQueueFamilyIndex = subimage_state->queue_family_index,
+                                .dstQueueFamilyIndex = image_barrier->queue_family_index,
+                                .image = image->handle,
+                                .subresourceRange = 
+                                {
+                                    .aspectMask = image_view->desc.aspect_mask,
+                                    .baseMipLevel = image_view->desc.base_mip_level,
+                                    .levelCount = image_view->desc.level_count,
+                                    .baseArrayLayer = j,
+                                    .layerCount = 1,
+                                },
+                            }
+                        };
+
+                        // update subimage state
+                        subimage_state->queue_family_index = image_barrier->queue_family_index;
+                        subimage_state->layout = image_barrier->layout;
+                        subimage_state->access_mask = image_barrier->access_mask;
+                        subimage_state->stage_mask = barrier->dst_stage_mask;
+                    }
+                }
+            }
+        }
+    }
 }
 
 void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
@@ -397,12 +464,8 @@ void i3_vk_device_present(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, 
 
     // transition src_image to TRANSFER_SRC
     const i3_rbk_image_view_desc_t* view_info = image_view->get_desc(image_view->self);
-
-    uint32_t src_subimage_index
-        = view_info->base_array_layer * src_image->desc.array_layers + view_info->base_mip_level;
-    i3_vk_subimage_usage_t* src_subimage_info
-        = i3_array_at(&src_image->barrier_info.sub_image_barrier_infos, src_subimage_index);
-
+    i3_vk_subimage_state_t* src_subimage_info
+        = i3_vk_get_subimage_state(&src_image->state, view_info->base_array_layer, view_info->base_mip_level);
     VkImageMemoryBarrier src_barrier = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .srcAccessMask = src_subimage_info->access_mask,

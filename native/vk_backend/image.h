@@ -13,7 +13,7 @@ typedef struct i3_vk_image_o
     VmaAllocation allocation;
     VkImage handle;
 
-    i3_vk_image_usage_t barrier_info;
+    i3_vk_image_state_t state;
 
 } i3_vk_image_o;
 

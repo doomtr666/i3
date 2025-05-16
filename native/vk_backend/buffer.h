@@ -13,7 +13,7 @@ typedef struct i3_vk_buffer_o
     VmaAllocation allocation;
     VkBuffer handle;
 
-    i3_vk_buffer_usage_t barrier_info;
+    i3_vk_buffer_state_t state;
 
 } i3_vk_buffer_o;
 

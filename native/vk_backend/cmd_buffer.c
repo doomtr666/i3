@@ -94,8 +94,8 @@ void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self,
 
     // add barriers
     i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT);
-    i3_vk_image_barrier_t* barrier = i3_vk_add_image_barrier(barriers);
-    *barrier = (i3_vk_image_barrier_t){
+    i3_vk_image_usage_t* barrier = i3_vk_add_image_barrier(barriers);
+    *barrier = (i3_vk_image_usage_t){
         .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
         .access_mask = VK_ACCESS_TRANSFER_WRITE_BIT,
         .image_view = image_view,
@@ -342,13 +342,13 @@ void i3_vk_cmd_buffer_begin_rendering(i3_rbk_cmd_buffer_o* self,
 
     // add barriers
     i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-    i3_vk_image_barrier_t* barrier = i3_vk_add_image_barrier(barriers);
+    i3_vk_image_usage_t* barrier = i3_vk_add_image_barrier(barriers);
     i3_vk_framebuffer_o* fb = (i3_vk_framebuffer_o*)framebuffer->self;
 
     // color attachments
     for (uint32_t i = 0; i < fb->color_attachment_count; i++)
     {
-        *barrier = (i3_vk_image_barrier_t){
+        *barrier = (i3_vk_image_usage_t){
             .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
             .access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             .image_view = fb->color_attachments[i],
@@ -360,7 +360,7 @@ void i3_vk_cmd_buffer_begin_rendering(i3_rbk_cmd_buffer_o* self,
     // depth attachment
     if (fb->depth_attachment != NULL)
     {
-        *barrier = (i3_vk_image_barrier_t){
+        *barrier = (i3_vk_image_usage_t){
             .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
             .access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             .image_view = fb->depth_attachment,
