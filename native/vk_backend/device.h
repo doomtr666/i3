@@ -21,6 +21,7 @@ typedef struct i3_vk_device_o
     i3_vkbk_device_ext_t ext;
     VkDevice handle;
     VkCommandPool cmd_pool;
+    VkDescriptorPool descriptor_pool;
     VmaAllocator vma;
     VkQueue graphics_queue;
 
@@ -32,6 +33,7 @@ typedef struct i3_vk_device_o
     i3_memory_pool_t image_pool;
     i3_memory_pool_t image_view_pool;
     i3_memory_pool_t descriptor_set_layout_pool;
+    i3_memory_pool_t descriptor_set_pool;
     i3_memory_pool_t pipeline_layout_pool;
     i3_memory_pool_t framebuffer_pool;
     i3_memory_pool_t shader_module_pool;

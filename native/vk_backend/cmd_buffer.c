@@ -2,11 +2,13 @@
 
 #include "buffer.h"
 #include "convert.h"
+#include "descriptor_set.h"
 #include "framebuffer.h"
 #include "image.h"
 #include "image_view.h"
 #include "pipeline.h"
 #include "pipeline_layout.h"
+#include "sampler.h"
 
 // resource interface
 
@@ -79,9 +81,9 @@ static i3_vk_barrier_t* i3_vk_cmd_add_barriers(i3_vk_cmd_buffer_o* cmd_buffer, V
 }
 
 // clear image
-void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self,
-                                  i3_rbk_image_view_i* image_view,
-                                  const i3_rbk_clear_color_t* color)
+static void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self,
+                                         i3_rbk_image_view_i* image_view,
+                                         const i3_rbk_clear_color_t* color)
 {
     assert(self != NULL);
     assert(image_view != NULL);
@@ -136,28 +138,6 @@ static void i3_vk_cmd_buffer_copy_buffer(i3_rbk_cmd_buffer_o* self,
     // add resources to the use list
     i3_vk_use_list_add(&cmd_buffer->use_list, src_buffer);
     i3_vk_use_list_add(&cmd_buffer->use_list, dst_buffer);
-
-#if 0
-    // add barriers
-    i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT);
-    i3_vk_buffer_barrier_t* src_barrier = i3_vk_add_buffer_barrier(barriers);
-    *src_barrier = (i3_vk_buffer_barrier_t){
-        .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
-        .access_mask = VK_ACCESS_TRANSFER_READ_BIT,
-        .buffer = src_buffer,
-        .offset = src_offset,
-        .size = size,
-    };
-
-    i3_vk_buffer_barrier_t* dst_barrier = i3_vk_add_buffer_barrier(barriers);
-    *dst_barrier = (i3_vk_buffer_barrier_t){
-        .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
-        .access_mask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .buffer = dst_buffer,
-        .offset = dst_offset,
-        .size = size,
-    };
-#endif
 
     // emit command
     i3_vk_cmd_copy_buffer_t* cmd = i3_vk_cmd_write_copy_buffer(&cmd_buffer->cmd_list);
@@ -258,6 +238,122 @@ static void i3_vk_cmd_buffer_bind_index_buffer(i3_rbk_cmd_buffer_o* self,
     cmd->buffer = ((i3_vk_buffer_o*)buffer->self)->handle;
     cmd->offset = offset;
     cmd->index_type = i3_vk_convert_index_type(index_type);
+}
+
+// bind descriptor sets
+static void i3_vk_cmd_buffer_bind_descriptor_sets(i3_rbk_cmd_buffer_o* self,
+                                                  i3_rbk_pipeline_i* pipeline,
+                                                  uint32_t first_set,
+                                                  uint32_t descriptor_set_count,
+                                                  const i3_rbk_descriptor_set_i** descriptor_sets)
+{
+    assert(self != NULL);
+    assert(pipeline != NULL);
+    assert(descriptor_sets != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the pipeline
+    i3_vk_use_list_add(&cmd_buffer->use_list, pipeline);
+
+    i3_vk_pipeline_o* vk_pipeline = (i3_vk_pipeline_o*)pipeline->self;
+    i3_vk_cmd_bind_descriptor_sets_t* cmd = i3_vk_cmd_write_bind_descriptor_sets(&cmd_buffer->cmd_list);
+    cmd->bind_point = vk_pipeline->bind_point;
+    cmd->layout = ((i3_vk_pipeline_layout_o*)vk_pipeline->layout->self)->handle;
+    cmd->first_set = first_set;
+    cmd->descriptor_set_count = descriptor_set_count;
+
+    // copy & retain the descriptor sets
+    for (uint32_t i = 0; i < descriptor_set_count; i++)
+    {
+        assert(descriptor_sets[i] != NULL);
+        i3_vk_use_list_add(&cmd_buffer->use_list, descriptor_sets[i]);
+
+        i3_vk_descriptor_set_o* vk_descriptor_set = (i3_vk_descriptor_set_o*)descriptor_sets[i]->self;
+        cmd->descriptor_sets[i] = vk_descriptor_set->handle;
+
+        // TODO: generate barriers
+    }
+}
+
+// update descriptor sets
+static void i3_vk_cmd_buffer_update_descriptor_sets(i3_rbk_cmd_buffer_o* self,
+                                                    uint32_t write_count,
+                                                    const i3_rbk_descriptor_set_write_t* writes)
+{
+    assert(self != NULL);
+    assert(writes != NULL);
+    assert(write_count > 0 && write_count <= I3_VK_MAX_DESCRIPTOR_SET_WRITES);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+    i3_vk_cmd_update_descriptor_sets_t* cmd = i3_vk_cmd_write_update_descriptor_sets(&cmd_buffer->cmd_list);
+
+    cmd->write_count = write_count;
+
+    for (uint32_t i = 0; i < write_count; i++)
+    {
+        const i3_rbk_descriptor_set_write_t* write = &writes[i];
+        VkWriteDescriptorSet* vk_write = &cmd->writes[i];
+        *vk_write = (VkWriteDescriptorSet){
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = NULL,
+            .dstSet = ((i3_vk_descriptor_set_o*)write->descriptor_set->self)->handle,
+            .dstBinding = write->binding,
+            .dstArrayElement = write->array_element,
+            .descriptorCount = 1,
+            .descriptorType = i3_vk_convert_descriptor_type(write->descriptor_type),
+        };
+
+        i3_vk_use_list_add(&cmd_buffer->use_list, write->descriptor_set);
+
+        // TODO: generate barriers
+        // TODO: support count > 1
+        // TODO: support dynamic offsets
+
+        switch (write->descriptor_type)
+        {
+            case I3_RBK_DESCRIPTOR_TYPE_SAMPLER:
+                i3_vk_use_list_add(&cmd_buffer->use_list, write->sampler);
+                vk_write->pImageInfo = &cmd->image_infos[i];
+                cmd->image_infos[i] = (VkDescriptorImageInfo){
+                    .sampler = ((i3_vk_sampler_o*)write->sampler->self)->handle,
+                };
+                break;
+
+            case I3_RBK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+                i3_vk_use_list_add(&cmd_buffer->use_list, write->sampler);
+                i3_vk_use_list_add(&cmd_buffer->use_list, write->image);
+                vk_write->pImageInfo = &cmd->image_infos[i];
+                cmd->image_infos[i] = (VkDescriptorImageInfo){
+                    .sampler = ((i3_vk_sampler_o*)write->sampler->self)->handle,
+                    .imageView = ((i3_vk_image_view_o*)write->image->self)->handle,
+                    // TODO: .imageLayout = 0,
+                };
+                break;
+
+            case I3_RBK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            case I3_RBK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                i3_vk_use_list_add(&cmd_buffer->use_list, write->image);
+                vk_write->pImageInfo = &cmd->image_infos[i];
+                cmd->image_infos[i] = (VkDescriptorImageInfo){
+                    .imageView = ((i3_vk_image_view_o*)write->image->self)->handle,
+                    // TODO: .imageLayout = 0,
+                };
+                break;
+
+            case I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+            case I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                i3_vk_use_list_add(&cmd_buffer->use_list, write->buffer);
+                vk_write->pBufferInfo = &cmd->buffer_infos[i];
+                cmd->buffer_infos[i] = (VkDescriptorBufferInfo){
+                    .buffer = ((i3_vk_buffer_o*)write->buffer->self)->handle,
+                    .range = ((i3_vk_buffer_o*)write->buffer->self)->desc.size,
+                };
+                break;
+            default:
+                assert(0);
+        }
+    }
 }
 
 // bind pipeline
@@ -519,6 +615,8 @@ static i3_vk_cmd_buffer_o i3_vk_cmd_buffer_iface_ =
         .copy_buffer = i3_vk_cmd_buffer_copy_buffer,
         .bind_vertex_buffers = i3_vk_cmd_buffer_bind_vertex_buffers,
         .bind_index_buffer = i3_vk_cmd_buffer_bind_index_buffer,
+        .bind_descriptor_sets = i3_vk_cmd_buffer_bind_descriptor_sets,
+        .update_descriptor_sets = i3_vk_cmd_buffer_update_descriptor_sets,
         .bind_pipeline = i3_vk_cmd_buffer_bind_pipeline,
         .set_viewports = i3_vk_cmd_buffer_set_viewports,
         .set_scissors = i3_vk_cmd_buffer_set_scissors,

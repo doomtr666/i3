@@ -8,7 +8,6 @@
 //
 
 // Uniform data to be passed from application -> shader.
-[vk::push_constant]
 cbuffer Uniforms
 {
     float4x4 modelViewProjection;

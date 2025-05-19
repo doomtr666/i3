@@ -67,6 +67,14 @@ int main()
 
     i3_rbk_sampler_i* sampler = device->create_sampler(device->self, &sampler_desc);
 
+    // create uniform buffer
+    i3_rbk_buffer_desc_t uniform_buffer_desc = {
+        .flags = I3_RBK_BUFFER_FLAG_UNIFORM_BUFFER,
+        .size = sizeof(float) * 16,
+    };
+
+    i3_rbk_buffer_i* uniform_buffer = device->create_buffer(device->self, &uniform_buffer_desc);
+
     // create vertex buffer
     i3_rbk_buffer_desc_t vertex_buffer_desc = {
         .flags = I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
@@ -148,6 +156,10 @@ int main()
     i3_rbk_descriptor_set_layout_i* descriptor_set_layout
         = device->create_descriptor_set_layout(device->self, &descriptor_set_layout_desc);
 
+    // create descriptor set
+    i3_rbk_descriptor_set_desc_t descriptor_set_desc = {.layout = descriptor_set_layout};
+    i3_rbk_descriptor_set_i* descriptor_set = device->create_descriptor_set(device->self, &descriptor_set_desc);
+
     // create pipeline layout
     i3_rbk_push_constant_range_t push_constant_range = {
         .stage_flags = I3_RBK_SHADER_STAGE_VERTEX,
@@ -156,8 +168,8 @@ int main()
     };
 
     i3_rbk_pipeline_layout_desc_t pipeline_layout_desc = {
-        //.set_layout_count = 1,
-        //.set_layouts = &descriptor_set_layout,
+        .set_layout_count = 1,
+        .set_layouts = &descriptor_set_layout,
         .push_constant_range_count = 1,
         .push_constant_ranges = &push_constant_range,
     };
@@ -307,15 +319,25 @@ int main()
 
         cmd_buffer->bind_pipeline(cmd_buffer->self, pipeline);
 
-        cmd_buffer->set_viewports(cmd_buffer->self, 0, 1, &viewport);
-        cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &scissor);
+        i3_rbk_descriptor_set_write_t descriptor_set_writes[] = {{
+            .descriptor_set = descriptor_set,
+            .binding = 0,
+            .array_element = 0,
+            .descriptor_type = I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .buffer = uniform_buffer,
+        }};
 
+        cmd_buffer->update_descriptor_sets(cmd_buffer->self, 1, descriptor_set_writes);
         i3_mat4_t world = i3_mat4_rotation_euler(i3_vec3(game_time.total_time, 2 * game_time.total_time, 0));
         i3_mat4_t view = i3_mat4_translation(i3_vec3(0.0f, 0.0f, -10.0f));
         i3_mat4_t proj = i3_mat4_persective_fov_rh(i3_deg_to_radf(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
         i3_mat4_t pvw = i3_mat4_mult(i3_mat4_mult(proj, view), world);
+        cmd_buffer->write_buffer(cmd_buffer->self, uniform_buffer, 0, sizeof(float) * 16, &pvw);
 
-        cmd_buffer->push_constants(cmd_buffer->self, pipeline_layout, I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(pvw), &pvw);
+        cmd_buffer->bind_descriptor_sets(cmd_buffer->self, pipeline, 0, 1, &descriptor_set);
+
+        cmd_buffer->set_viewports(cmd_buffer->self, 0, 1, &viewport);
+        cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &scissor);
 
         cmd_buffer->begin_rendering(cmd_buffer->self, frame_buffer, &render_area);
 
@@ -345,11 +367,13 @@ int main()
 
     frame_buffer->destroy(frame_buffer->self);
     shader_module->destroy(shader_module->self);
+    descriptor_set->destroy(descriptor_set->self);
     descriptor_set_layout->destroy(descriptor_set_layout->self);
     pipeline_layout->destroy(pipeline_layout->self);
     pipeline->destroy(pipeline->self);
     image_view->destroy(image_view->self);
     image->destroy(image->self);
+    uniform_buffer->destroy(uniform_buffer->self);
     vertex_buffer->destroy(vertex_buffer->self);
     index_buffer->destroy(index_buffer->self);
     sampler->destroy(sampler->self);

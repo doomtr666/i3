@@ -318,13 +318,13 @@ typedef enum
     I3_RBK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
     I3_RBK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
     I3_RBK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-    I3_RBK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
-    I3_RBK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
+    // I3_RBK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+    // I3_RBK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
     I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
     I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-    I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-    I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC,
-    I3_RBK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,
+    // I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+    // I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC,
+    // I3_RBK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,
 } i3_rbk_descriptor_type_t;
 
 // index type
@@ -555,6 +555,32 @@ typedef struct i3_rbk_descriptor_set_layout_i
     i3_rbk_resource_i* (*get_resource)(i3_rbk_descriptor_set_layout_o* self);
     void (*destroy)(i3_rbk_descriptor_set_layout_o* self);
 } i3_rbk_descriptor_set_layout_i;
+
+// descriptor set
+typedef struct i3_rbk_descriptor_set_desc_t
+{
+    i3_rbk_descriptor_set_layout_i* layout;
+} i3_rbk_descriptor_set_desc_t;
+
+typedef struct i3_rbk_descriptor_set_o i3_rbk_descriptor_set_o;
+
+typedef struct i3_rbk_descriptor_set_i
+{
+    i3_rbk_descriptor_set_o* self;
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_descriptor_set_o* self);
+    void (*destroy)(i3_rbk_descriptor_set_o* self);
+} i3_rbk_descriptor_set_i;
+
+typedef struct i3_rbk_descriptor_set_write_t
+{
+    i3_rbk_descriptor_set_i* descriptor_set;
+    uint32_t binding;
+    uint32_t array_element;
+    i3_rbk_descriptor_type_t descriptor_type;
+    const i3_rbk_sampler_i* sampler;
+    const i3_rbk_image_view_i* image;
+    const i3_rbk_buffer_i* buffer;
+} i3_rbk_descriptor_set_write_t;
 
 // pipeline layout
 typedef struct i3_rbk_push_constant_range_t
@@ -848,6 +874,15 @@ typedef struct i3_rbk_cmd_buffer_i
                               uint32_t offset,
                               i3_rbk_index_type_t index_type);
 
+    void (*bind_descriptor_sets)(i3_rbk_cmd_buffer_o* self,
+                                 i3_rbk_pipeline_i* pipeline,
+                                 uint32_t first_set,
+                                 uint32_t descriptor_set_count,
+                                 i3_rbk_descriptor_set_i** descriptor_sets);
+
+    void (*update_descriptor_sets)(i3_rbk_cmd_buffer_o* self,
+                                   uint32_t write_count,
+                                   const i3_rbk_descriptor_set_write_t* writes);
     void (*bind_pipeline)(i3_rbk_cmd_buffer_o* self, i3_rbk_pipeline_i* pipeline);
 
     void (*set_viewports)(i3_rbk_cmd_buffer_o* self,
@@ -929,6 +964,9 @@ struct i3_rbk_device_i
     // create descriptor set layout
     i3_rbk_descriptor_set_layout_i* (*create_descriptor_set_layout)(i3_rbk_device_o* self,
                                                                     const i3_rbk_descriptor_set_layout_desc_t* desc);
+
+    // create descriptor set
+    i3_rbk_descriptor_set_i* (*create_descriptor_set)(i3_rbk_device_o* self, const i3_rbk_descriptor_set_desc_t* desc);
 
     // create pipeline layout
     i3_rbk_pipeline_layout_i* (*create_pipeline_layout)(i3_rbk_device_o* self,

@@ -4,6 +4,7 @@
 #include "buffer.h"
 #include "cmd_buffer.h"
 #include "cmd_list.h"
+#include "descriptor_set.h"
 #include "descriptor_set_layout.h"
 #include "framebuffer.h"
 #include "image.h"
@@ -47,12 +48,16 @@ static void i3_vk_device_destroy(i3_rbk_device_o* self)
     i3_memory_pool_destroy(&device->image_pool);
     i3_memory_pool_destroy(&device->image_view_pool);
     i3_memory_pool_destroy(&device->descriptor_set_layout_pool);
+    i3_memory_pool_destroy(&device->descriptor_set_pool);
     i3_memory_pool_destroy(&device->pipeline_layout_pool);
     i3_memory_pool_destroy(&device->framebuffer_pool);
     i3_memory_pool_destroy(&device->shader_module_pool);
     i3_memory_pool_destroy(&device->pipeline_pool);
     i3_memory_pool_destroy(&device->cmd_buffer_pool);
     i3_memory_pool_destroy(&device->submission_pool);
+
+    // destroy descriptor pool
+    vkDestroyDescriptorPool(device->handle, device->descriptor_pool, NULL);
 
     // destroy command pool
     vkDestroyCommandPool(device->handle, device->cmd_pool, NULL);
@@ -73,6 +78,7 @@ static i3_vk_device_o i3_vk_device_iface_
                  .create_image = i3_vk_device_create_image,
                  .create_image_view = i3_vk_device_create_image_view,
                  .create_descriptor_set_layout = i3_vk_device_create_descriptor_set_layout,
+                 .create_descriptor_set = i3_vk_device_create_descriptor_set,
                  .create_pipeline_layout = i3_vk_device_create_pipeline_layout,
                  .create_framebuffer = i3_vk_device_create_framebuffer,
                  .create_shader_module = i3_vk_device_create_shader_module,
@@ -193,6 +199,31 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
     };
     i3_vk_check(vkCreateCommandPool(device->handle, &cmd_pool_ci, NULL, &device->cmd_pool));
 
+    // create descriptor pool
+    VkDescriptorPoolSize pool_sizes[] = {
+        {.type = VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, .descriptorCount = 1024},
+        {.type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, .descriptorCount = 1024},
+    };
+
+    VkDescriptorPoolCreateInfo desc_pool_ci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+        .maxSets = 1024,
+        .poolSizeCount = sizeof(pool_sizes) / sizeof(pool_sizes[0]),
+        .pPoolSizes = pool_sizes,
+    };
+
+    i3_vk_check(vkCreateDescriptorPool(device->handle, &desc_pool_ci, NULL, &device->descriptor_pool));
+
     // get graphics queue
     // TODO: handle queues
     vkGetDeviceQueue(device->handle, 0, 0, &device->graphics_queue);
@@ -221,6 +252,8 @@ i3_rbk_device_i* i3_vk_device_create(i3_vk_backend_o* backend, i3_vk_device_desc
                         I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->descriptor_set_layout_pool, i3_alignof(i3_vk_descriptor_set_layout_o),
                         sizeof(i3_vk_descriptor_set_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
+    i3_memory_pool_init(&device->descriptor_set_pool, i3_alignof(i3_vk_descriptor_set_o),
+                        sizeof(i3_vk_descriptor_set_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->pipeline_layout_pool, i3_alignof(i3_vk_pipeline_layout_o),
                         sizeof(i3_vk_pipeline_layout_o), I3_RESOURCE_BLOCK_CAPACITY);
     i3_memory_pool_init(&device->framebuffer_pool, i3_alignof(i3_vk_framebuffer_o), sizeof(i3_vk_framebuffer_o),

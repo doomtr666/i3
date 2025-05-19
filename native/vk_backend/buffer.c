@@ -1,6 +1,7 @@
 #include "buffer.h"
 
 // resource interface
+
 static void i3_vk_buffer_add_ref(i3_rbk_resource_o* self)
 {
     assert(self != NULL);
