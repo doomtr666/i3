@@ -564,16 +564,8 @@ typedef struct i3_rbk_descriptor_set_desc_t
 
 typedef struct i3_rbk_descriptor_set_o i3_rbk_descriptor_set_o;
 
-typedef struct i3_rbk_descriptor_set_i
-{
-    i3_rbk_descriptor_set_o* self;
-    i3_rbk_resource_i* (*get_resource)(i3_rbk_descriptor_set_o* self);
-    void (*destroy)(i3_rbk_descriptor_set_o* self);
-} i3_rbk_descriptor_set_i;
-
 typedef struct i3_rbk_descriptor_set_write_t
 {
-    i3_rbk_descriptor_set_i* descriptor_set;
     uint32_t binding;
     uint32_t array_element;
     i3_rbk_descriptor_type_t descriptor_type;
@@ -581,6 +573,14 @@ typedef struct i3_rbk_descriptor_set_write_t
     const i3_rbk_image_view_i* image;
     const i3_rbk_buffer_i* buffer;
 } i3_rbk_descriptor_set_write_t;
+
+typedef struct i3_rbk_descriptor_set_i
+{
+    i3_rbk_descriptor_set_o* self;
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_descriptor_set_o* self);
+    void (*update)(i3_rbk_descriptor_set_o* self, uint32_t write_count, const i3_rbk_descriptor_set_write_t* writes);
+    void (*destroy)(i3_rbk_descriptor_set_o* self);
+} i3_rbk_descriptor_set_i;
 
 // pipeline layout
 typedef struct i3_rbk_push_constant_range_t
@@ -880,9 +880,6 @@ typedef struct i3_rbk_cmd_buffer_i
                                  uint32_t descriptor_set_count,
                                  i3_rbk_descriptor_set_i** descriptor_sets);
 
-    void (*update_descriptor_sets)(i3_rbk_cmd_buffer_o* self,
-                                   uint32_t write_count,
-                                   const i3_rbk_descriptor_set_write_t* writes);
     void (*bind_pipeline)(i3_rbk_cmd_buffer_o* self, i3_rbk_pipeline_i* pipeline);
 
     void (*set_viewports)(i3_rbk_cmd_buffer_o* self,

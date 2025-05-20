@@ -1,5 +1,10 @@
+#include "native/core/arena.h"
+
+#include "buffer.h"
 #include "descriptor_set.h"
 #include "descriptor_set_layout.h"
+#include "image_view.h"
+#include "sampler.h"
 
 // resource interface
 static void i3_vk_descriptor_set_add_ref(i3_rbk_resource_o* self)
@@ -71,6 +76,83 @@ static void i3_vk_descriptor_set_destroy(i3_rbk_descriptor_set_o* self)
     descriptor_set->base.release((i3_rbk_resource_o*)self);
 }
 
+static void i3_vk_descriptor_set_update(i3_rbk_descriptor_set_o* self,
+                                        uint32_t write_count,
+                                        const i3_rbk_descriptor_set_write_t* writes)
+{
+    assert(self != NULL);
+    assert(writes != NULL);
+    assert(write_count > 0);
+
+    i3_vk_descriptor_set_o* descriptor_set = (i3_vk_descriptor_set_o*)self;
+    i3_vk_device_o* device = descriptor_set->device;
+
+    i3_arena_t arena;
+    i3_arena_init(&arena, I3_KB);
+
+    VkWriteDescriptorSet* vk_writes = i3_arena_alloc(&arena, sizeof(VkWriteDescriptorSet) * write_count);
+    VkDescriptorImageInfo* image_infos = i3_arena_alloc(&arena, sizeof(VkDescriptorImageInfo) * write_count);
+    VkDescriptorBufferInfo* buffer_infos = i3_arena_alloc(&arena, sizeof(VkDescriptorBufferInfo) * write_count);
+
+    for (uint32_t i = 0; i < write_count; i++)
+    {
+        const i3_rbk_descriptor_set_write_t* write = &writes[i];
+        VkWriteDescriptorSet* vk_write = &vk_writes[i];
+        *vk_write = (VkWriteDescriptorSet){
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = NULL,
+            .dstSet = descriptor_set->handle,
+            .dstBinding = write->binding,
+            .dstArrayElement = write->array_element,
+            .descriptorCount = 1,
+            .descriptorType = i3_vk_convert_descriptor_type(write->descriptor_type),
+        };
+
+        switch (write->descriptor_type)
+        {
+            case I3_RBK_DESCRIPTOR_TYPE_SAMPLER:
+                vk_write->pImageInfo = &image_infos[i];
+                image_infos[i] = (VkDescriptorImageInfo){
+                    .sampler = ((i3_vk_sampler_o*)write->sampler->self)->handle,
+                };
+                break;
+
+            case I3_RBK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+                vk_write->pImageInfo = &image_infos[i];
+                image_infos[i] = (VkDescriptorImageInfo){
+                    .sampler = ((i3_vk_sampler_o*)write->sampler->self)->handle,
+                    .imageView = ((i3_vk_image_view_o*)write->image->self)->handle,
+                    // TODO: .imageLayout = 0,
+                };
+                break;
+
+            case I3_RBK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            case I3_RBK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                vk_write->pImageInfo = &image_infos[i];
+                image_infos[i] = (VkDescriptorImageInfo){
+                    .imageView = ((i3_vk_image_view_o*)write->image->self)->handle,
+                    // TODO: .imageLayout = 0,
+                };
+                break;
+
+            case I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+            case I3_RBK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                vk_write->pBufferInfo = &buffer_infos[i];
+                buffer_infos[i] = (VkDescriptorBufferInfo){
+                    .buffer = ((i3_vk_buffer_o*)write->buffer->self)->handle,
+                    .range = ((i3_vk_buffer_o*)write->buffer->self)->desc.size,
+                };
+                break;
+            default:
+                assert(0);
+        }
+    }
+
+    vkUpdateDescriptorSets(device->handle, write_count, vk_writes, 0, NULL);
+
+    i3_arena_destroy(&arena);
+}
+
 static i3_vk_descriptor_set_o i3_vk_descriptor_set_iface_ = {
     .base = {
         .add_ref = i3_vk_descriptor_set_add_ref,
@@ -80,6 +162,7 @@ static i3_vk_descriptor_set_o i3_vk_descriptor_set_iface_ = {
     },
     .iface = {
         .get_resource = i3_vk_descriptor_set_get_resource,
+        .update = i3_vk_descriptor_set_update,
         .destroy = i3_vk_descriptor_set_destroy,
     },
 };

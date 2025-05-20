@@ -296,20 +296,14 @@ int main()
 
     i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
 
-#if 1
     // update descriptor set
-    cmd_buffer = device->create_cmd_buffer(device->self);
     i3_rbk_descriptor_set_write_t descriptor_set_write = {
-        .descriptor_set = descriptor_set,
         .binding = 0,
         .array_element = 0,
         .descriptor_type = I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .buffer = uniform_buffer,
     };
-    cmd_buffer->update_descriptor_sets(cmd_buffer->self, 1, &descriptor_set_write);
-    device->submit_cmd_buffers(device->self, &cmd_buffer, 1);
-    cmd_buffer->destroy(cmd_buffer->self);
-#endif
+    descriptor_set->update(descriptor_set->self, 1, &descriptor_set_write);
 
     i3_game_time_t game_time;
     i3_game_time_init(&game_time);

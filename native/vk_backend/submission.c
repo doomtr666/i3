@@ -92,17 +92,6 @@ void i3_vk_cmd_decode_bind_descriptor_sets(void* ctx, i3_vk_cmd_bind_descriptor_
                             cmd->descriptor_set_count, cmd->descriptor_sets, 0, NULL);
 }
 
-// update descriptor sets
-void i3_vk_cmd_decode_update_descriptor_sets(void* ctx, i3_vk_cmd_update_descriptor_sets_t* cmd)
-{
-    assert(ctx != NULL);
-    assert(cmd != NULL);
-
-    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
-
-    vkUpdateDescriptorSets(cmd_ctx->device, cmd->write_count, cmd->writes, 0, NULL);
-}
-
 // bind pipeline
 void i3_vk_cmd_decode_bind_pipeline(void* ctx, i3_vk_cmd_bind_pipeline_t* cmd)
 {
