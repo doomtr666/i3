@@ -98,9 +98,10 @@ i3_rbk_descriptor_set_i* i3_vk_device_create_descriptor_set(i3_rbk_device_o* sel
     descriptor_set->iface.self = (i3_rbk_descriptor_set_o*)descriptor_set;
     descriptor_set->device = device;
     descriptor_set->use_count = 1;
+    descriptor_set->layout = desc->layout;
 
     // retain the descriptor set layout
-    i3_rbk_resource_add_ref(desc->layout);
+    i3_rbk_resource_add_ref(descriptor_set->layout);
 
     VkDescriptorSetAllocateInfo alloc_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,

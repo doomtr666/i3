@@ -103,6 +103,7 @@ i3_rbk_descriptor_set_layout_i* i3_vk_device_create_descriptor_set_layout(
     // create layout
     VkDescriptorSetLayoutCreateInfo layout_ci = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = desc->binding_count,
     };
 
