@@ -177,7 +177,7 @@ int main()
     i3_rbk_pipeline_layout_i* pipeline_layout = device->create_pipeline_layout(device->self, &pipeline_layout_desc);
 
     // create shader module
-    FILE* file = fopen("samples/vk_draw_cubes/shaders.spv", "rb");
+    FILE* file = fopen("samples/vk_draw_cube/shaders.spv", "rb");
     if (file == NULL)
     {
         i3_log_err(vk_logger, "Failed to open shader file");

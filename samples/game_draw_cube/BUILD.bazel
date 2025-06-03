@@ -1,0 +1,9 @@
+cc_binary(
+    name = "game_draw_cube",
+    srcs = glob(["*.c"]),
+    #data = [":shaders"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//native/game",
+    ],
+)

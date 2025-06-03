@@ -6,7 +6,7 @@ slangc(
 )
 
 cc_binary(
-    name = "vk_draw_cubes",
+    name = "vk_draw_cube",
     srcs = glob(["*.c"]),
     data = [":shaders"],
     visibility = ["//visibility:public"],

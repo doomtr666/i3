@@ -1,0 +1,10 @@
+cc_library(
+    name = "game",
+    srcs = glob(["*.c"]),
+    hdrs = glob(["*.h"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//native/renderer",
+        "//native/vk_backend",
+    ],
+)

@@ -8,7 +8,7 @@ static inline void i3_array_init(i3_array_t* array, uint32_t element_size);
 static inline void i3_array_init_capacity(i3_array_t* array, uint32_t element_size, uint32_t capacity);
 static inline void i3_array_init_count(i3_array_t* array, uint32_t element_size, uint32_t count);
 static inline void i3_array_destroy(i3_array_t* array);
-static inline uint32_t i3_array_push(i3_array_t* array, void* element);
+static inline void i3_array_push(i3_array_t* array, void* element);
 static inline void i3_array_pop(i3_array_t* array);
 static inline void* i3_array_addn(i3_array_t* array, uint32_t count);
 static inline void i3_array_resize(i3_array_t* array, uint32_t new_count);
@@ -82,27 +82,21 @@ static inline void i3_array_destroy(i3_array_t* array)
     i3_free(array->data);
 }
 
-static inline uint32_t i3_array_push(i3_array_t* array, void* element)
+static inline void i3_array_push(i3_array_t* array, void* element)
 {
     assert(array != NULL);
     assert(element != NULL);
 
     i3_array_ensure_(array, array->count + 1);
-
-    memcpy((uint8_t*)array->data + array->count * array->element_size, element, array->element_size);
-
-    uint32_t index = array->count;
     array->count++;
-
-    return index;
+    memcpy(i3_array_at(array, array->count - 1), element, array->element_size);
 }
 
 static inline void i3_array_pop(i3_array_t* array)
 {
     assert(array != NULL);
-    assert(array->count > 0);
-
-    array->count--;
+    if (array->count > 0)
+        array->count--;
 }
 
 static inline void* i3_array_addn(i3_array_t* array, uint32_t count)
@@ -110,12 +104,8 @@ static inline void* i3_array_addn(i3_array_t* array, uint32_t count)
     assert(array != NULL);
 
     i3_array_ensure_(array, array->count + count);
-
-    void* data = (uint8_t*)array->data + array->count * array->element_size;
-
     array->count += count;
-
-    return data;
+    return i3_array_at(array, array->count - count);
 }
 
 static inline void i3_array_resize(i3_array_t* array, uint32_t new_count)
@@ -145,9 +135,11 @@ static inline void* i3_array_front(i3_array_t* array)
 static inline void* i3_array_back(i3_array_t* array)
 {
     assert(array != NULL);
-    assert(array->count > 0);
 
-    return (uint8_t*)array->data + (array->count - 1) * array->element_size;
+    if (array->count == 0)
+        return NULL;
+
+    return i3_array_at(array, array->count - 1);
 }
 
 static inline void i3_array_clear(i3_array_t* array)
