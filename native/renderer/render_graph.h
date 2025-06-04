@@ -1,5 +1,6 @@
 #pragma once
 
+#include "native/core/time.h"
 #include "native/render_backend/render_backend.h"
 
 typedef struct i3_render_pass_o i3_render_pass_o;
@@ -40,6 +41,9 @@ struct i3_render_graph_i
 {
     i3_render_graph_o* self;
 
+    void (*resolution_change)(i3_render_graph_i* self);
+    void (*update)(i3_render_graph_i* self);
+    void (*render)(i3_render_graph_i* self);
     void (*destroy)(i3_render_graph_o* self);
 };
 

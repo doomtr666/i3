@@ -11,12 +11,15 @@ struct i3_render_window_i
 {
     i3_render_window_o* self;
 
-    // vulkan surface
-    void* (*get_vk_surface)(i3_render_window_o* self);
-
     void* (*get_native_handle)(i3_render_window_o* self);
+
+    void (*get_render_size)(i3_render_window_o* self, uint32_t* width, uint32_t* height);
+
     bool (*should_close)(i3_render_window_o* self);
     void (*destroy)(i3_render_window_o* self);
+
+    // vulkan specific
+    void* (*get_vk_surface)(i3_render_window_o* self);
 };
 
 I3_EXPORT i3_render_window_i* i3_render_window_create_vulkan(void* vk_instance,

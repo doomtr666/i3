@@ -36,19 +36,20 @@ static void i3_render_window_glfw_error_callback(int error_code, const char* des
     i3_log_err(log, "GLFW error %d: %s", error_code, description);
 }
 
-static void* i3_render_window_get_vk_surface(i3_render_window_o* self)
-{
-    assert(self != NULL);
-    if (self->api != I3_RENDER_WINDOW_API_VULKAN)
-        return NULL;
-    return self->surface;
-}
-
 static void* i3_render_window_get_native_handle(i3_render_window_o* self)
 {
     assert(self != NULL);
 
     return glfwGetWin32Window(self->window);
+}
+
+static void i3_render_window_get_render_size(i3_render_window_o* self, uint32_t* width, uint32_t* height)
+{
+    assert(self != NULL);
+    assert(width != NULL);
+    assert(height != NULL);
+
+    glfwGetFramebufferSize(self->window, (int*)width, (int*)height);
 }
 
 static bool i3_render_window_should_close(i3_render_window_o* self)
@@ -69,11 +70,21 @@ static void i3_render_window_destroy(i3_render_window_o* self)
     i3_free(self);
 }
 
-static i3_render_window_i render_window_iface_ = {.self = NULL,
-                                                  .get_vk_surface = i3_render_window_get_vk_surface,
-                                                  .get_native_handle = i3_render_window_get_native_handle,
-                                                  .should_close = i3_render_window_should_close,
-                                                  .destroy = i3_render_window_destroy};
+static void* i3_render_window_get_vk_surface(i3_render_window_o* self)
+{
+    assert(self != NULL);
+    if (self->api != I3_RENDER_WINDOW_API_VULKAN)
+        return NULL;
+    return self->surface;
+}
+
+static i3_render_window_i render_window_iface_ = {
+    .get_native_handle = i3_render_window_get_native_handle,
+    .get_render_size = i3_render_window_get_render_size,
+    .should_close = i3_render_window_should_close,
+    .destroy = i3_render_window_destroy,
+    .get_vk_surface = i3_render_window_get_vk_surface,
+};
 
 static void i3_render_window_init_glfw()
 {

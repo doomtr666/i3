@@ -85,6 +85,51 @@ struct i3_render_graph_o
     i3_array_t renders;             // array of render handlers
 };
 
+static void i3_render_graph_resolution_change(i3_render_graph_i* self)
+{
+    assert(self != NULL);
+    i3_render_graph_o* graph = (i3_render_graph_o*)self->self;
+
+    // call all resolution change handlers
+    for (uint32_t i = 0; i < i3_array_count(&graph->resolution_changes); ++i)
+    {
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&graph->resolution_changes, i);
+        assert(pass != NULL);
+        if (pass->desc.resolution_change != NULL)
+            pass->desc.resolution_change(&pass->iface);
+    }
+}
+
+static void i3_render_graph_update(i3_render_graph_i* self)
+{
+    assert(self != NULL);
+    i3_render_graph_o* graph = (i3_render_graph_o*)self->self;
+
+    // call all update handlers
+    for (uint32_t i = 0; i < i3_array_count(&graph->updates); ++i)
+    {
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&graph->updates, i);
+        assert(pass != NULL);
+        if (pass->desc.update != NULL)
+            pass->desc.update(&pass->iface);
+    }
+}
+
+static void i3_render_graph_render(i3_render_graph_i* self)
+{
+    assert(self != NULL);
+    i3_render_graph_o* graph = (i3_render_graph_o*)self->self;
+
+    // call all render handlers
+    for (uint32_t i = 0; i < i3_array_count(&graph->renders); ++i)
+    {
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&graph->renders, i);
+        assert(pass != NULL);
+        if (pass->desc.render != NULL)
+            pass->desc.render(&pass->iface);
+    }
+}
+
 static void i3_render_graph_destroy(i3_render_graph_o* self)
 {
     assert(self != NULL);
@@ -111,6 +156,9 @@ static i3_render_graph_o i3_render_graph_iface_ =
 {
     .iface =
     {
+        .resolution_change = i3_render_graph_resolution_change,
+        .update = i3_render_graph_update,
+        .render = i3_render_graph_render,
         .destroy = i3_render_graph_destroy, // to be implemented later
     },
 };
@@ -180,15 +228,15 @@ static void i3_render_graph_builder_build_r(i3_render_graph_o* graph, i3_render_
 
     // Check if the pass has a resolution change handler
     if (pass->desc.resolution_change != NULL)
-        i3_array_push(&graph->resolution_changes, &pass->iface);
+        i3_array_push(&graph->resolution_changes, pass);
 
     // Check if the pass has an update handler
     if (pass->desc.update != NULL)
-        i3_array_push(&graph->updates, &pass->iface);
+        i3_array_push(&graph->updates, pass);
 
     // Check if the pass has a render handler
     if (pass->desc.render != NULL)
-        i3_array_push(&graph->renders, &pass->iface);
+        i3_array_push(&graph->renders, pass);
 
     // Recursively build the children passes
     for (uint32_t i = 0; i < i3_array_count(&pass->children); ++i)
@@ -210,9 +258,9 @@ static i3_render_graph_i* i3_render_graph_builder_build(i3_render_graph_builder_
     graph->iface.self = graph;
 
     i3_array_init(&graph->passes, sizeof(i3_render_pass_o*));
-    i3_array_init(&graph->resolution_changes, sizeof(i3_render_pass_i*));
-    i3_array_init(&graph->updates, sizeof(i3_render_pass_i*));
-    i3_array_init(&graph->renders, sizeof(i3_render_pass_i*));
+    i3_array_init(&graph->resolution_changes, sizeof(i3_render_pass_o*));
+    i3_array_init(&graph->updates, sizeof(i3_render_pass_o*));
+    i3_array_init(&graph->renders, sizeof(i3_render_pass_o*));
 
     // build the graph recursively
     i3_render_graph_builder_build_r(graph, self->root);

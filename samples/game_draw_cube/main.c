@@ -59,7 +59,6 @@ static void init(i3_game_i* game)
 }
 
 static void update(i3_game_i* game, i3_game_time_t* game_time) {}
-static void render(i3_game_i* game, i3_game_time_t* game_time) {}
 
 static void cleanup(i3_game_i* game)
 {
@@ -80,7 +79,6 @@ int main()
         .user_data = &context,
         .init = init,
         .update = update,
-        .render = render,
         .cleanup = cleanup,
     };
 

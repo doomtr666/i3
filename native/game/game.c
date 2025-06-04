@@ -79,9 +79,8 @@ static void i3_game_run(i3_game_o* self)
         if (self->desc.update)
             self->desc.update(&self->iface, &game_time);
 
-        // render the game
-        if (self->desc.render)
-            self->desc.render(&self->iface, &game_time);
+        // render
+        self->renderer->render(self->renderer->self, &game_time);
 
         // process window events
         i3_render_window_poll_events();
@@ -123,12 +122,12 @@ i3_game_i* i3_game_create(i3_game_desc_t* desc)
     // create the render backend, vulkan only for now
     game->backend = i3_vk_backend_create();
 
-    // create the renderer
-    game->renderer = i3_renderer_create(game->backend);
-
     // create the render window
     game->window = game->backend->create_render_window(game->backend->self,
                                                        game->desc.name ? game->desc.name : "I3 Game", 800, 600);
+
+    // create the renderer
+    game->renderer = i3_renderer_create(game->backend, game->window);
 
     i3_log_inf(game->log, "Game created");
 

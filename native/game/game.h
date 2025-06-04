@@ -15,7 +15,6 @@ typedef struct i3_game_desc_t
     void* user_data;
     void (*init)(i3_game_i* game);
     void (*update)(i3_game_i* game, i3_game_time_t* game_time);
-    void (*render)(i3_game_i* game, i3_game_time_t* game_time);
     void (*cleanup)(i3_game_i* game);
 
 } i3_game_desc_t;
