@@ -5,7 +5,7 @@
 typedef struct i3_hashtable_t i3_hashtable_t;
 
 static inline void i3_hashtable_init(i3_hashtable_t* ht);
-static inline void i3_hashtable_free(i3_hashtable_t* ht);
+static inline void i3_hashtable_destroy(i3_hashtable_t* ht);
 static inline void i3_hashtable_clear(i3_hashtable_t* ht);
 static inline bool i3_hashtable_insert_hash(i3_hashtable_t* ht,
                                             uint32_t hash,
@@ -95,7 +95,7 @@ static inline void i3_hashtable_init(i3_hashtable_t* ht)
     ht->count = 0;
 }
 
-static inline void i3_hashtable_free(i3_hashtable_t* ht)
+static inline void i3_hashtable_destroy(i3_hashtable_t* ht)
 {
     assert(ht != NULL);
 

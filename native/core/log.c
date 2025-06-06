@@ -101,7 +101,7 @@ static void i3_destroy_loggers(void)
     }
 
     // destroy hashtable
-    i3_hashtable_free(&i3_loggers_->loggers_table);
+    i3_hashtable_destroy(&i3_loggers_->loggers_table);
 
     i3_free(i3_loggers_);
     i3_loggers_ = NULL;

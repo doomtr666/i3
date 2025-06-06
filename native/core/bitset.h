@@ -16,7 +16,7 @@ typedef uint64_t i3_bitset_t;
 #define i3_bitset_index(pos) ((pos) >> i3_bitset_shift)
 
 // offset in one element of the bit
-#define i3_bitset_offset(pos) ((pos) & ((i3_bitset_bit_size)-1))
+#define i3_bitset_offset(pos) ((pos) & ((i3_bitset_bit_size) - 1))
 
 // value zero for the bitset
 #define i3_bitset_zero ((i3_bitset_t)0)
@@ -25,7 +25,7 @@ typedef uint64_t i3_bitset_t;
 #define i3_bitset_one ((i3_bitset_t)1)
 
 // max value for the bitset (all one bits)
-#define i3_bitset_max_val ((i3_bitset_t)-1)
+#define i3_bitset_max_val ((i3_bitset_t) - 1)
 
 // bit rotation
 static inline uint32_t i3_bit_ror32(uint32_t x, uint32_t r)
@@ -33,7 +33,7 @@ static inline uint32_t i3_bit_ror32(uint32_t x, uint32_t r)
 #if I3_PLATFORM == I3_PLATFORM_WINDOWS
     return _rotr(x, r);
 #else
-    // naive implementation 
+    // naive implementation
     return (x >> r) | (x << (32 - r));
 #endif
 }
@@ -43,7 +43,7 @@ static inline uint32_t i3_bit_rol32(uint32_t x, uint32_t r)
 #if I3_PLATFORM == I3_PLATFORM_WINDOWS
     return _rotl(x, r);
 #else
-    // naive implementation 
+    // naive implementation
     return (x << r) | (x >> (32 - r));
 #endif
 }
@@ -56,7 +56,8 @@ static inline uint32_t i3_bitcount64(uint64_t x)
 #else
     // naive implementation
     uint32_t count;
-    for (count = 0; x; count += x & 1, x >>= 1);
+    for (count = 0; x; count += x & 1, x >>= 1)
+        ;
     return count;
 #endif
 }

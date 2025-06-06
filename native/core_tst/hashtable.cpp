@@ -10,7 +10,7 @@ TEST(hashtable, create_destroy)
     i3_hashtable_t ht;
     i3_hashtable_init(&ht);
     EXPECT_EQ(i3_hashtable_count(&ht), 0);
-    i3_hashtable_free(&ht);
+    i3_hashtable_destroy(&ht);
 }
 
 TEST(hashtable, insert_find_remove)
@@ -46,7 +46,7 @@ TEST(hashtable, insert_find_remove)
     i3_hashtable_remove(&ht, &c, sizeof(int));
     EXPECT_EQ(i3_hashtable_find(&ht, &c, sizeof(int)), nullptr);
 
-    i3_hashtable_free(&ht);
+    i3_hashtable_destroy(&ht);
 }
 
 TEST(hashtable, clear)
@@ -72,7 +72,7 @@ TEST(hashtable, clear)
     EXPECT_EQ(i3_hashtable_find(&ht, &b, sizeof(int)), nullptr);
     EXPECT_EQ(i3_hashtable_find(&ht, &c, sizeof(int)), nullptr);
 
-    i3_hashtable_free(&ht);
+    i3_hashtable_destroy(&ht);
 }
 
 TEST(hashtable, count)
@@ -104,7 +104,7 @@ TEST(hashtable, count)
     i3_hashtable_remove(&ht, &c, sizeof(int));
     EXPECT_EQ(i3_hashtable_count(&ht), 0);
 
-    i3_hashtable_free(&ht);
+    i3_hashtable_destroy(&ht);
 }
 
 // insert find large number of elements to force hashtable to grow
@@ -129,7 +129,7 @@ TEST(hashtable, insert_find_large)
         EXPECT_EQ(*(int*)i3_hashtable_find(&ht, &values[i], sizeof(int)), values[i]);
     }
 
-    i3_hashtable_free(&ht);
+    i3_hashtable_destroy(&ht);
 
     delete[] values;
 }
