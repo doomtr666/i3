@@ -1,16 +1,6 @@
 #pragma once
 
-#include "native/core/time.h"
-#include "native/render_backend/render_backend.h"
-
-typedef struct i3_render_pass_o i3_render_pass_o;
-typedef struct i3_render_pass_i i3_render_pass_i;
-
-typedef struct i3_render_graph_o i3_render_graph_o;
-typedef struct i3_render_graph_i i3_render_graph_i;
-
-typedef struct i3_render_graph_builder_o i3_render_graph_builder_o;
-typedef struct i3_render_graph_builder_i i3_render_graph_builder_i;
+#include "render_context.h"
 
 typedef struct i3_render_pass_desc_t
 {
@@ -23,27 +13,34 @@ typedef struct i3_render_pass_desc_t
     void (*resolution_change)(i3_render_pass_i* self);
     void (*update)(i3_render_pass_i* self);
     void (*render)(i3_render_pass_i* self);
-
 } i3_render_pass_desc_t;
 
 struct i3_render_pass_i
 {
     i3_render_pass_o* self;
 
-    const i3_render_pass_desc_t* (*get_desc)(i3_render_pass_i* self);
-    void* (*get_user_data)(i3_render_pass_i* self);
-    void (*set_user_data)(i3_render_pass_i* self, void* user_data);
+    const i3_render_pass_desc_t* (*get_desc)(i3_render_pass_o* self);
 
-    void (*destroy)(i3_render_pass_i* self);
+    i3_render_backend_i* (*get_backend)(i3_render_pass_o* self);
+    i3_render_window_i* (*get_window)(i3_render_pass_o* self);
+    i3_renderer_i* (*get_renderer)(i3_render_pass_o* self);
+    void (*get_render_size)(i3_render_pass_o* self, uint32_t* width, uint32_t* height);
+    i3_game_time_t* (*get_game_time)(i3_render_pass_o* self);
+
+    void* (*get_user_data)(i3_render_pass_o* self);
+    void (*set_user_data)(i3_render_pass_o* self, void* user_data);
+    void (*destroy)(i3_render_pass_o* self);
 };
 
 struct i3_render_graph_i
 {
     i3_render_graph_o* self;
 
-    void (*resolution_change)(i3_render_graph_i* self);
-    void (*update)(i3_render_graph_i* self);
-    void (*render)(i3_render_graph_i* self);
+    void (*set_render_context)(i3_render_graph_o* self, i3_render_context_t* context);
+
+    void (*resolution_change)(i3_render_graph_o* self);
+    void (*update)(i3_render_graph_o* self);
+    void (*render)(i3_render_graph_o* self);
     void (*destroy)(i3_render_graph_o* self);
 };
 

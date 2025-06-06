@@ -8,45 +8,42 @@ struct i3_render_pass_o
     i3_render_pass_i iface;
     i3_render_pass_desc_t desc;
 
+    i3_render_context_t* context;
     i3_render_pass_o* parent;
     i3_array_t children;  // array of child passes
 };
 
-static const i3_render_pass_desc_t* i3_render_pass_get_desc(i3_render_pass_i* self)
+static const i3_render_pass_desc_t* i3_render_pass_get_desc(i3_render_pass_o* self)
 {
     assert(self != NULL);
-    i3_render_pass_o* pass = (i3_render_pass_o*)self->self;
-    return &pass->desc;
+    return &self->desc;
 }
 
-static void* i3_render_pass_get_user_data(i3_render_pass_i* self)
+static void* i3_render_pass_get_user_data(i3_render_pass_o* self)
 {
     assert(self != NULL);
-    i3_render_pass_o* pass = (i3_render_pass_o*)self->self;
-    return pass->desc.user_data;
+    return self->desc.user_data;
 }
 
-static void i3_render_pass_set_user_data(i3_render_pass_i* self, void* user_data)
+static void i3_render_pass_set_user_data(i3_render_pass_o* self, void* user_data)
 {
     assert(self != NULL);
-    i3_render_pass_o* pass = (i3_render_pass_o*)self->self;
-    pass->desc.user_data = user_data;
+    self->desc.user_data = user_data;
 }
 
-static void i3_render_pass_destroy(i3_render_pass_i* self)
+static void i3_render_pass_destroy(i3_render_pass_o* self)
 {
     assert(self != NULL);
-    i3_render_pass_o* pass = (i3_render_pass_o*)self->self;
 
     // Call the custom destroy function if provided
-    if (pass->desc.destroy != NULL)
-        pass->desc.destroy(self);
+    if (self->desc.destroy != NULL)
+        self->desc.destroy(&self->iface);
 
     // Clear the children array
-    i3_array_clear(&pass->children);
+    i3_array_destroy(&self->children);
 
     // Free the pass itself
-    i3_free(pass);
+    i3_free(self);
 }
 
 static i3_render_pass_o i3_render_pass_iface_ =
@@ -69,6 +66,7 @@ static i3_render_pass_o* i3_render_pass_create(i3_render_pass_desc_t* desc)
 
     *pass = i3_render_pass_iface_;
     pass->iface.self = pass;
+    pass->desc = *desc;  // copy the pass description
 
     i3_array_init(&pass->children, sizeof(i3_render_pass_o*));
 
@@ -85,45 +83,56 @@ struct i3_render_graph_o
     i3_array_t renders;             // array of render handlers
 };
 
-static void i3_render_graph_resolution_change(i3_render_graph_i* self)
+static void i3_render_graph_set_render_context(i3_render_graph_o* self, i3_render_context_t* context)
 {
     assert(self != NULL);
-    i3_render_graph_o* graph = (i3_render_graph_o*)self->self;
+    assert(context != NULL);
+
+    // Set the render context for all passes
+    for (uint32_t i = 0; i < i3_array_count(&self->passes); ++i)
+    {
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&self->passes, i);
+        assert(pass != NULL);
+        pass->context = context;
+    }
+}
+
+static void i3_render_graph_resolution_change(i3_render_graph_o* self)
+{
+    assert(self != NULL);
 
     // call all resolution change handlers
-    for (uint32_t i = 0; i < i3_array_count(&graph->resolution_changes); ++i)
+    for (uint32_t i = 0; i < i3_array_count(&self->resolution_changes); ++i)
     {
-        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&graph->resolution_changes, i);
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&self->resolution_changes, i);
         assert(pass != NULL);
         if (pass->desc.resolution_change != NULL)
             pass->desc.resolution_change(&pass->iface);
     }
 }
 
-static void i3_render_graph_update(i3_render_graph_i* self)
+static void i3_render_graph_update(i3_render_graph_o* self)
 {
     assert(self != NULL);
-    i3_render_graph_o* graph = (i3_render_graph_o*)self->self;
 
     // call all update handlers
-    for (uint32_t i = 0; i < i3_array_count(&graph->updates); ++i)
+    for (uint32_t i = 0; i < i3_array_count(&self->updates); ++i)
     {
-        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&graph->updates, i);
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&self->updates, i);
         assert(pass != NULL);
         if (pass->desc.update != NULL)
             pass->desc.update(&pass->iface);
     }
 }
 
-static void i3_render_graph_render(i3_render_graph_i* self)
+static void i3_render_graph_render(i3_render_graph_o* self)
 {
     assert(self != NULL);
-    i3_render_graph_o* graph = (i3_render_graph_o*)self->self;
 
     // call all render handlers
-    for (uint32_t i = 0; i < i3_array_count(&graph->renders); ++i)
+    for (uint32_t i = 0; i < i3_array_count(&self->renders); ++i)
     {
-        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&graph->renders, i);
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&self->renders, i);
         assert(pass != NULL);
         if (pass->desc.render != NULL)
             pass->desc.render(&pass->iface);
@@ -139,7 +148,7 @@ static void i3_render_graph_destroy(i3_render_graph_o* self)
     {
         i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&self->passes, i);
         assert(pass != NULL);
-        pass->iface.destroy(&pass->iface);
+        pass->iface.destroy(pass);
     }
 
     // clear the passes arrays
@@ -156,10 +165,11 @@ static i3_render_graph_o i3_render_graph_iface_ =
 {
     .iface =
     {
+        .set_render_context = i3_render_graph_set_render_context,
         .resolution_change = i3_render_graph_resolution_change,
         .update = i3_render_graph_update,
         .render = i3_render_graph_render,
-        .destroy = i3_render_graph_destroy, // to be implemented later
+        .destroy = i3_render_graph_destroy,
     },
 };
 
@@ -174,12 +184,6 @@ struct i3_render_graph_builder_o
     i3_array_t pass_stack;
 };
 
-static void i3_render_graph_builder_add_pass(i3_render_graph_builder_o* self, i3_render_pass_desc_t* desc)
-{
-    assert(self != NULL);
-    assert(desc != NULL);
-}
-
 static void i3_render_graph_builder_begin_pass(i3_render_graph_builder_o* self, i3_render_pass_desc_t* desc)
 {
     assert(self != NULL);
@@ -190,11 +194,11 @@ static void i3_render_graph_builder_begin_pass(i3_render_graph_builder_o* self, 
     assert(pass != NULL);
 
     // init parent
-    pass->parent = i3_array_back(&self->pass_stack);
-
-    // Add the new pass to the parent's children
-    if (pass->parent != NULL)
+    if (i3_array_count(&self->pass_stack) != 0)
+    {
+        pass->parent = *((i3_render_pass_o**)i3_array_back(&self->pass_stack));
         i3_array_push(&pass->parent->children, pass);
+    }
     else
     {
         if (self->root == NULL)
@@ -210,6 +214,16 @@ static void i3_render_graph_builder_begin_pass(i3_render_graph_builder_o* self, 
 static void i3_render_graph_builder_end_pass(i3_render_graph_builder_o* self)
 {
     assert(self != NULL);
+    i3_array_pop(&self->pass_stack);
+}
+
+static void i3_render_graph_builder_add_pass(i3_render_graph_builder_o* self, i3_render_pass_desc_t* desc)
+{
+    assert(self != NULL);
+    assert(desc != NULL);
+
+    i3_render_graph_builder_begin_pass(self, desc);
+    i3_render_graph_builder_end_pass(self);
 }
 
 static void i3_render_graph_builder_build_r(i3_render_graph_o* graph, i3_render_pass_o* pass)
