@@ -28,6 +28,50 @@ static void i3_renderer_set_render_graph(i3_renderer_o* self, i3_render_graph_i*
     self->context.render_height = 0;
 }
 
+static void i3_renderer_create_render_target(i3_renderer_o* self,
+                                             i3_render_target_t* target,
+                                             i3_rbk_image_desc_t* image_desc,
+                                             i3_rbk_image_view_desc_t* view_desc)
+{
+    assert(self != NULL);
+    assert(target != NULL);
+    assert(image_desc != NULL);
+    assert(view_desc != NULL);
+
+    // release image view if it exists
+    if (target->image_view != NULL)
+        target->image_view->destroy(target->image_view->self);
+    // release image if it exists
+    if (target->image != NULL)
+        target->image->destroy(target->image->self);
+
+    // create the image
+    target->image = self->context.device->create_image(self->context.device->self, image_desc);
+
+    // create the image view
+    target->image_view = self->context.device->create_image_view(self->context.device->self, target->image, view_desc);
+}
+
+static void i3_renderer_destroy_render_target(i3_renderer_o* self, i3_render_target_t* target)
+{
+    assert(self != NULL);
+    assert(target != NULL);
+
+    // release image view if it exists
+    if (target->image_view != NULL)
+    {
+        target->image_view->destroy(target->image_view->self);
+        target->image_view = NULL;
+    }
+
+    // release image if it exists
+    if (target->image != NULL)
+    {
+        target->image->destroy(target->image->self);
+        target->image = NULL;
+    }
+}
+
 static void i3_renderer_render(i3_renderer_o* self, i3_game_time_t* game_time)
 {
     assert(self != NULL);
@@ -66,6 +110,10 @@ static void i3_renderer_render(i3_renderer_o* self, i3_game_time_t* game_time)
 static void i3_renderer_destroy(i3_renderer_o* self)
 {
     assert(self != NULL);
+
+    // destroy the device
+    self->context.device->destroy(self->context.device->self);
+
     i3_free(self);
 }
 
@@ -75,6 +123,8 @@ static i3_renderer_o i3_renderer_iface_ =
     {
         .create_graph_builder = i3_render_create_graph_builder,
         .set_render_graph = i3_renderer_set_render_graph,
+        .create_render_target = i3_renderer_create_render_target,
+        .destroy_render_target = i3_renderer_destroy_render_target,
         .render = i3_renderer_render,
         .destroy = i3_renderer_destroy,
     },
@@ -89,9 +139,14 @@ i3_renderer_i* i3_renderer_create(i3_render_backend_i* backend, i3_render_window
 
     *renderer = i3_renderer_iface_;
     renderer->iface.self = renderer;
+
+    // create the backend device
+    i3_rbk_device_i* device = backend->create_device(backend->self, 0);
+
     renderer->context = (i3_render_context_t){
         .backend = backend,
         .window = window,
+        .device = device,
         .renderer = &renderer->iface,
     };
 

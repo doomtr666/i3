@@ -1,5 +1,6 @@
 #pragma once
 
+#include "native/core/blackboard.h"
 #include "native/core/time.h"
 #include "native/render_backend/render_backend.h"
 
@@ -19,6 +20,7 @@ typedef struct i3_render_context_t
 {
     i3_render_backend_i* backend;
     i3_render_window_i* window;
+    i3_rbk_device_i* device;
     i3_renderer_i* renderer;
     i3_render_graph_i* render_graph;
     uint32_t render_width, render_height;

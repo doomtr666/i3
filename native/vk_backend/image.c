@@ -114,9 +114,12 @@ i3_rbk_image_i* i3_vk_device_create_image(i3_rbk_device_o* self, const i3_rbk_im
     image->desc = *desc;
     image->use_count = 1;
 
+    // convert image format
+    VkFormat format = i3_vk_convert_format(desc->format);
+
     VkImageUsageFlags usage
         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (i3_vk_is_depth_format(desc->format))
+    if (i3_vk_is_depth_format(format))
         usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     else
         usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -124,7 +127,7 @@ i3_rbk_image_i* i3_vk_device_create_image(i3_rbk_device_o* self, const i3_rbk_im
     // image info
     VkImageCreateInfo image_ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                                   .imageType = i3_vk_convert_image_type(desc->type),
-                                  .format = i3_vk_convert_format(desc->format),
+                                  .format = format,
                                   .extent = {.width = desc->width, .height = desc->height, .depth = desc->depth},
                                   .mipLevels = desc->mip_levels,
                                   .arrayLayers = desc->array_layers,
