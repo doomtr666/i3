@@ -117,6 +117,7 @@ i3_rbk_image_i* i3_vk_device_create_image(i3_rbk_device_o* self, const i3_rbk_im
     // convert image format
     VkFormat format = i3_vk_convert_format(desc->format);
 
+    // infer image usage flags
     VkImageUsageFlags usage
         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (i3_vk_is_depth_format(format))

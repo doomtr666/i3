@@ -19,6 +19,9 @@ struct i3_renderer_i
     i3_render_graph_builder_i* (*create_graph_builder)(i3_renderer_o* self);
     void (*set_render_graph)(i3_renderer_o* self, i3_render_graph_i* graph);
 
+    // setup default render passes
+    void (*setup_default_passes)(i3_renderer_o* self, i3_render_graph_builder_i* graph_builder);
+
     // create render target, this will create an image and a view for the render target
     // if the image and view already exist, it will be recreated
     void (*create_render_target)(i3_renderer_o* self,

@@ -1,12 +1,15 @@
 #include "renderer.h"
 
+#include "passes/deferred_root.h"
+#include "passes/gbuffer_pass.h"
+
 struct i3_renderer_o
 {
     i3_renderer_i iface;
     i3_render_context_t context;
 };
 
-static i3_render_graph_builder_i* i3_render_create_graph_builder(i3_renderer_o* self)
+static i3_render_graph_builder_i* i3_renderer_create_graph_builder(i3_renderer_o* self)
 {
     assert(self != NULL);
 
@@ -26,6 +29,18 @@ static void i3_renderer_set_render_graph(i3_renderer_o* self, i3_render_graph_i*
     // reset the window size to 0, to trigger a resolution change next render
     self->context.render_width = 0;
     self->context.render_height = 0;
+}
+
+// setup default render passes
+static void i3_renderer_setup_default_passes(i3_renderer_o* self, i3_render_graph_builder_i* graph_builder)
+{
+    assert(self != NULL);
+    assert(graph_builder != NULL);
+
+    // create an extensible graph, based on the default passes
+    graph_builder->begin_pass(graph_builder->self, NULL, i3_renderer_get_deferred_root_pass_desc());
+    graph_builder->add_pass(graph_builder->self, NULL, i3_renderer_get_gbuffer_pass_desc());
+    graph_builder->end_pass(graph_builder->self);
 }
 
 static void i3_renderer_create_render_target(i3_renderer_o* self,
@@ -121,8 +136,9 @@ static i3_renderer_o i3_renderer_iface_ =
 {
     .iface =
     {
-        .create_graph_builder = i3_render_create_graph_builder,
+        .create_graph_builder = i3_renderer_create_graph_builder,
         .set_render_graph = i3_renderer_set_render_graph,
+        .setup_default_passes = i3_renderer_setup_default_passes,
         .create_render_target = i3_renderer_create_render_target,
         .destroy_render_target = i3_renderer_destroy_render_target,
         .render = i3_renderer_render,

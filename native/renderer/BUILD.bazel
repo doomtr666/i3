@@ -1,10 +1,17 @@
 cc_library(
     name = "renderer",
-    srcs = glob(["*.c"]),
-    hdrs = glob(["*.h"]),
+    srcs = glob([
+        "*.c",
+        "passes/*.c",
+    ]),
+    hdrs = glob([
+        "*.h",
+        "passes/*.h",
+    ]),
     visibility = ["//visibility:public"],
     deps = [
         "//native/core",
+        "//native/math",
         "//native/render_backend",
     ],
 )

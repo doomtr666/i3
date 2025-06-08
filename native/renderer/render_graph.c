@@ -311,7 +311,7 @@ static void i3_render_graph_builder_begin_pass(i3_render_graph_builder_o* self,
     {
         // Check if the parent pass exists in the pass table
         parent = (i3_render_pass_o*)i3_hashtable_find(&self->pass_table, parent_name, strlen(parent_name));
-        assert(false && "Parent pass not found in the pass table.");
+        assert(parent != NULL && "Parent pass not found in the pass table.");
     }
     else if (i3_array_count(&self->pass_stack) > 0)
     {
