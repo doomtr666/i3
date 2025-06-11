@@ -27,6 +27,10 @@ struct i3_render_pass_i
     void (*get_render_size)(i3_render_pass_o* self, uint32_t* width, uint32_t* height);
     i3_game_time_t* (*get_game_time)(i3_render_pass_o* self);
 
+    // cmd buffers
+    i3_rbk_cmd_buffer_i* (*get_cmd_buffer)(i3_render_pass_o* self);
+    void (*submit_cmd_buffers)(i3_render_pass_o* self, uint32_t cmd_buffer_count, i3_rbk_cmd_buffer_i** cmd_buffers);
+
     void* (*get_user_data)(i3_render_pass_o* self);
     void (*set_user_data)(i3_render_pass_o* self, void* user_data);
 
@@ -41,15 +45,13 @@ struct i3_render_graph_i
 {
     i3_render_graph_o* self;
 
-    void (*set_render_context)(i3_render_graph_o* self, i3_render_context_t* context);
-
     void (*resolution_change)(i3_render_graph_o* self);
     void (*update)(i3_render_graph_o* self);
     void (*render)(i3_render_graph_o* self);
 
     // blackboard
-    bool (*put)(i3_render_pass_o* self, const char* key, void* data, uint32_t size);
-    bool (*get)(i3_render_pass_o* self, const char* key, void* data);
+    bool (*put)(i3_render_graph_o* self, const char* key, void* data, uint32_t size);
+    bool (*get)(i3_render_graph_o* self, const char* key, void* data);
 
     void (*destroy)(i3_render_graph_o* self);
 };
@@ -67,4 +69,4 @@ struct i3_render_graph_builder_i
     void (*destroy)(i3_render_graph_builder_o* self);
 };
 
-i3_render_graph_builder_i* i3_render_graph_builder_create(i3_render_backend_i* backend);
+i3_render_graph_builder_i* i3_render_graph_builder_create(i3_render_context_t* context);

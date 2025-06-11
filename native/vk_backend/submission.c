@@ -324,8 +324,8 @@ void i3_vk_submission_resolve_barriers(i3_vk_submission_t* submission, i3_rbk_cm
 }
 
 void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
-                                     i3_rbk_cmd_buffer_i** cmd_buffers,
-                                     uint32_t cmd_buffer_count)
+                                     uint32_t cmd_buffer_count,
+                                     i3_rbk_cmd_buffer_i** cmd_buffers)
 {
     assert(self != NULL);
     assert(cmd_buffers != NULL);
@@ -337,8 +337,7 @@ void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
     // allocate a submission
     i3_vk_submission_t* submission = i3_vk_submission_alloc(device);
 
-    // resolve barriers
-    // this loop has a dependency on the order of command buffers in the submission
+    // resolve barriers: this loop has a dependency on the order of command buffers in the submission
     for (uint32_t j = 0; j < cmd_buffer_count; ++j)
     {
         i3_rbk_cmd_buffer_i* cmd_buffer = cmd_buffers[j];
@@ -360,8 +359,7 @@ void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
     i3_vk_check(vkAllocateCommandBuffers(device->handle, &alloc_info, submission->command_buffers));
     submission->cmd_buffer_count = cmd_buffer_count;
 
-    // decode command buffers for the submission
-    // this loop can be parallelized
+    // decode command buffers for the submission : this loop can be parallelized
     for (uint32_t j = 0; j < cmd_buffer_count; ++j)
     {
         i3_rbk_cmd_buffer_i* cmd_buffer = cmd_buffers[j];

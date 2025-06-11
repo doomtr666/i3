@@ -2,6 +2,7 @@
 
 #include "passes/deferred_root.h"
 #include "passes/gbuffer_pass.h"
+#include "passes/light_pass.h"
 
 struct i3_renderer_o
 {
@@ -13,7 +14,7 @@ static i3_render_graph_builder_i* i3_renderer_create_graph_builder(i3_renderer_o
 {
     assert(self != NULL);
 
-    return i3_render_graph_builder_create(self->context.backend);
+    return i3_render_graph_builder_create(&self->context);
 }
 
 static void i3_renderer_set_render_graph(i3_renderer_o* self, i3_render_graph_i* graph)
@@ -22,9 +23,6 @@ static void i3_renderer_set_render_graph(i3_renderer_o* self, i3_render_graph_i*
     assert(graph != NULL);
 
     self->context.render_graph = graph;
-
-    // set the render context for the graph
-    self->context.render_graph->set_render_context(self->context.render_graph->self, &self->context);
 
     // reset the window size to 0, to trigger a resolution change next render
     self->context.render_width = 0;
@@ -40,6 +38,7 @@ static void i3_renderer_setup_default_passes(i3_renderer_o* self, i3_render_grap
     // create an extensible graph, based on the default passes
     graph_builder->begin_pass(graph_builder->self, NULL, i3_renderer_get_deferred_root_pass_desc());
     graph_builder->add_pass(graph_builder->self, NULL, i3_renderer_get_gbuffer_pass_desc());
+    graph_builder->add_pass(graph_builder->self, NULL, i3_renderer_get_light_pass_desc());
     graph_builder->end_pass(graph_builder->self);
 }
 
@@ -119,12 +118,33 @@ static void i3_renderer_render(i3_renderer_o* self, i3_game_time_t* game_time)
 
         // render the graph
         self->context.render_graph->render(self->context.render_graph->self);
+
+        // get the output image from the graph
+        i3_render_target_t output;
+        if (self->context.render_graph->get(self->context.render_graph->self, "output", &output))
+        {
+            // present the output image
+            self->context.device->present(self->context.device->self, self->context.swapchain, output.image_view);
+        }
+        else
+        {
+            assert(false && "Render graph did not provide an output image");
+        }
+
+        // device end frame
+        self->context.device->end_frame(self->context.device->self);
     }
 }
 
 static void i3_renderer_destroy(i3_renderer_o* self)
 {
     assert(self != NULL);
+
+    // wait for last frame to complete
+    self->context.device->wait_idle(self->context.device->self);
+
+    // destroy the swapchain
+    self->context.swapchain->destroy(self->context.swapchain->self);
 
     // destroy the device
     self->context.device->destroy(self->context.device->self);
@@ -159,10 +179,19 @@ i3_renderer_i* i3_renderer_create(i3_render_backend_i* backend, i3_render_window
     // create the backend device
     i3_rbk_device_i* device = backend->create_device(backend->self, 0);
 
+    // create the swapchain
+    i3_rbk_swapchain_desc_t swapchain_desc = {
+        .requested_image_count = 2,
+        .srgb = false,
+        .vsync = true,
+    };
+    i3_rbk_swapchain_i* swapchain = device->create_swapchain(device->self, window, &swapchain_desc);
+
     renderer->context = (i3_render_context_t){
         .backend = backend,
         .window = window,
         .device = device,
+        .swapchain = swapchain,
         .renderer = &renderer->iface,
     };
 

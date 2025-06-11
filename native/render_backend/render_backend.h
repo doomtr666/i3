@@ -990,7 +990,7 @@ struct i3_rbk_device_i
     i3_rbk_cmd_buffer_i* (*create_cmd_buffer)(i3_rbk_device_o* self);
 
     // submit cmd buffers
-    void (*submit_cmd_buffers)(i3_rbk_device_o* self, i3_rbk_cmd_buffer_i** cmd_buffers, uint32_t cmd_buffer_count);
+    void (*submit_cmd_buffers)(i3_rbk_device_o* self, uint32_t cmd_buffer_count, i3_rbk_cmd_buffer_i** cmd_buffers);
 
     // present swapchain
     void (*present)(i3_rbk_device_o* self, i3_rbk_swapchain_i* swapchain, i3_rbk_image_view_i* image_view);

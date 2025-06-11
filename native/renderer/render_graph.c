@@ -6,13 +6,13 @@
 struct i3_render_graph_o
 {
     i3_render_graph_i iface;
+    i3_render_context_t* context;  // render context for the graph
     i3_array_t passes;
-    i3_array_t resolution_changes;  // array of resolution change handlers
-    i3_array_t updates;             // array of update handlers
-    i3_array_t renders;             // array of render handlers
-
-    // blackboard to comunicate between render passes
-    i3_blackboard_t blackboard;
+    i3_array_t resolution_changes;  // array of pass with resolution change handler
+    i3_array_t updates;             // array of pass with update handler
+    i3_array_t renders;             // array of pass with render handler
+    i3_array_t cmd_buffers;         // array of command buffers to be submitted
+    i3_blackboard_t blackboard;     // blackboard to comunicate between render passes
 };
 
 // pass structure
@@ -24,15 +24,19 @@ struct i3_render_pass_o
     i3_render_context_t* context;
     i3_render_pass_o* parent;
     i3_array_t children;  // array of child passes
+
+    // command buffers for this pass
+    i3_array_t cmd_buffers;
 };
 
 // builder structure
 struct i3_render_graph_builder_o
 {
     i3_render_graph_builder_i iface;
-    i3_render_backend_i* backend;
+    i3_render_context_t* context;  // render context for the graph
 
     i3_render_pass_o* root;
+    i3_array_t inits;  // array of passes with init handler
     i3_array_t pass_stack;
     i3_hashtable_t pass_table;
 };
@@ -96,6 +100,39 @@ static i3_game_time_t* i3_render_pass_get_game_time(i3_render_pass_o* self)
     return &self->context->time;
 }
 
+// cmd buffers
+static i3_rbk_cmd_buffer_i* i3_render_pass_get_cmd_buffer(i3_render_pass_o* self)
+{
+    assert(self != NULL);
+    assert(self->context != NULL);
+    assert(self->context->device != NULL);
+
+    // create a command buffer from the device
+    return self->context->device->create_cmd_buffer(self->context->device->self);
+}
+
+static void i3_render_pass_submit_cmd_buffers(i3_render_pass_o* self,
+                                              uint32_t cmd_buffer_count,
+                                              i3_rbk_cmd_buffer_i** cmd_buffers)
+{
+    assert(self != NULL);
+    assert(self->context != NULL);
+    assert(self->context->device != NULL);
+    assert(cmd_buffers != NULL);
+
+    // submit the command buffers to the device
+    for (uint32_t i = 0; i < cmd_buffer_count; ++i)
+    {
+        assert(cmd_buffers[i] != NULL);
+
+        // retain the command buffer in the pass
+        i3_rbk_resource_add_ref(cmd_buffers[i]);
+
+        // add the command buffer to the pass's array
+        i3_array_push(&self->cmd_buffers, &cmd_buffers[i]);
+    }
+}
+
 static void* i3_render_pass_get_user_data(i3_render_pass_o* self)
 {
     assert(self != NULL);
@@ -138,6 +175,9 @@ static void i3_render_pass_destroy(i3_render_pass_o* self)
     if (self->desc.destroy != NULL)
         self->desc.destroy(&self->iface);
 
+    // Destroy the command buffers in this pass
+    i3_array_destroy(&self->cmd_buffers);
+
     // Clear the children array
     i3_array_destroy(&self->children);
 
@@ -156,6 +196,8 @@ static i3_render_pass_o i3_render_pass_iface_ =
         .get_device = i3_render_pass_get_device,
         .get_render_size = i3_render_pass_get_render_size,
         .get_game_time = i3_render_pass_get_game_time,
+        .get_cmd_buffer = i3_render_pass_get_cmd_buffer,
+        .submit_cmd_buffers = i3_render_pass_submit_cmd_buffers,
         .get_user_data = i3_render_pass_get_user_data,
         .set_user_data = i3_render_pass_set_user_data,
         .put = i3_render_pass_put,
@@ -175,6 +217,7 @@ static i3_render_pass_o* i3_render_pass_create(i3_render_pass_desc_t* desc)
     pass->iface.self = pass;
     pass->desc = *desc;  // copy the pass description
 
+    i3_array_init(&pass->cmd_buffers, sizeof(i3_rbk_cmd_buffer_i*));
     i3_array_init(&pass->children, sizeof(i3_render_pass_o*));
 
     return pass;
@@ -182,17 +225,41 @@ static i3_render_pass_o* i3_render_pass_create(i3_render_pass_desc_t* desc)
 
 // graph implementation
 
-static void i3_render_graph_set_render_context(i3_render_graph_o* self, i3_render_context_t* context)
+static void i3_render_graph_submit_cmd_buffers(i3_render_graph_o* self, i3_array_t* pass_list)
 {
     assert(self != NULL);
-    assert(context != NULL);
 
-    // Set the render context for all passes
-    for (uint32_t i = 0; i < i3_array_count(&self->passes); ++i)
+    // reset the command buffers array in the graph
+    i3_array_clear(&self->cmd_buffers);
+
+    // flatten the command buffers from all passes in the list
+    for (uint32_t i = 0; i < i3_array_count(pass_list); ++i)
     {
-        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(&self->passes, i);
+        i3_render_pass_o* pass = *(i3_render_pass_o**)i3_array_at(pass_list, i);
         assert(pass != NULL);
-        pass->context = context;
+
+        // submit all command buffers from this pass
+        for (uint32_t j = 0; j < i3_array_count(&pass->cmd_buffers); ++j)
+        {
+            i3_rbk_cmd_buffer_i* cmd_buffer = *(i3_rbk_cmd_buffer_i**)i3_array_at(&pass->cmd_buffers, j);
+            i3_array_push(&self->cmd_buffers, &cmd_buffer);
+        }
+
+        i3_array_clear(&pass->cmd_buffers);  // clear the command buffers in the pass
+    }
+
+    // submit all command buffers to the device for execution
+    if (i3_array_count(&self->cmd_buffers) > 0)
+    {
+        self->context->device->submit_cmd_buffers(self->context->device->self, i3_array_count(&self->cmd_buffers),
+                                                  (i3_rbk_cmd_buffer_i**)i3_array_data(&self->cmd_buffers));
+    }
+
+    // release the command buffers
+    for (uint32_t i = 0; i < i3_array_count(&self->cmd_buffers); ++i)
+    {
+        i3_rbk_cmd_buffer_i* cmd_buffer = *(i3_rbk_cmd_buffer_i**)i3_array_at(&self->cmd_buffers, i);
+        i3_rbk_resource_release(cmd_buffer);
     }
 }
 
@@ -208,6 +275,9 @@ static void i3_render_graph_resolution_change(i3_render_graph_o* self)
         if (pass->desc.resolution_change != NULL)
             pass->desc.resolution_change(&pass->iface);
     }
+
+    // submit all command buffers for execution
+    i3_render_graph_submit_cmd_buffers(self, &self->resolution_changes);
 }
 
 static void i3_render_graph_update(i3_render_graph_o* self)
@@ -222,6 +292,9 @@ static void i3_render_graph_update(i3_render_graph_o* self)
         if (pass->desc.update != NULL)
             pass->desc.update(&pass->iface);
     }
+
+    // submit all command buffers for execution
+    i3_render_graph_submit_cmd_buffers(self, &self->updates);
 }
 
 static void i3_render_graph_render(i3_render_graph_o* self)
@@ -236,6 +309,9 @@ static void i3_render_graph_render(i3_render_graph_o* self)
         if (pass->desc.render != NULL)
             pass->desc.render(&pass->iface);
     }
+
+    // submit all command buffers for execution
+    i3_render_graph_submit_cmd_buffers(self, &self->renders);
 }
 
 static void i3_render_graph_destroy(i3_render_graph_o* self)
@@ -255,6 +331,7 @@ static void i3_render_graph_destroy(i3_render_graph_o* self)
     i3_array_destroy(&self->resolution_changes);
     i3_array_destroy(&self->updates);
     i3_array_destroy(&self->renders);
+    i3_array_destroy(&self->cmd_buffers);
 
     // destroy the blackboard
     i3_blackboard_destroy(&self->blackboard);
@@ -263,27 +340,24 @@ static void i3_render_graph_destroy(i3_render_graph_o* self)
     i3_free(self);
 }
 
-static bool i3_render_graph_put(i3_render_pass_o* self, const char* key, void* data, uint32_t size)
+static bool i3_render_graph_put(i3_render_graph_o* self, const char* key, void* data, uint32_t size)
 {
     assert(self != NULL);
 
-    i3_render_graph_o* graph = (i3_render_graph_o*)self->context->render_graph;
-    return i3_blackboard_put(&graph->blackboard, key, data, size);
+    return i3_blackboard_put(&self->blackboard, key, data, size);
 }
 
-static bool i3_render_graph_get(i3_render_pass_o* self, const char* key, void* data)
+static bool i3_render_graph_get(i3_render_graph_o* self, const char* key, void* data)
 {
     assert(self != NULL);
 
-    i3_render_graph_o* graph = (i3_render_graph_o*)self->context->render_graph;
-    return i3_blackboard_get(&graph->blackboard, key, data);
+    return i3_blackboard_get(&self->blackboard, key, data);
 }
 
 static i3_render_graph_o i3_render_graph_iface_ =
 {
     .iface =
     {
-        .set_render_context = i3_render_graph_set_render_context,
         .resolution_change = i3_render_graph_resolution_change,
         .update = i3_render_graph_update,
         .render = i3_render_graph_render,
@@ -292,6 +366,29 @@ static i3_render_graph_o i3_render_graph_iface_ =
         .destroy = i3_render_graph_destroy,
     },
 };
+
+static i3_render_graph_o* i3_render_graph_create(i3_render_context_t* context)
+{
+    assert(context != NULL);
+
+    // Create a new render graph instance
+    i3_render_graph_o* graph = i3_alloc(sizeof(i3_render_graph_o));
+    assert(graph != NULL);
+    *graph = i3_render_graph_iface_;
+    graph->iface.self = graph;
+    graph->context = context;
+
+    i3_array_init(&graph->passes, sizeof(i3_render_pass_o*));
+    i3_array_init(&graph->resolution_changes, sizeof(i3_render_pass_o*));
+    i3_array_init(&graph->updates, sizeof(i3_render_pass_o*));
+    i3_array_init(&graph->renders, sizeof(i3_render_pass_o*));
+    i3_array_init(&graph->cmd_buffers, sizeof(i3_rbk_cmd_buffer_i*));
+
+    // initialize the blackboard
+    i3_blackboard_init(&graph->blackboard);
+
+    return graph;
+}
 
 // graph builder implementation
 
@@ -357,19 +454,27 @@ static void i3_render_graph_builder_add_pass(i3_render_graph_builder_o* self,
     i3_render_graph_builder_end_pass(self);
 }
 
-static void i3_render_graph_builder_build_r(i3_render_graph_o* graph, i3_render_pass_o* pass)
+static void i3_render_graph_builder_build_r(i3_render_graph_builder_o* self,
+                                            i3_render_graph_o* graph,
+                                            i3_render_pass_o* pass)
 {
     assert(graph != NULL);
 
     if (pass == NULL)
         return;
 
-    // initialize the pass
-    if (pass->desc.init != NULL)
-        pass->desc.init(&pass->iface);
+    // set the context for the pass
+    pass->context = self->context;
 
     // Add the pass to the graph
     i3_array_push(&graph->passes, &pass);
+
+    // check if the pass has a initialization handler
+    if (pass->desc.init != NULL)
+    {
+        i3_array_push(&self->inits, pass);
+        pass->desc.init(&pass->iface);
+    }
 
     // Check if the pass has a resolution change handler
     if (pass->desc.resolution_change != NULL)
@@ -388,7 +493,7 @@ static void i3_render_graph_builder_build_r(i3_render_graph_o* graph, i3_render_
     {
         i3_render_pass_o* child_pass = *(i3_render_pass_o**)i3_array_at(&pass->children, i);
         assert(child_pass != NULL);
-        i3_render_graph_builder_build_r(graph, child_pass);
+        i3_render_graph_builder_build_r(self, graph, child_pass);
     }
 }
 
@@ -399,22 +504,14 @@ static i3_render_graph_i* i3_render_graph_builder_build(i3_render_graph_builder_
     // pass stack should be empty at this point
     assert(i3_array_count(&self->pass_stack) == 0);
 
-    // Create a new render graph instance
-    i3_render_graph_o* graph = i3_alloc(sizeof(i3_render_graph_o));
-    assert(graph != NULL);
-    *graph = i3_render_graph_iface_;
-    graph->iface.self = graph;
-
-    i3_array_init(&graph->passes, sizeof(i3_render_pass_o*));
-    i3_array_init(&graph->resolution_changes, sizeof(i3_render_pass_o*));
-    i3_array_init(&graph->updates, sizeof(i3_render_pass_o*));
-    i3_array_init(&graph->renders, sizeof(i3_render_pass_o*));
-
-    // initialize the blackboard
-    i3_blackboard_init(&graph->blackboard);
+    // create the render graph
+    i3_render_graph_o* graph = i3_render_graph_create(self->context);
 
     // build the graph recursively
-    i3_render_graph_builder_build_r(graph, self->root);
+    i3_render_graph_builder_build_r(self, graph, self->root);
+
+    // submit all command buffers for execution
+    i3_render_graph_submit_cmd_buffers(graph, &self->inits);
 
     return &graph->iface;
 }
@@ -423,6 +520,7 @@ static void i3_render_graph_builder_destroy(i3_render_graph_builder_o* self)
 {
     assert(self != NULL);
 
+    i3_array_destroy(&self->inits);
     i3_array_destroy(&self->pass_stack);
     i3_hashtable_destroy(&self->pass_table);
     i3_free(self);
@@ -440,17 +538,18 @@ static i3_render_graph_builder_o i3_render_graph_builder_iface_ =
     },
 };
 
-i3_render_graph_builder_i* i3_render_graph_builder_create(i3_render_backend_i* backend)
+i3_render_graph_builder_i* i3_render_graph_builder_create(i3_render_context_t* context)
 {
-    assert(backend != NULL);
+    assert(context != NULL);
 
     i3_render_graph_builder_o* builder = i3_alloc(sizeof(i3_render_graph_builder_o));
     assert(builder != NULL);
 
     *builder = i3_render_graph_builder_iface_;
     builder->iface.self = builder;
-    builder->backend = backend;
+    builder->context = context;
 
+    i3_array_init(&builder->inits, sizeof(i3_render_pass_o*));
     i3_array_init(&builder->pass_stack, sizeof(i3_render_pass_o*));
     i3_hashtable_init(&builder->pass_table);
 

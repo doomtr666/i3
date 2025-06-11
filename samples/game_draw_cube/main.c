@@ -12,19 +12,39 @@ typedef struct i3_game_context_t
 } i3_game_context_t;
 
 // draw cube pass
+
+typedef struct draw_cube_pass_ctx_t
+{
+    i3_render_target_t g_depth;
+    i3_render_target_t g_normal;
+    i3_render_target_t g_albedo;
+    i3_render_target_t g_metalic_roughness;
+} draw_cube_pass_ctx_t;
+
 static void draw_cube_pass_init(i3_render_pass_i* pass)
 {
-    // Initialize the draw cube pass
+    // initialize the context
+    draw_cube_pass_ctx_t* ctx = i3_alloc(sizeof(draw_cube_pass_ctx_t));
+    *ctx = (draw_cube_pass_ctx_t){0};
+    pass->set_user_data(pass->self, ctx);
 }
 
 static void draw_cube_pass_destroy(i3_render_pass_i* pass)
 {
-    // Cleanup the draw cube pass
+    // free the context
+    draw_cube_pass_ctx_t* ctx = (draw_cube_pass_ctx_t*)pass->get_user_data(pass->self);
+    i3_free(ctx);
 }
 
 static void draw_cube_pass_resolution_change(i3_render_pass_i* pass)
 {
-    // Handle resolution change for the draw cube pass
+    draw_cube_pass_ctx_t* ctx = (draw_cube_pass_ctx_t*)pass->get_user_data(pass->self);
+
+    // retrieve the new render targets
+    pass->get(pass->self, "g_depth", &ctx->g_depth);
+    pass->get(pass->self, "g_normal", &ctx->g_normal);
+    pass->get(pass->self, "g_albedo", &ctx->g_albedo);
+    pass->get(pass->self, "g_metalic_roughness", &ctx->g_metalic_roughness);
 }
 
 static void draw_cube_pass_update(i3_render_pass_i* pass)

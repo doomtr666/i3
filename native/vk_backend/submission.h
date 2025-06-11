@@ -19,8 +19,8 @@ typedef struct i3_vk_submission_t
 } i3_vk_submission_t;
 
 void i3_vk_device_submit_cmd_buffers(i3_rbk_device_o* self,
-                                     i3_rbk_cmd_buffer_i** cmd_buffers,
-                                     uint32_t cmd_buffer_count);
+                                     uint32_t cmd_buffer_count,
+                                     i3_rbk_cmd_buffer_i** cmd_buffers);
 
 void i3_vk_device_end_frame(i3_rbk_device_o* self);
 

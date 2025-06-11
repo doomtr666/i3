@@ -95,7 +95,7 @@ int main()
     i3_rbk_cmd_buffer_i* cmd_buffer = device->create_cmd_buffer(device->self);
     cmd_buffer->write_buffer(cmd_buffer->self, vertex_buffer, 0, sizeof(cube_vertex_data), cube_vertex_data);
     cmd_buffer->write_buffer(cmd_buffer->self, index_buffer, 0, sizeof(cube_index_data), cube_index_data);
-    device->submit_cmd_buffers(device->self, &cmd_buffer, 1);
+    device->submit_cmd_buffers(device->self, 1, &cmd_buffer);
     cmd_buffer->destroy(cmd_buffer->self);
 
     // create image
@@ -346,7 +346,7 @@ int main()
         cmd_buffer->end_rendering(cmd_buffer->self);
 
         // submit cmd buffer
-        device->submit_cmd_buffers(device->self, &cmd_buffer, 1);
+        device->submit_cmd_buffers(device->self, 1, &cmd_buffer);
 
         // destroy cmd buffer
         cmd_buffer->destroy(cmd_buffer->self);

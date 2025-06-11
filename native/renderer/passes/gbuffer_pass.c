@@ -20,9 +20,7 @@ static void i3_renderer_gbuffer_pass_init(i3_render_pass_i* pass)
 
 static void i3_renderer_gbuffer_pass_destroy(i3_render_pass_i* pass)
 {
-    // get context
     gbuffer_pass_ctx_t* ctx = (gbuffer_pass_ctx_t*)pass->get_user_data(pass->self);
-    // get renderer
     i3_renderer_i* renderer = pass->get_renderer(pass->self);
 
     // destroy render targets
@@ -36,10 +34,7 @@ static void i3_renderer_gbuffer_pass_destroy(i3_render_pass_i* pass)
 
 static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
 {
-    // get context
     gbuffer_pass_ctx_t* ctx = (gbuffer_pass_ctx_t*)pass->get_user_data(pass->self);
-
-    // get renderer
     i3_renderer_i* renderer = pass->get_renderer(pass->self);
 
     uint32_t width, height;
@@ -156,6 +151,8 @@ static void i3_renderer_gbuffer_pass_render(i3_render_pass_i* pass)
 {
     // get context
     gbuffer_pass_ctx_t* ctx = (gbuffer_pass_ctx_t*)pass->get_user_data(pass->self);
+
+    // TODO clear all G-buffer render targets
 }
 
 i3_render_pass_desc_t* i3_renderer_get_gbuffer_pass_desc(void)
