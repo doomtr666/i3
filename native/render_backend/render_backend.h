@@ -381,12 +381,19 @@ typedef struct i3_rbk_rect_t
 } i3_rbk_rect_t;
 
 // clear color
-typedef union i3_rbk_clear_color_t
+typedef union i3_rbk_clear_color_value_t
 {
     float float32[4];
     int32_t int32[4];
     uint32_t uint32[4];
-} i3_rbk_clear_color_t;
+} i3_rbk_clear_color_value_t;
+
+// clear depth stencil
+typedef struct i3_rbk_clear_depth_stencil_value_t
+{
+    float depth;
+    uint32_t stencil;
+} i3_rbk_clear_depth_stencil_value_t;
 
 // resource interface
 typedef struct i3_rbk_resource_o i3_rbk_resource_o;
@@ -861,7 +868,13 @@ typedef struct i3_rbk_cmd_buffer_i
                         uint32_t dst_offset,
                         uint32_t size);
 
-    void (*clear_image)(i3_rbk_cmd_buffer_o* self, i3_rbk_image_view_i* image_view, const i3_rbk_clear_color_t* color);
+    void (*clear_color_image)(i3_rbk_cmd_buffer_o* self,
+                              i3_rbk_image_view_i* image_view,
+                              const i3_rbk_clear_color_value_t* color);
+
+    void (*clear_depth_stencil_image)(i3_rbk_cmd_buffer_o* self,
+                                      i3_rbk_image_view_i* image_view,
+                                      const i3_rbk_clear_depth_stencil_value_t* depth_stencil);
 
     void (*bind_vertex_buffers)(i3_rbk_cmd_buffer_o* self,
                                 uint32_t first_binding,

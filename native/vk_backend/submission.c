@@ -30,15 +30,26 @@ void i3_vk_cmd_decode_barrier(void* ctx, i3_vk_cmd_barrier_t* cmd)
     }
 }
 
-void i3_vk_cmd_decode_clear_image(void* ctx, i3_vk_cmd_clear_image_t* cmd)
+void i3_vk_cmd_decode_clear_color_image(void* ctx, i3_vk_cmd_clear_color_image_t* cmd)
 {
     assert(ctx != NULL);
     assert(cmd != NULL);
 
     i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
 
-    vkCmdClearColorImage(cmd_ctx->cmd_buffer, cmd->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cmd->color, 1,
+    vkCmdClearColorImage(cmd_ctx->cmd_buffer, cmd->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cmd->value, 1,
                          &cmd->subresource_range);
+}
+
+void i3_vk_cmd_decode_clear_depth_stencil_image(void* ctx, i3_vk_cmd_clear_depth_stencil_image_t* cmd)
+{
+    assert(ctx != NULL);
+    assert(cmd != NULL);
+
+    i3_vk_cmd_ctx_t* cmd_ctx = (i3_vk_cmd_ctx_t*)ctx;
+
+    vkCmdClearDepthStencilImage(cmd_ctx->cmd_buffer, cmd->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cmd->value, 1,
+                                &cmd->subresource_range);
 }
 
 // copy buffer

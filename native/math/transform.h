@@ -13,6 +13,10 @@ static inline i3_mat4_t i3_mat4_rotation_quat(i3_quat_t q);
 static inline i3_mat4_t i3_mat4_scale(i3_vec3_t scale);
 static inline i3_mat4_t i3_mat4_persective_fov_rh(float fov, float aspect, float near, float far);
 static inline i3_mat4_t i3_mat4_persective_fov_lh(float fov, float aspect, float near, float far);
+static inline i3_mat4_t i3_mat4_look_to_rh(i3_vec3_t position, i3_vec3_t direction, i3_vec3_t up);
+static inline i3_mat4_t i3_mat4_look_to_lh(i3_vec3_t position, i3_vec3_t direction, i3_vec3_t up);
+static inline i3_mat4_t i3_mat4_look_at_rh(i3_vec3_t position, i3_vec3_t target, i3_vec3_t up);
+static inline i3_mat4_t i3_mat4_look_at_lh(i3_vec3_t position, i3_vec3_t target, i3_vec3_t up);
 
 // implementation
 
@@ -248,4 +252,24 @@ static inline i3_mat4_t i3_mat4_persective_fov_lh(float fov, float aspect, float
     m.m23 = -range * near;
     m.m33 = 0.0f;
     return m;
+}
+
+static inline i3_mat4_t i3_mat4_look_to_rh(i3_vec3_t position, i3_vec3_t direction, i3_vec3_t up)
+{
+    return i3_mat4_identity();  // Placeholder for actual implementation
+}
+
+static inline i3_mat4_t i3_mat4_look_to_lh(i3_vec3_t position, i3_vec3_t direction, i3_vec3_t up)
+{
+    return i3_mat4_identity();  // Placeholder for actual implementation
+}
+
+static inline i3_mat4_t i3_mat4_look_at_rh(i3_vec3_t position, i3_vec3_t target, i3_vec3_t up)
+{
+    return i3_mat4_identity();  // Placeholder for actual implementation
+}
+
+static inline i3_mat4_t i3_mat4_look_at_lh(i3_vec3_t position, i3_vec3_t target, i3_vec3_t up)
+{
+    return i3_mat4_identity();  // Placeholder for actual implementation
 }

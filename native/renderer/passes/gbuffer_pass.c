@@ -54,7 +54,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
     i3_rbk_image_view_desc_t depth_view_desc = {
         .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
         .format = depth_image_desc.format,
-        .aspect_mask = I3_RBK_IMAGE_ASPECT_DEPTH,
+        .aspect_mask = I3_RBK_IMAGE_ASPECT_DEPTH | I3_RBK_IMAGE_ASPECT_STENCIL,
         .level_count = 1,
         .layer_count = 1,
     };
@@ -141,18 +141,25 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
     pass->put(pass->self, "g_metalic_roughness", &ctx->g_metalic_roughness, sizeof(ctx->g_metalic_roughness));
 }
 
-static void i3_renderer_gbuffer_pass_update(i3_render_pass_i* pass)
-{
-    // get context
-    gbuffer_pass_ctx_t* ctx = (gbuffer_pass_ctx_t*)pass->get_user_data(pass->self);
-}
-
 static void i3_renderer_gbuffer_pass_render(i3_render_pass_i* pass)
 {
-    // get context
     gbuffer_pass_ctx_t* ctx = (gbuffer_pass_ctx_t*)pass->get_user_data(pass->self);
+    i3_renderer_i* renderer = pass->get_renderer(pass->self);
 
-    // TODO clear all G-buffer render targets
+    i3_rbk_cmd_buffer_i* cmd_buffer = pass->get_cmd_buffer(pass->self);
+
+    // clear the G-buffer depth
+    i3_rbk_clear_depth_stencil_value_t clear_depth = {.depth = 1.0f, .stencil = 0};
+    cmd_buffer->clear_depth_stencil_image(cmd_buffer->self, ctx->g_depth.image_view, &clear_depth);
+
+    // clear the G-buffer color images
+    i3_rbk_clear_color_value_t clear_color = {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}};
+    cmd_buffer->clear_color_image(cmd_buffer->self, ctx->g_normal.image_view, &clear_color);
+    cmd_buffer->clear_color_image(cmd_buffer->self, ctx->g_albedo.image_view, &clear_color);
+    cmd_buffer->clear_color_image(cmd_buffer->self, ctx->g_metalic_roughness.image_view, &clear_color);
+
+    pass->submit_cmd_buffers(pass->self, 1, &cmd_buffer);
+    cmd_buffer->destroy(cmd_buffer->self);
 }
 
 i3_render_pass_desc_t* i3_renderer_get_gbuffer_pass_desc(void)
@@ -162,7 +169,6 @@ i3_render_pass_desc_t* i3_renderer_get_gbuffer_pass_desc(void)
         .init = i3_renderer_gbuffer_pass_init,
         .destroy = i3_renderer_gbuffer_pass_destroy,
         .resolution_change = i3_renderer_gbuffer_pass_resolution_change,
-        .update = i3_renderer_gbuffer_pass_update,
         .render = i3_renderer_gbuffer_pass_render,
     };
 

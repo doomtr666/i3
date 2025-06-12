@@ -21,6 +21,7 @@ struct i3_render_pass_o
     i3_render_pass_i iface;
     i3_render_pass_desc_t desc;
 
+    i3_render_graph_o* graph;  // reference to the render graph
     i3_render_context_t* context;
     i3_render_pass_o* parent;
     i3_array_t children;  // array of child passes
@@ -148,23 +149,15 @@ static void i3_render_pass_set_user_data(i3_render_pass_o* self, void* user_data
 static bool i3_render_pass_put(i3_render_pass_o* self, const char* key, void* data, uint32_t size)
 {
     assert(self != NULL);
-    assert(self->context != NULL);
-    assert(self->context->render_graph != NULL);
 
-    i3_render_graph_o* graph = (i3_render_graph_o*)self->context->render_graph;
-
-    return i3_blackboard_put(&graph->blackboard, key, data, size);
+    return i3_blackboard_put(&self->graph->blackboard, key, data, size);
 }
 
 static bool i3_render_pass_get(i3_render_pass_o* self, const char* key, void* data)
 {
     assert(self != NULL);
-    assert(self->context != NULL);
-    assert(self->context->render_graph != NULL);
 
-    i3_render_graph_o* graph = (i3_render_graph_o*)self->context->render_graph;
-
-    return i3_blackboard_get(&graph->blackboard, key, data);
+    return i3_blackboard_get(&self->graph->blackboard, key, data);
 }
 
 static void i3_render_pass_destroy(i3_render_pass_o* self)
@@ -462,6 +455,9 @@ static void i3_render_graph_builder_build_r(i3_render_graph_builder_o* self,
 
     if (pass == NULL)
         return;
+
+    // set the render graph for the pass
+    pass->graph = graph;
 
     // set the context for the pass
     pass->context = self->context;

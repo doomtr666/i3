@@ -1,13 +1,12 @@
 #include "renderer.h"
 
-#include "passes/deferred_root.h"
-#include "passes/gbuffer_pass.h"
-#include "passes/light_pass.h"
+#include "passes/passes.h"
 
 struct i3_renderer_o
 {
     i3_renderer_i iface;
     i3_render_context_t context;
+    i3_render_graph_i* graph;
 };
 
 static i3_render_graph_builder_i* i3_renderer_create_graph_builder(i3_renderer_o* self)
@@ -22,7 +21,7 @@ static void i3_renderer_set_render_graph(i3_renderer_o* self, i3_render_graph_i*
     assert(self != NULL);
     assert(graph != NULL);
 
-    self->context.render_graph = graph;
+    self->graph = graph;
 
     // reset the window size to 0, to trigger a resolution change next render
     self->context.render_width = 0;
@@ -94,7 +93,7 @@ static void i3_renderer_render(i3_renderer_o* self, i3_game_time_t* game_time)
     // update the game time in the render context
     self->context.time = *game_time;
 
-    if (self->context.render_graph != NULL)
+    if (self->graph != NULL)
     {
         // check if the window size has changed
         uint32_t render_width, render_height;
@@ -110,18 +109,18 @@ static void i3_renderer_render(i3_renderer_o* self, i3_game_time_t* game_time)
                 return;
 
             // trigger resolution change in the render graph
-            self->context.render_graph->resolution_change(self->context.render_graph->self);
+            self->graph->resolution_change(self->graph->self);
         }
 
         // update the render graph
-        self->context.render_graph->update(self->context.render_graph->self);
+        self->graph->update(self->graph->self);
 
         // render the graph
-        self->context.render_graph->render(self->context.render_graph->self);
+        self->graph->render(self->graph->self);
 
         // get the output image from the graph
         i3_render_target_t output;
-        if (self->context.render_graph->get(self->context.render_graph->self, "output", &output))
+        if (self->graph->get(self->graph->self, "output", &output))
         {
             // present the output image
             self->context.device->present(self->context.device->self, self->context.swapchain, output.image_view);

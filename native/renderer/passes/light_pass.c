@@ -9,7 +9,6 @@ typedef struct i3_renderer_light_pass_ctx_t
 
 static void i3_renderer_light_pass_init(i3_render_pass_i* pass)
 {
-    // Initialize the light pass
     light_pass_ctx_t* ctx = i3_alloc(sizeof(light_pass_ctx_t));
     *ctx = (light_pass_ctx_t){0};
     pass->set_user_data(pass->self, ctx);
@@ -17,9 +16,7 @@ static void i3_renderer_light_pass_init(i3_render_pass_i* pass)
 
 static void i3_renderer_light_pass_destroy(i3_render_pass_i* pass)
 {
-    // get context
     light_pass_ctx_t* ctx = (light_pass_ctx_t*)pass->get_user_data(pass->self);
-    // get renderer
     i3_renderer_i* renderer = pass->get_renderer(pass->self);
 
     // destroy the light buffer render target
@@ -30,10 +27,7 @@ static void i3_renderer_light_pass_destroy(i3_render_pass_i* pass)
 
 static void i3_renderer_light_pass_resolution_change(i3_render_pass_i* pass)
 {
-    // get context
     light_pass_ctx_t* ctx = (light_pass_ctx_t*)pass->get_user_data(pass->self);
-
-    // get renderer
     i3_renderer_i* renderer = pass->get_renderer(pass->self);
 
     uint32_t width, height;
@@ -66,13 +60,8 @@ static void i3_renderer_light_pass_resolution_change(i3_render_pass_i* pass)
     pass->put(pass->self, "light_buffer", &ctx->light_buffer, sizeof(ctx->light_buffer));
 
     // set graph output
+    // TODO: this will move when more passes are implemented
     pass->put(pass->self, "output", &ctx->light_buffer, sizeof(ctx->light_buffer));
-}
-
-static void i3_renderer_light_pass_update(i3_render_pass_i* pass)
-{
-    // get context
-    light_pass_ctx_t* ctx = (light_pass_ctx_t*)pass->get_user_data(pass->self);
 }
 
 static void i3_renderer_light_pass_render(i3_render_pass_i* pass)
@@ -82,11 +71,11 @@ static void i3_renderer_light_pass_render(i3_render_pass_i* pass)
 
     i3_rbk_cmd_buffer_i* cmd_buffer = pass->get_cmd_buffer(pass->self);
 
-    i3_rbk_clear_color_t clear_color = {
+    i3_rbk_clear_color_value_t clear_color = {
         .float32 = {0.0f, 0.0f, 1.0f, 1.0f},
     };
 
-    cmd_buffer->clear_image(cmd_buffer->self, ctx->light_buffer.image_view, &clear_color);
+    cmd_buffer->clear_color_image(cmd_buffer->self, ctx->light_buffer.image_view, &clear_color);
 
     pass->submit_cmd_buffers(pass->self, 1, &cmd_buffer);
     cmd_buffer->destroy(cmd_buffer->self);
@@ -99,7 +88,6 @@ i3_render_pass_desc_t* i3_renderer_get_light_pass_desc(void)
         .init = i3_renderer_light_pass_init,
         .destroy = i3_renderer_light_pass_destroy,
         .resolution_change = i3_renderer_light_pass_resolution_change,
-        .update = i3_renderer_light_pass_update,
         .render = i3_renderer_light_pass_render,
     };
 

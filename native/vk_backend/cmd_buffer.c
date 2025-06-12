@@ -81,9 +81,9 @@ static i3_vk_barrier_t* i3_vk_cmd_add_barriers(i3_vk_cmd_buffer_o* cmd_buffer, V
 }
 
 // clear image
-static void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self,
-                                         i3_rbk_image_view_i* image_view,
-                                         const i3_rbk_clear_color_t* color)
+static void i3_vk_cmd_buffer_clear_color_image(i3_rbk_cmd_buffer_o* self,
+                                               i3_rbk_image_view_i* image_view,
+                                               const i3_rbk_clear_color_value_t* color)
 {
     assert(self != NULL);
     assert(image_view != NULL);
@@ -108,17 +108,56 @@ static void i3_vk_cmd_buffer_clear_image(i3_rbk_cmd_buffer_o* self,
     i3_rbk_image_i* image = image_view->get_image(image_view->self);
     const i3_rbk_image_view_desc_t* view_desc = image_view->get_desc(image_view->self);
 
-    i3_vk_cmd_clear_image_t* cmd = i3_vk_cmd_write_clear_image(&cmd_buffer->cmd_list);
+    i3_vk_cmd_clear_color_image_t* cmd = i3_vk_cmd_write_clear_color_image(&cmd_buffer->cmd_list);
     cmd->image = ((i3_vk_image_o*)image->self)->handle;
-    cmd->subresource_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    cmd->subresource_range.aspectMask = i3_vk_convert_image_aspect_flags(view_desc->aspect_mask);
     cmd->subresource_range.baseArrayLayer = view_desc->base_array_layer;
     cmd->subresource_range.layerCount = view_desc->layer_count;
     cmd->subresource_range.baseMipLevel = view_desc->base_mip_level;
     cmd->subresource_range.levelCount = view_desc->level_count;
-    cmd->color.uint32[0] = color->uint32[0];
-    cmd->color.uint32[1] = color->uint32[1];
-    cmd->color.uint32[2] = color->uint32[2];
-    cmd->color.uint32[3] = color->uint32[3];
+    cmd->value.uint32[0] = color->uint32[0];
+    cmd->value.uint32[1] = color->uint32[1];
+    cmd->value.uint32[2] = color->uint32[2];
+    cmd->value.uint32[3] = color->uint32[3];
+}
+
+// clear depth-stencil image
+static void i3_vk_cmd_buffer_clear_depth_stencil_image(i3_rbk_cmd_buffer_o* self,
+                                                       i3_rbk_image_view_i* image_view,
+                                                       const i3_rbk_clear_depth_stencil_value_t* depth_stencil)
+
+{
+    assert(self != NULL);
+    assert(image_view != NULL);
+
+    i3_vk_cmd_buffer_o* cmd_buffer = (i3_vk_cmd_buffer_o*)self;
+
+    // retain the image view
+    i3_vk_use_list_add(&cmd_buffer->use_list, image_view);
+
+    // add barriers
+    i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    i3_vk_image_usage_t* barrier = i3_vk_add_image_barrier(barriers);
+    *barrier = (i3_vk_image_usage_t){
+        .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
+        .access_mask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .image_view = image_view,
+        .layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    };
+
+    // emit command
+    i3_rbk_image_i* image = image_view->get_image(image_view->self);
+    const i3_rbk_image_view_desc_t* view_desc = image_view->get_desc(image_view->self);
+
+    i3_vk_cmd_clear_depth_stencil_image_t* cmd = i3_vk_cmd_write_clear_depth_stencil_image(&cmd_buffer->cmd_list);
+    cmd->image = ((i3_vk_image_o*)image->self)->handle;
+    cmd->subresource_range.aspectMask = i3_vk_convert_image_aspect_flags(view_desc->aspect_mask);
+    cmd->subresource_range.baseArrayLayer = view_desc->base_array_layer;
+    cmd->subresource_range.layerCount = view_desc->layer_count;
+    cmd->subresource_range.baseMipLevel = view_desc->base_mip_level;
+    cmd->subresource_range.levelCount = view_desc->level_count;
+    cmd->value.depth = depth_stencil->depth;
+    cmd->value.stencil = depth_stencil->stencil;
 }
 
 // copy buffer
@@ -530,7 +569,8 @@ static i3_vk_cmd_buffer_o i3_vk_cmd_buffer_iface_ =
     .iface =
     {
         .get_resource = i3_vk_cmd_buffer_get_resource,
-        .clear_image = i3_vk_cmd_buffer_clear_image,
+        .clear_color_image = i3_vk_cmd_buffer_clear_color_image,
+        .clear_depth_stencil_image = i3_vk_cmd_buffer_clear_depth_stencil_image,
         .write_buffer = i3_vk_cmd_buffer_write_buffer,
         .copy_buffer = i3_vk_cmd_buffer_copy_buffer,
         .bind_vertex_buffers = i3_vk_cmd_buffer_bind_vertex_buffers,

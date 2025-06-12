@@ -315,8 +315,8 @@ int main()
         // create cmd buffer
         i3_rbk_cmd_buffer_i* cmd_buffer = device->create_cmd_buffer(device->self);
 
-        i3_rbk_clear_color_t clear_color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}};
-        cmd_buffer->clear_image(cmd_buffer->self, image_view, &clear_color);
+        i3_rbk_clear_color_value_t clear_color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}};
+        cmd_buffer->clear_color_image(cmd_buffer->self, image_view, &clear_color);
 
         i3_rbk_rect_t render_area = {.offset = {0, 0}, .extent = {800, 600}};
         i3_rbk_rect_t scissor = {.offset = {0, 0}, .extent = {800, 600}};

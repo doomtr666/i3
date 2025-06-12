@@ -1,6 +1,6 @@
 #include "native/core/log.h"
 #include "native/game/game.h"
-#include "native/math/mat.h"
+#include "native/math/cam.h"
 
 #include <stdio.h>
 
@@ -92,7 +92,14 @@ static void init(i3_game_i* game)
     ctx->renderer->set_render_graph(ctx->renderer->self, ctx->render_graph);
 }
 
-static void update(i3_game_i* game, i3_game_time_t* game_time) {}
+static void update(i3_game_i* game, i3_game_time_t* game_time)
+{
+    i3_game_context_t* ctx = (i3_game_context_t*)game->get_user_data(game->self);
+
+    // TODO: update cam
+    i3_cam_t cam;
+    ctx->render_graph->put(ctx->render_graph->self, "cam", &cam, sizeof(i3_cam_t));
+}
 
 static void cleanup(i3_game_i* game)
 {

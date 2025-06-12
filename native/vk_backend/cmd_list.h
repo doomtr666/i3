@@ -40,12 +40,18 @@ static inline uint32_t i3_vk_cmd_list_read_id(i3_vk_cmd_list_t* list);
     I3_VK_CMD_BEGIN(barrier)                                                     \
     I3_VK_CMD_FIELD(i3_vk_barrier_t, barrier)                                    \
     I3_VK_CMD_END(barrier)                                                       \
-    /* clear image */                                                            \
-    I3_VK_CMD_BEGIN(clear_image)                                                 \
+    /* clear color image */                                                      \
+    I3_VK_CMD_BEGIN(clear_color_image)                                           \
     I3_VK_CMD_FIELD(VkImage, image)                                              \
     I3_VK_CMD_FIELD(VkImageSubresourceRange, subresource_range)                  \
-    I3_VK_CMD_FIELD(VkClearColorValue, color)                                    \
-    I3_VK_CMD_END(clear_image)                                                   \
+    I3_VK_CMD_FIELD(VkClearColorValue, value)                                    \
+    I3_VK_CMD_END(clear_color_image)                                             \
+    /* clear depth stencil image */                                              \
+    I3_VK_CMD_BEGIN(clear_depth_stencil_image)                                   \
+    I3_VK_CMD_FIELD(VkImage, image)                                              \
+    I3_VK_CMD_FIELD(VkImageSubresourceRange, subresource_range)                  \
+    I3_VK_CMD_FIELD(VkClearDepthStencilValue, value)                             \
+    I3_VK_CMD_END(clear_depth_stencil_image)                                     \
     /* copy buffer */                                                            \
     I3_VK_CMD_BEGIN(copy_buffer)                                                 \
     I3_VK_CMD_FIELD(VkBuffer, src_buffer)                                        \
