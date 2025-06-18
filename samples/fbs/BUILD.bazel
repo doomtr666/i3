@@ -1,0 +1,11 @@
+filegroup(
+    name = "test_fbs",
+    srcs = ["test.fbs"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "model_fbs",
+    srcs = ["model.fbs"],
+    visibility = ["//visibility:public"],
+)

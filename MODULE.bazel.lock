@@ -143,8 +143,8 @@
   "moduleExtensions": {
     "//bazel:vcpkg.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "tvd+hpqiNL75ZKBtdWI/3fzN/1zI261iXAKtbjtjrZE=",
-        "usagesDigest": "QH2SadHq4n5z71wx8MpszHOpUEJcZoJwasmMxQN20TI=",
+        "bzlTransitiveDigest": "bgwEE5Y8dE+Rno/O762PttWFEveJVQvW9lSnfs48Is0=",
+        "usagesDigest": "/8oB8LxTCGjcxd6bIXbhCV8VMHKApMuYXKstwNzUqOU=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -152,7 +152,7 @@
           "vcpkg": {
             "repoRuleId": "@@//bazel:vcpkg.bzl%vcpkg_rule",
             "attributes": {
-              "version": "2025.03.19"
+              "version": "2025.04.09"
             }
           }
         },

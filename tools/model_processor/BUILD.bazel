@@ -1,0 +1,8 @@
+cc_binary(
+    name = "model_processor",
+    srcs = glob(["*.cc"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "@vcpkg//:assimp",
+    ],
+)

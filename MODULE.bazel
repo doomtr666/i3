@@ -5,7 +5,7 @@ use_repo(vulkan_sdk, "vulkan_sdk")
 
 # vcpkg
 vcpkg = use_extension("//bazel:vcpkg.bzl", "vcpkg")
-vcpkg.install(version = "2025.03.19")
+vcpkg.install(version = "2025.04.09")
 use_repo(vcpkg, "vcpkg")
 
 # rules dotnet

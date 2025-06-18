@@ -98,6 +98,9 @@ static void update(i3_game_i* game, i3_game_time_t* game_time)
 
     // TODO: update cam
     i3_cam_t cam;
+    i3_cam_init_target(&cam, (i3_vec3_t){0.0f, 0.0f, -5.0f}, (i3_vec3_t){0.0f, 0.0f, 0.0f},
+                       (i3_vec3_t){0.0f, 1.0f, 0.0f}, 60.0f, 0.1f, 100.0f);
+
     ctx->render_graph->put(ctx->render_graph->self, "cam", &cam, sizeof(i3_cam_t));
 }
 

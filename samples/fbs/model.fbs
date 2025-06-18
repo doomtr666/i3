@@ -1,0 +1,70 @@
+namespace content;
+
+struct vec2
+{
+    x:float;
+    y:float;
+}
+
+struct vec3
+{
+    x:float;
+    y:float;
+    z:float;
+}
+
+struct mat4
+{
+    m:[float:16];
+}
+
+table material
+{
+    name:string;
+}
+
+struct mesh
+{
+    position_offset:uint;
+    normal_offset:uint;
+    tangent_offset:uint;
+    binormal_offset:uint;
+    tex_coord_offset:uint;
+    index_offset:uint;
+    index_count:uint;
+    material_index:uint;
+}
+
+table node
+{
+    // node transforms
+    transform:mat4;
+
+    // node children
+    children:[uint];
+
+    // meshes
+    meshes:[uint];
+}
+
+// define a 3D model
+table model {
+    // mesh data
+    positions:[vec3];
+    normals:[vec3];
+    tangents:[vec3];
+    binormals:[vec3];
+    tex_coords:[vec2];
+    indices:[uint];
+
+    // materials
+    materials:[material];
+
+    // meshes
+    meshes:[mesh];
+
+    // nodes where nodes[0] is the root
+    nodes:[node];
+}
+
+root_type model;

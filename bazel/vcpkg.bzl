@@ -1,17 +1,18 @@
 _DEFAULT_NAME = "vcpkg"
 
 def _vcpkg_rule_impl(ctx):
-
     # download vcpkg
+    ctx.report_progress("dowload and extract vcpkg {0}".format(ctx.attr.version))
     ctx.download_and_extract("https://github.com/microsoft/vcpkg/archive/refs/tags/{0}.zip".format(ctx.attr.version))
 
     # create symlinlk to vcpkg_root
     ctx.symlink(
-       "vcpkg-{0}".format(ctx.attr.version),
+        "vcpkg-{0}".format(ctx.attr.version),
         "vcpkg_root",
     )
 
     # execution of vcpkg bootstrap
+    ctx.report_progress("bootstrap vcpkg")
     result = ctx.execute([
         "vcpkg_root/bootstrap-vcpkg.bat",
         "-disableMetrics",
@@ -21,17 +22,22 @@ def _vcpkg_rule_impl(ctx):
         fail("unable to bootstrap vcpkg", result.stderr)
 
     # install glfw3
+    ctx.report_progress("install dependencies")
     result = ctx.execute([
         "vcpkg_root/vcpkg",
+        "--x-buildtrees-root=c:/windows/temp/vcpkg/",
         "install",
         "--triplet=x64-windows",
         "gtest",
         "glfw3",
         "shader-slang",
+        "flatbuffers",
+        "assimp",
+        "directxtex",
     ])
 
     if result.return_code != 0:
-        fail("unable to install glfw3", result.stderr)
+        fail("unable to install dependencies", result.stderr)
 
     # generate build file
     ctx.file(
@@ -82,13 +88,55 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+cc_library(
+    name = "flatbuffers",
+    hdrs = glob(["vcpkg_root/installed/x64-windows/include/flatbuffers/**/*.h"]),
+    strip_include_prefix = "vcpkg_root/installed/x64-windows/include",
+    srcs = select({
+        ":dbg_mode": [
+            "vcpkg_root/installed/x64-windows/debug/lib/flatbuffers.lib",
+        ],
+        "//conditions:default": [
+            "vcpkg_root/installed/x64-windows/lib/flatbuffers.lib",
+        ],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "assimp",
+    hdrs = glob(["vcpkg_root/installed/x64-windows/include/assimp/**/*.h",
+                 "vcpkg_root/installed/x64-windows/include/assimp/**/*.hpp",
+                 "vcpkg_root/installed/x64-windows/include/assimp/**/*.inl",]),
+    strip_include_prefix = "vcpkg_root/installed/x64-windows/include",
+    srcs = select({
+        ":dbg_mode": [
+            "vcpkg_root/installed/x64-windows/debug/lib/assimp-vc143-mtd.lib",
+            "vcpkg_root/installed/x64-windows/debug/bin/assimp-vc143-mtd.dll",
+        ],
+        "//conditions:default": [
+            "vcpkg_root/installed/x64-windows/lib/assimp-vc143-mt.lib",
+            "vcpkg_root/installed/x64-windows/bin/assimp-vc143-mt.dll",
+        ],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# tools
 filegroup(
     name = "slangc",
     srcs = ["vcpkg_root/installed/x64-windows/tools/shader-slang/slangc.exe"],
     visibility = ["//visibility:public"],
 )
 
-""")
+filegroup(
+    name = "flatc",
+    srcs = ["vcpkg_root/installed/x64-windows/tools/flatbuffers/flatc.exe"],
+    visibility = ["//visibility:public"],
+)
+
+""",
+    )
 
 vcpkg_rule = repository_rule(
     local = True,

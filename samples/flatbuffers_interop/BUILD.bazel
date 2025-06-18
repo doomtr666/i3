@@ -1,0 +1,19 @@
+load("//bazel:flatc.bzl", "flatc")
+
+flatc(
+    name = "fbs",
+    srcs = [
+        "//samples/fbs:model_fbs",
+        "//samples/fbs:test_fbs",
+    ],
+)
+
+cc_binary(
+    name = "flatbuffers_interop",
+    srcs = glob(["*.cc"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fbs",
+        "@vcpkg//:flatbuffers",
+    ],
+)
