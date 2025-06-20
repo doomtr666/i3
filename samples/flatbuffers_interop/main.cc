@@ -1,8 +1,6 @@
 #include <flatbuffers/flatbuffers.h>
 
-#include "fbs/model_generated.h"
 #include "fbs/test_generated.h"
-
 
 std::string serialize()
 {

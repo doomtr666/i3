@@ -3,7 +3,6 @@ load("//bazel:flatc.bzl", "flatc")
 flatc(
     name = "fbs",
     srcs = [
-        "//samples/fbs:model_fbs",
         "//samples/fbs:test_fbs",
     ],
 )

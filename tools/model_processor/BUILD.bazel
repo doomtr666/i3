@@ -1,8 +1,19 @@
+load("//bazel:flatc.bzl", "flatc")
+
+flatc(
+    name = "model_fbs",
+    srcs = [
+        "//native/fbs:model_fbs",
+    ],
+)
+
 cc_binary(
     name = "model_processor",
     srcs = glob(["*.cc"]),
     visibility = ["//visibility:public"],
     deps = [
+        ":model_fbs",
         "@vcpkg//:assimp",
+        "@vcpkg//:flatbuffers",
     ],
 )

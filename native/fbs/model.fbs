@@ -6,8 +6,7 @@ struct vec2
     y:float;
 }
 
-struct vec3
-{
+struct vec3 {
     x:float;
     y:float;
     z:float;
@@ -25,11 +24,7 @@ table material
 
 struct mesh
 {
-    position_offset:uint;
-    normal_offset:uint;
-    tangent_offset:uint;
-    binormal_offset:uint;
-    tex_coord_offset:uint;
+    vertex_offset:uint;
     index_offset:uint;
     index_count:uint;
     material_index:uint;
@@ -37,6 +32,9 @@ struct mesh
 
 table node
 {
+    // node name
+    name:string;
+
     // node transforms
     transform:mat4;
 
@@ -68,3 +66,4 @@ table model {
 }
 
 root_type model;
+file_identifier "I3ML";
