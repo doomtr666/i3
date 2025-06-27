@@ -10,6 +10,7 @@ cc_library(
     ]),
     visibility = ["//visibility:public"],
     deps = [
+        "//native/content_store",
         "//native/core",
         "//native/math",
         "//native/render_backend",

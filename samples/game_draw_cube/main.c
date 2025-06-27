@@ -114,7 +114,7 @@ static void cleanup(i3_game_i* game)
     i3_log_inf(ctx->log, "Game cleaned up");
 }
 
-int main()
+int main(int argc, char** argv)
 {
     i3_game_context_t context;
     context.log = i3_get_logger("draw_cube");
@@ -126,7 +126,10 @@ int main()
         .cleanup = cleanup,
     };
 
-    i3_game_i* game = i3_game_create(&game_desc);
+    i3_game_i* game = i3_game_create(argc, argv, &game_desc);
+
+    i3_content_store_i* content_store = game->get_content_store(game->self);
+    content_store->load(content_store->self, "shaders.spv");
 
     game->run(game->self);
 

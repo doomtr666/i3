@@ -1,5 +1,6 @@
 #pragma once
 
+#include "native/content_store/content_store.h"
 #include "native/core/time.h"
 #include "native/render_window/render_window.h"
 #include "native/renderer/renderer.h"
@@ -26,6 +27,9 @@ struct i3_game_i
     // get the game user data
     void* (*get_user_data)(i3_game_o* self);
 
+    // get the game content store
+    i3_content_store_i* (*get_content_store)(i3_game_o* self);
+
     // get the game renderer
     i3_renderer_i* (*get_renderer)(i3_game_o* self);
 
@@ -42,4 +46,4 @@ struct i3_game_i
     void (*destroy)(i3_game_o* self);
 };
 
-i3_game_i* i3_game_create(i3_game_desc_t* desc);
+i3_game_i* i3_game_create(int argc, char** argv, i3_game_desc_t* desc);

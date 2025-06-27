@@ -1,10 +1,11 @@
 #pragma once
 
 #include "render_graph.h"
+#include "scene.h"
 
 typedef struct i3_renderer_o i3_renderer_o;
 
-// rende target image and view
+// render target image and view
 typedef struct i3_render_target_t
 {
     i3_rbk_image_i* image;            // render target image
@@ -14,6 +15,15 @@ typedef struct i3_render_target_t
 struct i3_renderer_i
 {
     i3_renderer_o* self;
+
+    // create a model (from flatbuffer)
+    i3_model_i* (*create_model)(i3_renderer_o* self, const void* data, uint32_t size);
+
+    // create a scene
+    i3_scene_i* (*create_scene)(i3_renderer_o* self);
+
+    // set the current scene
+    void (*set_scene)(i3_renderer_o* self, i3_scene_i* scene);
 
     // manage render graphs
     i3_render_graph_builder_i* (*create_graph_builder)(i3_renderer_o* self);

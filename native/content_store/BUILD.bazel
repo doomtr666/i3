@@ -1,11 +1,9 @@
 cc_library(
-    name = "game",
+    name = "content_store",
     srcs = glob(["*.c"]),
     hdrs = glob(["*.h"]),
     visibility = ["//visibility:public"],
     deps = [
-        "//native/content_store",
-        "//native/renderer",
-        "//native/vk_backend",
+        "//native/core",
     ],
 )

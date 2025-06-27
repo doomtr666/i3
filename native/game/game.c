@@ -1,13 +1,13 @@
 #include "game.h"
 
 #include "native/core/log.h"
-#include "native/render_window/render_window.h"
 #include "native/vk_backend/vk_backend.h"
 
 typedef struct i3_game_o
 {
     i3_game_i iface;
     i3_game_desc_t desc;
+    i3_content_store_i* content_store;
     i3_render_backend_i* backend;
     i3_renderer_i* renderer;
     i3_render_window_i* window;
@@ -28,6 +28,9 @@ static void i3_game_destroy(i3_game_o* self)
     // destroy the backend
     self->backend->destroy(self->backend->self);
 
+    // destroy the content store
+    self->content_store->destroy(self->content_store->self);
+
     i3_log_inf(self->log, "Game destroyed");
 
     // free the game object
@@ -39,6 +42,13 @@ static void* i3_game_get_user_data(i3_game_o* self)
     assert(self != NULL);
 
     return self->desc.user_data;
+}
+
+static i3_content_store_i* i3_game_get_content_store(i3_game_o* self)
+{
+    assert(self != NULL);
+
+    return self->content_store;
 }
 
 static i3_renderer_i* i3_game_get_renderer(i3_game_o* self)
@@ -95,6 +105,7 @@ static i3_game_o i3_vk_game_iface_ =
     .iface =
     {
         .get_user_data = i3_game_get_user_data,
+        .get_content_store = i3_game_get_content_store,
         .get_renderer = i3_game_get_renderer,
         .get_window = i3_game_get_window,
         .terminate = i3_game_terminate,
@@ -103,7 +114,7 @@ static i3_game_o i3_vk_game_iface_ =
     },
 };
 
-i3_game_i* i3_game_create(i3_game_desc_t* desc)
+i3_game_i* i3_game_create(int argc, char** argv, i3_game_desc_t* desc)
 {
     assert(desc != NULL);
 
@@ -118,6 +129,12 @@ i3_game_i* i3_game_create(i3_game_desc_t* desc)
 
     // create the logger
     game->log = i3_get_logger(I3_GAME_LOGGER_NAME);
+
+    i3_logger_i* content_log = i3_get_logger(I3_CONTENT_STORE_LOGGER_NAME);
+    content_log->set_level(content_log->self, I3_LOG_LEVEL_DEBUG);
+
+    // create the content store
+    game->content_store = i3_content_store_create(argc, argv);
 
     // create the render backend, vulkan only for now
     game->backend = i3_vk_backend_create();

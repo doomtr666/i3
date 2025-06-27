@@ -2,6 +2,7 @@
 
 #include "native/core/blackboard.h"
 #include "native/core/time.h"
+#include "native/math/transform.h"
 #include "native/render_backend/render_backend.h"
 
 typedef struct i3_render_pass_o i3_render_pass_o;
