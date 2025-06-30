@@ -80,13 +80,13 @@ class model_processor
 {
   public:
     void process_nodes(const aiNode* node,
-                       std::vector<flatbuffers::Offset<content::node>>& nodes,
+                       std::vector<flatbuffers::Offset<content::Node>>& nodes,
                        flatbuffers::FlatBufferBuilder& builder)
     {
         // create a node
         auto name = builder.CreateString(node->mName.C_Str());
 
-        content::nodeBuilder node_builder(builder);
+        content::NodeBuilder node_builder(builder);
         node_builder.add_name(name);
 
         // add transform
@@ -94,7 +94,7 @@ class model_processor
         for (int i = 0; i < 16; i++)
             m[i] = node->mTransformation[i / 4][i % 4];
 
-        content::mat4 transform(m);
+        content::Mat4 transform(m);
         node_builder.add_transform(&transform);
 
         // add children
@@ -122,16 +122,16 @@ class model_processor
     {
         flatbuffers::FlatBufferBuilder builder;
 
-        content::modelBuilder model_builder(builder);
+        content::ModelBuilder model_builder(builder);
 
         // compress meshes in a single vertex buffer for each channel
-        std::vector<content::vec3> positions;
-        std::vector<content::vec3> normals;
-        std::vector<content::vec3> tangents;
-        std::vector<content::vec3> bitangents;
-        std::vector<content::vec2> tex_coords;
+        std::vector<content::Vec3> positions;
+        std::vector<content::Vec3> normals;
+        std::vector<content::Vec3> tangents;
+        std::vector<content::Vec3> bitangents;
+        std::vector<content::Vec2> tex_coords;
         std::vector<uint32_t> indices;
-        std::vector<content::mesh> meshes;
+        std::vector<content::Mesh> meshes;
 
         uint32_t vertex_offset = 0;
         uint32_t index_offset = 0;
@@ -146,7 +146,7 @@ class model_processor
             for (uint32_t j = 0; j < mesh->mNumVertices; j++)
             {
                 auto pos = mesh->mVertices[j];
-                positions.push_back(content::vec3(pos.x, pos.y, pos.z));
+                positions.push_back(content::Vec3(pos.x, pos.y, pos.z));
             }
 
             // reserve space for normals
@@ -156,7 +156,7 @@ class model_processor
                 for (uint32_t j = 0; j < mesh->mNumVertices; j++)
                 {
                     auto norm = mesh->mNormals[j];
-                    normals.push_back(content::vec3(norm.x, norm.y, norm.z));
+                    normals.push_back(content::Vec3(norm.x, norm.y, norm.z));
                 }
             }
 
@@ -168,10 +168,10 @@ class model_processor
                 for (uint32_t j = 0; j < mesh->mNumVertices; j++)
                 {
                     auto tan = mesh->mTangents[j];
-                    tangents.push_back(content::vec3(tan.x, tan.y, tan.z));
+                    tangents.push_back(content::Vec3(tan.x, tan.y, tan.z));
 
                     auto bitan = mesh->mBitangents[j];
-                    bitangents.push_back(content::vec3(bitan.x, bitan.y, bitan.z));
+                    bitangents.push_back(content::Vec3(bitan.x, bitan.y, bitan.z));
                 }
             }
 
@@ -182,7 +182,7 @@ class model_processor
                 for (uint32_t j = 0; j < mesh->mNumVertices; j++)
                 {
                     auto tex_coord = mesh->mTextureCoords[0][j];
-                    tex_coords.push_back(content::vec2(tex_coord.x, tex_coord.y));
+                    tex_coords.push_back(content::Vec2(tex_coord.x, tex_coord.y));
                 }
             }
 
@@ -202,14 +202,14 @@ class model_processor
             }
 
             // create mesh
-            meshes.push_back(content::mesh(vertex_offset, index_offset, index_count, mesh->mMaterialIndex));
+            meshes.push_back(content::Mesh(vertex_offset, index_offset, index_count, mesh->mMaterialIndex));
 
             vertex_offset = positions.size();
             index_offset = indices.size();
         }
 
         // process materials
-        std::vector<flatbuffers::Offset<content::material>> materials;
+        std::vector<flatbuffers::Offset<content::Material>> materials;
         for (uint32_t i = 0; i < scene->mNumMaterials; i++)
         {
             const aiMaterial* material = scene->mMaterials[i];
@@ -221,13 +221,13 @@ class model_processor
                 material_name = value.C_Str();
 
             auto name = builder.CreateString(material_name);
-            content::materialBuilder material_builder(builder);
+            content::MaterialBuilder material_builder(builder);
             material_builder.add_name(name);
             materials.push_back(material_builder.Finish());
         }
 
         // process nodes
-        std::vector<flatbuffers::Offset<content::node>> nodes;
+        std::vector<flatbuffers::Offset<content::Node>> nodes;
         process_nodes(scene->mRootNode, nodes, builder);
 
         model_builder.add_positions(builder.CreateVectorOfStructs(positions));
@@ -241,7 +241,8 @@ class model_processor
         model_builder.add_nodes(builder.CreateVector(nodes));
 
         auto model = model_builder.Finish();
-        builder.Finish(model);
+
+        content::FinishModelBuffer(builder, model);
 
         // Save the flatbuffer to a file
         std::ofstream ofs(output_file, std::ios::binary);

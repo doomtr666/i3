@@ -130,9 +130,6 @@ i3_game_i* i3_game_create(int argc, char** argv, i3_game_desc_t* desc)
     // create the logger
     game->log = i3_get_logger(I3_GAME_LOGGER_NAME);
 
-    i3_logger_i* content_log = i3_get_logger(I3_CONTENT_STORE_LOGGER_NAME);
-    content_log->set_level(content_log->self, I3_LOG_LEVEL_DEBUG);
-
     // create the content store
     game->content_store = i3_content_store_create(argc, argv);
 
@@ -144,7 +141,7 @@ i3_game_i* i3_game_create(int argc, char** argv, i3_game_desc_t* desc)
                                                        game->desc.name ? game->desc.name : "I3 Game", 800, 600);
 
     // create the renderer
-    game->renderer = i3_renderer_create(game->backend, game->window);
+    game->renderer = i3_renderer_create(game->backend, game->window, game->content_store);
 
     i3_log_inf(game->log, "Game created");
 

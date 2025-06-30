@@ -3,6 +3,8 @@
 #include "render_graph.h"
 #include "scene.h"
 
+#define I3_RENDERER_LOGGER_NAME "renderer"
+
 typedef struct i3_renderer_o i3_renderer_o;
 
 // render target image and view
@@ -16,8 +18,8 @@ struct i3_renderer_i
 {
     i3_renderer_o* self;
 
-    // create a model (from flatbuffer)
-    i3_model_i* (*create_model)(i3_renderer_o* self, const void* data, uint32_t size);
+    // create a model
+    i3_model_i* (*create_model)(i3_renderer_o* self, i3_rbk_cmd_buffer_i* cmb_buffer, i3_content_i* model_content);
 
     // create a scene
     i3_scene_i* (*create_scene)(i3_renderer_o* self);
@@ -46,4 +48,6 @@ struct i3_renderer_i
     void (*destroy)(i3_renderer_o* self);
 };
 
-i3_renderer_i* i3_renderer_create(i3_render_backend_i* backend, i3_render_window_i* window);
+i3_renderer_i* i3_renderer_create(i3_render_backend_i* backend,
+                                  i3_render_window_i* window,
+                                  i3_content_store_i* content_store);

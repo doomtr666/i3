@@ -1,3 +1,4 @@
+load("//bazel:model.bzl", "model")
 load("//bazel:slang.bzl", "slangc")
 
 slangc(
@@ -5,10 +6,18 @@ slangc(
     srcs = glob(["*.slang"]),
 )
 
+model(
+    name = "models",
+    srcs = glob(["*.glb"]),
+)
+
 cc_binary(
     name = "game_draw_cube",
     srcs = glob(["*.c"]),
-    data = [":shaders"],
+    data = [
+        ":models",
+        ":shaders",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//native/game",

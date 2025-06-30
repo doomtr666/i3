@@ -1,6 +1,8 @@
 #pragma once
 
+#include "native/content_store/content_store.h"
 #include "native/core/blackboard.h"
+#include "native/core/log.h"
 #include "native/core/time.h"
 #include "native/math/transform.h"
 #include "native/render_backend/render_backend.h"
@@ -19,11 +21,13 @@ typedef struct i3_renderer_i i3_renderer_i;
 
 typedef struct i3_render_context_t
 {
+    i3_logger_i* log;
     i3_render_backend_i* backend;
     i3_render_window_i* window;
     i3_rbk_device_i* device;
     i3_rbk_swapchain_i* swapchain;
     i3_renderer_i* renderer;
+    i3_content_store_i* content_store;
     uint32_t render_width, render_height;
     i3_game_time_t time;
 } i3_render_context_t;

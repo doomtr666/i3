@@ -15,10 +15,14 @@ typedef struct i3_game_context_t
 
 typedef struct draw_cube_pass_ctx_t
 {
+    i3_game_i* game;
+
     i3_render_target_t g_depth;
     i3_render_target_t g_normal;
     i3_render_target_t g_albedo;
     i3_render_target_t g_metalic_roughness;
+
+    i3_model_i* cube_model;  // model for the cube
 } draw_cube_pass_ctx_t;
 
 static void draw_cube_pass_init(i3_render_pass_i* pass)
@@ -26,13 +30,34 @@ static void draw_cube_pass_init(i3_render_pass_i* pass)
     // initialize the context
     draw_cube_pass_ctx_t* ctx = i3_alloc(sizeof(draw_cube_pass_ctx_t));
     *ctx = (draw_cube_pass_ctx_t){0};
+    ctx->game = (i3_game_i*)pass->get_user_data(pass->self);
     pass->set_user_data(pass->self, ctx);
+
+    i3_renderer_i* renderer = ctx->game->get_renderer(ctx->game->self);
+    i3_content_store_i* content_store = ctx->game->get_content_store(ctx->game->self);
+
+    // create cube model
+    i3_content_i* model_content = content_store->load(content_store->self, "cube.bin");
+    i3_rbk_cmd_buffer_i* cmd_buffer = pass->get_cmd_buffer(pass->self);
+    ctx->cube_model = renderer->create_model(renderer->self, cmd_buffer, model_content);
+    pass->submit_cmd_buffers(pass->self, 1, &cmd_buffer);
+    cmd_buffer->destroy(cmd_buffer->self);
+    model_content->destroy(model_content->self);
+
+    // load shaders
+    i3_content_i* shaders_content = content_store->load(content_store->self, "shaders.spv");
+    // TODO:
+    shaders_content->destroy(shaders_content->self);
 }
 
 static void draw_cube_pass_destroy(i3_render_pass_i* pass)
 {
     // free the context
     draw_cube_pass_ctx_t* ctx = (draw_cube_pass_ctx_t*)pass->get_user_data(pass->self);
+
+    if (ctx->cube_model)
+        ctx->cube_model->destroy(ctx->cube_model);
+
     i3_free(ctx);
 }
 
@@ -57,15 +82,6 @@ static void draw_cube_pass_render(i3_render_pass_i* pass)
     // Render logic for the draw cube pass
 }
 
-static i3_render_pass_desc_t draw_cube_pass_desc = {
-    .name = "DrawCube",
-    .init = draw_cube_pass_init,
-    .destroy = draw_cube_pass_destroy,
-    .resolution_change = draw_cube_pass_resolution_change,
-    .update = draw_cube_pass_update,
-    .render = draw_cube_pass_render,
-};
-
 static void init(i3_game_i* game)
 {
     i3_game_context_t* ctx = (i3_game_context_t*)game->get_user_data(game->self);
@@ -80,6 +96,16 @@ static void init(i3_game_i* game)
     ctx->renderer->setup_default_passes(ctx->renderer->self, graph_builder);
 
     // add cube render pass to the predefined gbuffer_pass
+    i3_render_pass_desc_t draw_cube_pass_desc = {
+        .name = "DrawCube",
+        .user_data = game,
+        .init = draw_cube_pass_init,
+        .destroy = draw_cube_pass_destroy,
+        .resolution_change = draw_cube_pass_resolution_change,
+        .update = draw_cube_pass_update,
+        .render = draw_cube_pass_render,
+    };
+
     graph_builder->add_pass(graph_builder->self, "gbuffer_pass", &draw_cube_pass_desc);
 
     // build the render graph
@@ -127,9 +153,6 @@ int main(int argc, char** argv)
     };
 
     i3_game_i* game = i3_game_create(argc, argv, &game_desc);
-
-    i3_content_store_i* content_store = game->get_content_store(game->self);
-    content_store->load(content_store->self, "shaders.spv");
 
     game->run(game->self);
 

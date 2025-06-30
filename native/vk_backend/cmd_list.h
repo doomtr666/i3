@@ -231,6 +231,12 @@ static inline void i3_vk_cmd_decode(void* ctx, i3_vk_cmd_list_t* cmd_list)
 {
     assert(cmd_list != NULL);
 
+    if (cmd_list->first == NULL)
+    {
+        // no commands to decode
+        return;
+    }
+
     // reset command list for reading
     cmd_list->current = cmd_list->first;
     cmd_list->current->current = cmd_list->current->commands;

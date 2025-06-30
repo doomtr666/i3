@@ -9,6 +9,32 @@ struct i3_renderer_o
     i3_render_graph_i* graph;
 };
 
+static i3_model_i* i3_renderer_create_model(i3_renderer_o* self,
+                                            i3_rbk_cmd_buffer_i* cmb_buffer,
+                                            i3_content_i* model_content)
+{
+    assert(self != NULL);
+    assert(cmb_buffer != NULL);
+    assert(model_content != NULL);
+
+    return i3_model_create(&self->context, cmb_buffer, model_content);
+}
+
+static i3_scene_i* i3_renderer_create_scene(i3_renderer_o* self)
+{
+    assert(self != NULL);
+
+    return i3_scene_create(&self->context);
+}
+
+static void i3_renderer_set_scene(i3_renderer_o* self, i3_scene_i* scene)
+{
+    assert(self != NULL);
+    assert(scene != NULL);
+
+    // TODO
+}
+
 static i3_render_graph_builder_i* i3_renderer_create_graph_builder(i3_renderer_o* self)
 {
     assert(self != NULL);
@@ -155,6 +181,9 @@ static i3_renderer_o i3_renderer_iface_ =
 {
     .iface =
     {
+        .create_model = i3_renderer_create_model,
+        .create_scene = i3_renderer_create_scene,
+        .set_scene = i3_renderer_set_scene,
         .create_graph_builder = i3_renderer_create_graph_builder,
         .set_render_graph = i3_renderer_set_render_graph,
         .setup_default_passes = i3_renderer_setup_default_passes,
@@ -165,7 +194,9 @@ static i3_renderer_o i3_renderer_iface_ =
     },
 };
 
-i3_renderer_i* i3_renderer_create(i3_render_backend_i* backend, i3_render_window_i* window)
+i3_renderer_i* i3_renderer_create(i3_render_backend_i* backend,
+                                  i3_render_window_i* window,
+                                  i3_content_store_i* content_store)
 {
     assert(backend != NULL);
 
@@ -187,11 +218,13 @@ i3_renderer_i* i3_renderer_create(i3_render_backend_i* backend, i3_render_window
     i3_rbk_swapchain_i* swapchain = device->create_swapchain(device->self, window, &swapchain_desc);
 
     renderer->context = (i3_render_context_t){
+        .log = i3_get_logger(I3_RENDERER_LOGGER_NAME),
         .backend = backend,
         .window = window,
         .device = device,
         .swapchain = swapchain,
         .renderer = &renderer->iface,
+        .content_store = content_store,
     };
 
     return &renderer->iface;

@@ -4,6 +4,8 @@
 #include "native/core/fs.h"
 #include "native/core/log.h"
 
+#include <stdio.h>
+
 // content implementation
 struct i3_content_o
 {
@@ -11,6 +13,43 @@ struct i3_content_o
     uint32_t size;   // size of the content data
     uint8_t data[];  // pointer to the content data
 };
+
+static const void* i3_content_get_data(i3_content_o* self)
+{
+    assert(self != NULL);
+    return self->data;
+}
+
+static uint32_t i3_content_get_size(i3_content_o* self)
+{
+    assert(self != NULL);
+    return self->size;
+}
+
+static void i3_content_destroy(i3_content_o* self)
+{
+    assert(self != NULL);
+    i3_free(self);
+}
+
+static i3_content_i i3_content_iface_ = {
+    .get_data = i3_content_get_data,
+    .get_size = i3_content_get_size,
+    .destroy = i3_content_destroy,
+};
+
+static i3_content_o* i3_create_content(uint32_t size)
+{
+    // allocate memory for the content object
+    i3_content_o* content = (i3_content_o*)i3_alloc(sizeof(i3_content_o) + size);
+    assert(content != NULL);
+
+    content->iface = i3_content_iface_;
+    content->iface.self = content;
+    content->size = size;
+
+    return content;
+}
 
 // content store implementation
 
@@ -25,7 +64,36 @@ static i3_content_i* i3_content_store_load(i3_content_store_o* self, const char*
     assert(self != NULL);
     assert(path != NULL);
 
-    return NULL;  // This function should load content from the specified path.
+    // open the file
+    FILE* file = fopen(path, "rb");
+    if (!file)
+    {
+        i3_log_err(self->log, "Failed to open file: %s", path);
+        return NULL;
+    }
+
+    // get the file size
+    fseek(file, 0, SEEK_END);
+    uint32_t file_size = (uint32_t)ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (file_size <= 0)
+    {
+        i3_log_err(self->log, "File is empty or invalid: %s", path);
+        fclose(file);
+        return NULL;
+    }
+
+    // allocate memory for the content
+    i3_content_o* content = i3_create_content(file_size);
+
+    // read the file content
+    size_t bytes_read = fread(content->data, 1, file_size, file);
+    fclose(file);
+
+    i3_log_dbg(self->log, "Loaded content from file: %s, size: %u bytes", path, content->size);
+
+    return &content->iface;
 }
 
 static void i3_content_store_destroy(i3_content_store_o* self)

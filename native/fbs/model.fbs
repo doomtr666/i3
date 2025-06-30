@@ -1,28 +1,28 @@
 namespace content;
 
-struct vec2
+struct Vec2
 {
     x:float;
     y:float;
 }
 
-struct vec3 {
+struct Vec3 {
     x:float;
     y:float;
     z:float;
 }
 
-struct mat4
+struct Mat4
 {
     m:[float:16];
 }
 
-table material
+table Material
 {
     name:string;
 }
 
-struct mesh
+struct Mesh
 {
     vertex_offset:uint;
     index_offset:uint;
@@ -30,13 +30,13 @@ struct mesh
     material_index:uint;
 }
 
-table node
+table Node
 {
     // node name
     name:string;
 
     // node transforms
-    transform:mat4;
+    transform:Mat4;
 
     // node children
     children:[uint];
@@ -46,24 +46,24 @@ table node
 }
 
 // define a 3D model
-table model {
+table Model {
     // mesh data
-    positions:[vec3];
-    normals:[vec3];
-    tangents:[vec3];
-    binormals:[vec3];
-    tex_coords:[vec2];
+    positions:[Vec3];
+    normals:[Vec3];
+    tangents:[Vec3];
+    binormals:[Vec3];
+    tex_coords:[Vec2];
     indices:[uint];
 
     // materials
-    materials:[material];
+    materials:[Material];
 
     // meshes
-    meshes:[mesh];
+    meshes:[Mesh];
 
     // nodes where nodes[0] is the root
-    nodes:[node];
+    nodes:[Node];
 }
 
-root_type model;
+root_type Model;
 file_identifier "I3ML";
