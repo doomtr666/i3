@@ -1,5 +1,3 @@
-#include "../renderer.h"
-
 #include "light_pass.h"
 
 typedef struct i3_renderer_light_pass_ctx_t
@@ -81,7 +79,7 @@ static void i3_renderer_light_pass_render(i3_render_pass_i* pass)
     cmd_buffer->destroy(cmd_buffer->self);
 }
 
-i3_render_pass_desc_t* i3_renderer_get_light_pass_desc(void)
+i3_render_pass_desc_t* i3_get_light_pass_desc(void)
 {
     static i3_render_pass_desc_t light_pass_desc = {
         .name = I3_RENDERER_LIGHT_PASS_NAME,

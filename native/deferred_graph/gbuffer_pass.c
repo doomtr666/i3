@@ -1,5 +1,3 @@
-#include "../renderer.h"
-
 #include "gbuffer_pass.h"
 
 typedef struct i3_renderer_gbuffer_pass_ctx_t
@@ -162,7 +160,7 @@ static void i3_renderer_gbuffer_pass_render(i3_render_pass_i* pass)
     cmd_buffer->destroy(cmd_buffer->self);
 }
 
-i3_render_pass_desc_t* i3_renderer_get_gbuffer_pass_desc(void)
+i3_render_pass_desc_t* i3_get_gbuffer_pass_desc(void)
 {
     static i3_render_pass_desc_t gbuffer_pass_desc = {
         .name = I3_RENDERER_GBUFFER_PASS_NAME,

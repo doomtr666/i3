@@ -12,7 +12,7 @@ typedef struct i3_model_i
     void (*destroy)(i3_model_o* self);
 } i3_model_i;
 
-i3_model_i* i3_model_create(i3_render_context_t* context, i3_rbk_cmd_buffer_i* cmb_buffer, i3_content_i* model_content);
+i3_model_i* i3_model_create(i3_render_context_t* context, i3_rbk_cmd_buffer_i* cmd_buffer, i3_content_i* model_content);
 
 // model instance
 typedef struct i3_model_instance_o i3_model_instance_o;

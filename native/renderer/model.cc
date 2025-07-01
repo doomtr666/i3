@@ -1,41 +1,10 @@
 
 extern "C"
 {
-#include "scene.h"
+#include "model.h"
 }
 
 #include "fbs/model_generated.h"
-
-struct i3_model_o
-{
-    i3_model_i iface;  // interface for the model
-
-    i3_rbk_buffer_i* positions;   // position buffer
-    i3_rbk_buffer_i* normals;     // normal buffer
-    i3_rbk_buffer_i* tangents;    // tangent buffer
-    i3_rbk_buffer_i* binormals;   // binormal buffer
-    i3_rbk_buffer_i* tex_coords;  // texture coordinate buffer
-    i3_rbk_buffer_i* indices;     // index buffer
-};
-
-static void i3_model_destroy(i3_model_o* self)
-{
-    assert(self != NULL);
-    if (self->positions)
-        self->positions->destroy(self->positions->self);
-    if (self->normals)
-        self->normals->destroy(self->normals->self);
-    if (self->tangents)
-        self->tangents->destroy(self->tangents->self);
-    if (self->binormals)
-        self->binormals->destroy(self->binormals->self);
-    if (self->tex_coords)
-        self->tex_coords->destroy(self->tex_coords->self);
-    if (self->indices)
-        self->indices->destroy(self->indices->self);
-
-    i3_free(self);
-}
 
 extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
                                        i3_rbk_cmd_buffer_i* cmd_buffer,
@@ -57,12 +26,7 @@ extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
     }
 
     // create the model object
-    i3_model_o* model = (i3_model_o*)i3_alloc(sizeof(i3_model_o));
-    memset(model, 0, sizeof(i3_model_o));
-
-    // initialize the model interface
-    model->iface.self = model;
-    model->iface.destroy = i3_model_destroy;  // set the destroy function
+    i3_model_o* model = i3_model_allocate();
 
     // parse the model content
     auto model_data = content::GetModel(data);

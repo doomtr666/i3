@@ -2,7 +2,7 @@
 #include "native/game/game.h"
 #include "native/math/cam.h"
 
-#include <stdio.h>
+#include "native/deferred_graph/deferred_graph.h"
 
 typedef struct i3_game_context_t
 {
@@ -56,7 +56,7 @@ static void draw_cube_pass_destroy(i3_render_pass_i* pass)
     draw_cube_pass_ctx_t* ctx = (draw_cube_pass_ctx_t*)pass->get_user_data(pass->self);
 
     if (ctx->cube_model)
-        ctx->cube_model->destroy(ctx->cube_model);
+        ctx->cube_model->destroy(ctx->cube_model->self);
 
     i3_free(ctx);
 }
@@ -92,8 +92,8 @@ static void init(i3_game_i* game)
     // create the render graph
     i3_render_graph_builder_i* graph_builder = ctx->renderer->create_graph_builder(ctx->renderer->self);
 
-    // setup default passes
-    ctx->renderer->setup_default_passes(ctx->renderer->self, graph_builder);
+    // setup deferred graph
+    i3_setup_deferred_graph(graph_builder);
 
     // add cube render pass to the predefined gbuffer_pass
     i3_render_pass_desc_t draw_cube_pass_desc = {

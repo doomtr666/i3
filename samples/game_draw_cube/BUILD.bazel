@@ -20,6 +20,7 @@ cc_binary(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//native/deferred_graph",
         "//native/game",
     ],
 )

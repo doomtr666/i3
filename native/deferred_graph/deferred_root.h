@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../render_graph.h"
+#include "native/renderer/renderer.h"
 
 #include "native/math/mat.h"
 
@@ -11,4 +11,4 @@
 // pass parameters:
 // i3_cam_t "cam", the camera to used for rendering
 
-i3_render_pass_desc_t* i3_renderer_get_deferred_root_pass_desc();
+i3_render_pass_desc_t* i3_get_deferred_root_pass_desc();

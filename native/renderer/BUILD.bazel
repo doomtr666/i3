@@ -11,13 +11,9 @@ cc_library(
     name = "renderer",
     srcs = glob([
         "*.c",
-        "passes/*.c",
         "*.cc",
     ]),
-    hdrs = glob([
-        "*.h",
-        "passes/*.h",
-    ]),
+    hdrs = glob(["*.h"]),
     visibility = ["//visibility:public"],
     deps = [
         ":fbs",

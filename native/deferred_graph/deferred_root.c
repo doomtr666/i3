@@ -1,5 +1,3 @@
-#include "../renderer.h"
-
 #include "deferred_root.h"
 
 #include "native/math/cam.h"
@@ -78,7 +76,7 @@ static void i3_renderer_deferred_root_pass_update(i3_render_pass_i* pass)
     cmd_buffer->destroy(cmd_buffer->self);
 }
 
-i3_render_pass_desc_t* i3_renderer_get_deferred_root_pass_desc(void)
+i3_render_pass_desc_t* i3_get_deferred_root_pass_desc()
 {
     static i3_render_pass_desc_t deferred_root_pass_desc = {
         .name = I3_RENDERER_DEFERRED_ROOT_PASS_NAME,
