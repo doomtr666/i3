@@ -28,6 +28,7 @@ bool i3_make_dir(const char* path);
 bool i3_remove_dir(const char* path);
 bool i3_get_cwd(char* buffer, size_t buffer_size);
 bool i3_set_cwd(const char* path);
+bool i3_get_exe_path(char* buffer, size_t buffer_size);
 
 // directory exploration
 i3_dir_t* i3_open_dir(const char* path);

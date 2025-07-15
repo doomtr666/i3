@@ -5,6 +5,7 @@ struct i3_renderer_o
     i3_renderer_i iface;
     i3_render_context_t context;
     i3_render_graph_i* graph;
+    i3_scene_i* scene;
 };
 
 static i3_model_i* i3_renderer_create_model(i3_renderer_o* self,
@@ -30,7 +31,14 @@ static void i3_renderer_set_scene(i3_renderer_o* self, i3_scene_i* scene)
     assert(self != NULL);
     assert(scene != NULL);
 
-    // TODO
+    self->scene = scene;
+}
+
+static i3_scene_i* i3_renderer_get_scene(i3_renderer_o* self)
+{
+    assert(self != NULL);
+
+    return self->scene;
 }
 
 static i3_render_graph_builder_i* i3_renderer_create_graph_builder(i3_renderer_o* self)
@@ -104,6 +112,7 @@ static void i3_renderer_render(i3_renderer_o* self, i3_game_time_t* game_time)
     // update the game time in the render context
     self->context.time = *game_time;
 
+    // render
     if (self->graph != NULL)
     {
         // check if the window size has changed
@@ -169,6 +178,7 @@ static i3_renderer_o i3_renderer_iface_ =
         .create_model = i3_renderer_create_model,
         .create_scene = i3_renderer_create_scene,
         .set_scene = i3_renderer_set_scene,
+        .get_scene = i3_renderer_get_scene,
         .create_graph_builder = i3_renderer_create_graph_builder,
         .set_render_graph = i3_renderer_set_render_graph,
         .create_render_target = i3_renderer_create_render_target,

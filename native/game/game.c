@@ -131,7 +131,7 @@ i3_game_i* i3_game_create(int argc, char** argv, i3_game_desc_t* desc)
     game->log = i3_get_logger(I3_GAME_LOGGER_NAME);
 
     // create the content store
-    game->content_store = i3_content_store_create(argc, argv);
+    game->content_store = i3_content_store_create();
 
     // create the render backend, vulkan only for now
     game->backend = i3_vk_backend_create();

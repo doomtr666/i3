@@ -27,6 +27,9 @@ struct i3_renderer_i
     // set the current scene
     void (*set_scene)(i3_renderer_o* self, i3_scene_i* scene);
 
+    // get the current scene
+    i3_scene_i* (*get_scene)(i3_renderer_o* self);
+
     // manage render graphs
     i3_render_graph_builder_i* (*create_graph_builder)(i3_renderer_o* self);
     void (*set_render_graph)(i3_renderer_o* self, i3_render_graph_i* graph);

@@ -1,10 +1,10 @@
 cc_test(
-    name = "core_tst",
+    name = "content_store_tst",
     size = "small",
     srcs = glob(["*.cpp"]),
     visibility = ["//visibility:public"],
     deps = [
-        "//native/core",
+        "//native/content_store",
         "@vcpkg//:gtest",
     ],
 )

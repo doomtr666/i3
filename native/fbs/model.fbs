@@ -30,19 +30,15 @@ struct Mesh
     material_index:uint;
 }
 
-table Node
+struct Node
 {
-    // node name
-    name:string;
-
-    // node transforms
-    transform:Mat4;
-
-    // node children
-    children:[uint];
-
     // meshes
-    meshes:[uint];
+    mesh_offset:uint;
+    mesh_count:uint;
+
+    // children
+    children_offset:uint;
+    children_count:uint;
 }
 
 // define a 3D model
@@ -55,14 +51,18 @@ table Model {
     tex_coords:[Vec2];
     indices:[uint];
 
-    // materials
-    materials:[Material];
-
     // meshes
     meshes:[Mesh];
 
+    // materials
+    materials:[Material];
+
     // nodes where nodes[0] is the root
     nodes:[Node];
+    node_names:[string];
+    node_transforms:[Mat4];
+    node_children:[uint];
+    node_meshes:[uint];
 }
 
 root_type Model;

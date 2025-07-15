@@ -10,8 +10,9 @@
 struct i3_content_o
 {
     i3_content_i iface;
-    uint32_t size;   // size of the content data
-    uint8_t data[];  // pointer to the content data
+    uint32_t size;       // size of the content data
+    uint32_t use_count;  // reference count for the content
+    uint8_t data[];      // pointer to the content data
 };
 
 static const void* i3_content_get_data(i3_content_o* self)
@@ -26,16 +27,27 @@ static uint32_t i3_content_get_size(i3_content_o* self)
     return self->size;
 }
 
-static void i3_content_destroy(i3_content_o* self)
+static void i3_content_add_ref(i3_content_o* self)
 {
     assert(self != NULL);
+    self->use_count++;
+}
+
+static void i3_content_release(i3_content_o* self)
+{
+    assert(self != NULL);
+
+    self->use_count--;
+    if (self->use_count > 0)
+        return;  // still in use, do not free
     i3_free(self);
 }
 
 static i3_content_i i3_content_iface_ = {
     .get_data = i3_content_get_data,
     .get_size = i3_content_get_size,
-    .destroy = i3_content_destroy,
+    .add_ref = i3_content_add_ref,
+    .release = i3_content_release,
 };
 
 static i3_content_o* i3_create_content(uint32_t size)
@@ -46,6 +58,7 @@ static i3_content_o* i3_create_content(uint32_t size)
 
     content->iface = i3_content_iface_;
     content->iface.self = content;
+    content->use_count = 1;  // initial reference count
     content->size = size;
 
     return content;
@@ -170,7 +183,7 @@ static bool i3_search_for_executable_in_runfiles(i3_arena_t* arena,
     return false;
 }
 
-i3_content_store_i* i3_content_store_create(int argc, char** argv)
+i3_content_store_i* i3_content_store_create()
 {
     i3_content_store_o* store = (i3_content_store_o*)i3_alloc(sizeof(i3_content_store_o));
     *store = i3_content_store_iface_;
@@ -182,7 +195,14 @@ i3_content_store_i* i3_content_store_create(int argc, char** argv)
     i3_arena_t arena;
     i3_arena_init(&arena, 1024 * 1024);  // Initialize arena with 1MB block size
 
-    const char* exe_path = argv[0];
+    // const char* exe_path = argv[0];
+    char* exe_path = i3_arena_alloc(&arena, I3_MAX_PATH_LENGTH);
+    if (!i3_get_exe_path(exe_path, I3_MAX_PATH_LENGTH))
+    {
+        i3_log_err(store->log, "Failed to get executable path");
+        exit(EXIT_FAILURE);
+    }
+
     char* cwd = i3_arena_alloc(&arena, I3_MAX_PATH_LENGTH);
 
     if (!i3_get_cwd(cwd, I3_MAX_PATH_LENGTH))

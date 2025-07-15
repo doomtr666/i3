@@ -107,5 +107,63 @@ extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
         cmd_buffer->write_buffer(cmd_buffer->self, model->indices, 0, index_desc.size, model_data->indices()->Data());
     }
 
+    // meshes
+    i3_array_init_capacity(&model->meshes, sizeof(content::Mesh), model_data->meshes()->size());
+    for (const auto& mesh : *model_data->meshes())
+    {
+        i3_mesh_t mesh_data = {
+            mesh->vertex_offset(),
+            mesh->index_offset(),
+            mesh->index_count(),
+            mesh->material_index(),
+        };
+
+        i3_array_push(&model->meshes, &mesh_data);
+    }
+
+    // TODO: materials
+
+    // nodes
+    i3_array_init_capacity(&model->nodes, sizeof(content::Node), model_data->nodes()->size());
+    for (const auto& node : *model_data->nodes())
+    {
+        i3_node_t node_data = {
+            node->mesh_offset(),
+            node->mesh_count(),
+            node->children_offset(),
+            node->children_count(),
+        };
+
+        i3_array_push(&model->nodes, &node_data);
+    }
+
+    // TODO: node names
+
+    // node transforms
+    i3_array_init_capacity(&model->node_tranforms, sizeof(content::Mat4), model_data->node_transforms()->size());
+    for (const auto& transform : *model_data->node_transforms())
+    {
+        i3_mat4_t transform_data;
+        for (size_t i = 0; i < 16; ++i)
+            transform_data.m[i] = transform->m()->Get(i);
+        i3_array_push(&model->node_tranforms, &transform_data);
+    }
+
+    // node meshes
+    i3_array_init_capacity(&model->node_meshes, sizeof(uint32_t), model_data->node_meshes()->size());
+    for (const auto& mesh_index : *model_data->node_meshes())
+    {
+        uint32_t index = mesh_index;
+        i3_array_push(&model->node_meshes, &index);
+    }
+
+    // node children
+    i3_array_init_capacity(&model->node_children, sizeof(uint32_t), model_data->node_children()->size());
+    for (const auto& child_index : *model_data->node_children())
+    {
+        uint32_t index = child_index;
+        i3_array_push(&model->node_children, &index);
+    }
+
     return &model->iface;
 }

@@ -78,47 +78,53 @@ class log_stream : public Assimp::LogStream
 // convert assimp scene to model flatbuffer
 class model_processor
 {
+    struct nodes_data
+    {
+        std::vector<content::Node> nodes;
+        std::vector<content::Mat4> transforms;
+        std::vector<std::string> names;
+        std::vector<uint32_t> node_meshes;
+        std::vector<uint32_t> node_children;
+    };
+
   public:
-    void process_nodes(const aiNode* node,
-                       std::vector<flatbuffers::Offset<content::Node>>& nodes,
-                       flatbuffers::FlatBufferBuilder& builder)
+    void process_node(const aiNode* node, nodes_data& data)
     {
         // create a node
-        auto name = builder.CreateString(node->mName.C_Str());
-
-        content::NodeBuilder node_builder(builder);
-        node_builder.add_name(name);
+        data.names.push_back(node->mName.C_Str());
 
         // add transform
         float m[16];
         for (int i = 0; i < 16; i++)
             m[i] = node->mTransformation[i / 4][i % 4];
-
-        content::Mat4 transform(m);
-        node_builder.add_transform(&transform);
+        data.transforms.emplace_back(m);
 
         // add children
         std::vector<uint32_t> children_indices;
         for (uint32_t i = 0; i < node->mNumChildren; i++)
         {
             const aiNode* child = node->mChildren[i];
-            process_nodes(child, nodes, builder);
-            children_indices.push_back(nodes.size());
+            process_node(child, data);
+            children_indices.push_back(data.nodes.size());
         }
-        if (!children_indices.empty())
-            node_builder.add_children(builder.CreateVector(children_indices));
+        uint32_t children_count = static_cast<uint32_t>(children_indices.size());
+        uint32_t children_offset = children_count > 0 ? data.node_children.size() : 0;
+        data.node_children.insert(data.node_children.end(), children_indices.begin(), children_indices.end());
 
         // add meshes
         std::vector<uint32_t> mesh_indices;
         for (uint32_t i = 0; i < node->mNumMeshes; i++)
             mesh_indices.push_back(node->mMeshes[i]);
-        if (!mesh_indices.empty())
-            node_builder.add_meshes(builder.CreateVector(mesh_indices));
 
-        nodes.push_back(node_builder.Finish());
+        uint32_t mesh_count = static_cast<uint32_t>(mesh_indices.size());
+        uint32_t mesh_offset = mesh_count > 0 ? data.node_meshes.size() : 0;
+        data.node_meshes.insert(data.node_meshes.end(), mesh_indices.begin(), mesh_indices.end());
+
+        // add node
+        data.nodes.emplace_back(content::Node(mesh_offset, mesh_count, children_offset, children_count));
     }
 
-    void process(const aiScene* scene, const std::string& output_file)
+    bool process(const aiScene* scene, const std::string& output_file)
     {
         flatbuffers::FlatBufferBuilder builder;
 
@@ -131,7 +137,10 @@ class model_processor
         std::vector<content::Vec3> bitangents;
         std::vector<content::Vec2> tex_coords;
         std::vector<uint32_t> indices;
+
+        // meshes
         std::vector<content::Mesh> meshes;
+        // materials
 
         uint32_t vertex_offset = 0;
         uint32_t index_offset = 0;
@@ -141,7 +150,7 @@ class model_processor
         {
             const aiMesh* mesh = scene->mMeshes[i];
 
-            // reserve space for positions
+            // positions
             positions.reserve(positions.size() + mesh->mNumVertices);
             for (uint32_t j = 0; j < mesh->mNumVertices; j++)
             {
@@ -149,7 +158,7 @@ class model_processor
                 positions.push_back(content::Vec3(pos.x, pos.y, pos.z));
             }
 
-            // reserve space for normals
+            // normals
             if (mesh->HasNormals())
             {
                 normals.reserve(normals.size() + mesh->mNumVertices);
@@ -160,7 +169,7 @@ class model_processor
                 }
             }
 
-            // reserve space for tangents
+            // tangents
             if (mesh->HasTangentsAndBitangents())
             {
                 tangents.reserve(tangents.size() + mesh->mNumVertices);
@@ -175,7 +184,7 @@ class model_processor
                 }
             }
 
-            // reserve space for texture coordinates
+            // texture coordinates
             if (mesh->HasTextureCoords(0))
             {
                 tex_coords.reserve(tex_coords.size() + mesh->mNumVertices);
@@ -186,7 +195,7 @@ class model_processor
                 }
             }
 
-            // reserve space for indices
+            // indices
             uint32_t index_count = 0;
             indices.reserve(indices.size() + mesh->mNumFaces * 3);
             for (uint32_t j = 0; j < mesh->mNumFaces; j++)
@@ -224,12 +233,15 @@ class model_processor
             content::MaterialBuilder material_builder(builder);
             material_builder.add_name(name);
             materials.push_back(material_builder.Finish());
+
+            // TODO: other material properties can be added here
         }
 
         // process nodes
-        std::vector<flatbuffers::Offset<content::Node>> nodes;
-        process_nodes(scene->mRootNode, nodes, builder);
+        nodes_data nodes;
+        process_node(scene->mRootNode, nodes);
 
+        // create the model
         model_builder.add_positions(builder.CreateVectorOfStructs(positions));
         model_builder.add_normals(builder.CreateVectorOfStructs(normals));
         model_builder.add_tangents(builder.CreateVectorOfStructs(tangents));
@@ -238,8 +250,11 @@ class model_processor
         model_builder.add_indices(builder.CreateVector(indices));
         model_builder.add_materials(builder.CreateVector(materials));
         model_builder.add_meshes(builder.CreateVectorOfStructs(meshes));
-        model_builder.add_nodes(builder.CreateVector(nodes));
-
+        model_builder.add_nodes(builder.CreateVectorOfStructs(nodes.nodes));
+        model_builder.add_node_names(builder.CreateVectorOfStrings(nodes.names));
+        model_builder.add_node_transforms(builder.CreateVectorOfStructs(nodes.transforms));
+        model_builder.add_node_children(builder.CreateVector(nodes.node_children));
+        model_builder.add_node_meshes(builder.CreateVector(nodes.node_meshes));
         auto model = model_builder.Finish();
 
         content::FinishModelBuffer(builder, model);
@@ -248,14 +263,16 @@ class model_processor
         std::ofstream ofs(output_file, std::ios::binary);
         if (!ofs)
         {
-            std::cerr << "Error createing output file: " << output_file << "\n";
-            return;
+            std::cerr << "Error creating output file: " << output_file << "\n";
+            return false;
         }
 
         auto data = builder.GetBufferPointer();
         auto size = builder.GetSize();
         ofs.write(reinterpret_cast<const char*>(data), size);
         ofs.close();
+
+        return true;
     }
 };
 
@@ -293,7 +310,8 @@ int main(int argc, char** argv)
     }
 
     model_processor processor;
-    processor.process(scene, opts.output_file());
+    if (!processor.process(scene, opts.output_file()))
+        return EXIT_FAILURE;
 
     // process the scene as needed
     std::cout << "Model processed successfully: " << opts.input_file() << "\n";

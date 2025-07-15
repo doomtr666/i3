@@ -1,0 +1,8 @@
+test_suite(
+    name = "ci",
+    tests = [
+        "//native/content_store_tst",
+        "//native/core_tst",
+        "//native/math_tst",
+    ],
+)

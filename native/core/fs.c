@@ -1,5 +1,5 @@
-#include < windows.h>
 #include <direct.h>
+#include <windows.h>
 
 #include "fs.h"
 
@@ -151,6 +151,19 @@ bool i3_set_cwd(const char* path)
 
     if (_chdir((const char*)path) != 0)
         return false;  // Error setting current directory
+
+    return true;
+}
+
+bool i3_get_exe_path(char* buffer, size_t buffer_size)
+{
+    assert(buffer != NULL);
+    assert(buffer_size > 0);
+
+    // Get the full path of the executable
+    DWORD result = GetModuleFileNameA(NULL, buffer, (DWORD)buffer_size);
+    if (result == 0 || result >= buffer_size)
+        return false;  // Error or buffer too small
 
     return true;
 }
