@@ -1,6 +1,6 @@
 # vulkan sdk
 vulkan_sdk = use_extension("//bazel:vulkan_sdk.bzl", "vulkan_sdk")
-vulkan_sdk.install(version = "1.4.309.0")
+vulkan_sdk.install()
 use_repo(vulkan_sdk, "vulkan_sdk")
 
 # vcpkg

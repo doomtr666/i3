@@ -3,7 +3,9 @@ def _model_impl(ctx):
 
     for src in ctx.attr.srcs:
         src_file = src.files.to_list()[0]
+
         out_file = src_file.basename.replace(".glb", ".bin")
+
         output = ctx.actions.declare_file(out_file)
 
         args = ctx.actions.args()

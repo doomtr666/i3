@@ -161,17 +161,15 @@
     },
     "//bazel:vulkan_sdk.bzl%vulkan_sdk": {
       "general": {
-        "bzlTransitiveDigest": "l+Eplm49DLBxB/PS2N/xdMRtj5Jp5GMm44GVSknFdR8=",
-        "usagesDigest": "F18xGFzPPmXMAGs6z7PUT3oHCQxasMrQKihzKBh/YxE=",
+        "bzlTransitiveDigest": "wLVf4vjUClq4OiumNdPvRZESCVyzKXrb//sLVWNNY5c=",
+        "usagesDigest": "faCQ79WLoajExKK84ncRN/5LBFOn6l4/fSE21Ev1MTk=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
         "generatedRepoSpecs": {
           "vulkan_sdk": {
             "repoRuleId": "@@//bazel:vulkan_sdk.bzl%vulkan_sdk_rule",
-            "attributes": {
-              "version": "1.4.309.0"
-            }
+            "attributes": {}
           }
         },
         "recordedRepoMappingEntries": []

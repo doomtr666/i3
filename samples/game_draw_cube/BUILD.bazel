@@ -1,10 +1,4 @@
 load("//bazel:model.bzl", "model")
-load("//bazel:slang.bzl", "slangc")
-
-slangc(
-    name = "shaders",
-    srcs = glob(["*.slang"]),
-)
 
 model(
     name = "models",
@@ -16,7 +10,6 @@ cc_binary(
     srcs = glob(["*.c"]),
     data = [
         ":models",
-        ":shaders",
     ],
     visibility = ["//visibility:public"],
     deps = [
