@@ -11,10 +11,11 @@ typedef struct i3_vk_framebuffer_o
     i3_rbk_framebuffer_i iface;
     i3_vk_device_o* device;
     uint32_t use_count;
-    VkRenderPass render_pass;
+    i3_rbk_pipeline_i* graphics_pipeline;
+    VkRenderPass render_pass;  // render pass used by the framebuffer
     VkFramebuffer handle;
 
-    // use list for attachments
+    // use list for attachments and pipeline
     i3_vk_use_list_t use_list;
 
     uint32_t color_attachment_count;

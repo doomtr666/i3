@@ -734,3 +734,41 @@ VkIndexType i3_vk_convert_index_type(i3_rbk_index_type_t type)
         }
     }
 }
+
+// attachment load op
+VkAttachmentLoadOp i3_vk_convert_attachment_load_op(i3_rbk_attachment_load_op_t op)
+{
+    switch (op)
+    {
+        case I3_RBK_ATTACHMENT_LOAD_OP_LOAD:
+            return VK_ATTACHMENT_LOAD_OP_LOAD;
+        case I3_RBK_ATTACHMENT_LOAD_OP_CLEAR:
+            return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        case I3_RBK_ATTACHMENT_LOAD_OP_DONT_CARE:
+            return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        default:
+        {
+            i3_logger_i* logger = i3_vk_get_logger();
+            i3_log_wrn(logger, "Unsupported attachment load op: %d", op);
+            return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        }
+    }
+}
+
+// attachment store op
+VkAttachmentStoreOp i3_vk_convert_attachment_store_op(i3_rbk_attachment_store_op_t op)
+{
+    switch (op)
+    {
+        case I3_RBK_ATTACHMENT_STORE_OP_STORE:
+            return VK_ATTACHMENT_STORE_OP_STORE;
+        case I3_RBK_ATTACHMENT_STORE_OP_DONT_CARE:
+            return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        default:
+        {
+            i3_logger_i* logger = i3_vk_get_logger();
+            i3_log_wrn(logger, "Unsupported attachment store op: %d", op);
+            return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        }
+    }
+}

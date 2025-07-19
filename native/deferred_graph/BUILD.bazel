@@ -1,19 +1,15 @@
-load("//bazel:slang.bzl", "slangc")
-
-slangc(
-    name = "shaders",
-    srcs = glob(["*.slang"]),
-)
-
 cc_library(
     name = "deferred_graph",
     srcs = glob(["*.c"]),
     hdrs = glob(["*.h"]),
-    data = [
-        ":shaders",
-    ],
     visibility = ["//visibility:public"],
     deps = [
         "//native/renderer",
     ],
+)
+
+filegroup(
+    name = "shaders",
+    srcs = glob(["*.slang"]),
+    visibility = ["//visibility:public"],
 )

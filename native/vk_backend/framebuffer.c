@@ -3,6 +3,7 @@
 #include "convert.h"
 #include "framebuffer.h"
 #include "image_view.h"
+#include "pipeline.h"
 
 // resource interface
 
@@ -21,7 +22,6 @@ static void i3_vk_framebuffer_release(i3_rbk_resource_o* self)
 
     if (--framebuffer->use_count == 0)
     {
-        vkDestroyRenderPass(framebuffer->device->handle, framebuffer->render_pass, NULL);
         vkDestroyFramebuffer(framebuffer->device->handle, framebuffer->handle, NULL);
 
         // destroy use list
@@ -107,93 +107,37 @@ i3_rbk_framebuffer_i* i3_vk_device_create_framebuffer(i3_rbk_device_o* self, con
     // intialize use list
     i3_vk_use_list_init(&framebuffer->use_list, device);
 
+    // add pipeline to use list
+    i3_vk_use_list_add(&framebuffer->use_list, desc->graphics_pipeline);
+    // retrieve render pass from pipeline
+    framebuffer->render_pass = ((i3_vk_pipeline_o*)desc->graphics_pipeline->self)->render_pass;
+
+    // arena for temporary allocations
     i3_arena_t arena;
     i3_arena_init(&arena, I3_KB);
 
-    uint32_t attachment_count = desc->color_attachment_count + (desc->depth_attachment ? 1 : 0);
-
-    VkAttachmentReference* attachment_ref = i3_arena_alloc(&arena, sizeof(VkAttachmentReference) * attachment_count);
-    VkAttachmentDescription* attachments = i3_arena_alloc(&arena, sizeof(VkAttachmentDescription) * attachment_count);
+    uint32_t attachment_count = desc->color_attachment_count + (desc->depth_stencil_attachment ? 1 : 0);
     VkImageView* image_views = i3_arena_alloc(&arena, sizeof(VkImageView) * attachment_count);
 
-    uint32_t i;
-    for (i = 0; i < desc->color_attachment_count; i++)
+    for (uint32_t i = 0; i < desc->color_attachment_count; i++)
     {
         // retain image view
-        i3_rbk_image_view_i* image_view = desc->color_attachments[i].image_view;
+        i3_rbk_image_view_i* image_view = desc->color_attachments[i];
         i3_vk_use_list_add(&framebuffer->use_list, image_view);
 
-        const i3_rbk_image_view_desc_t* image_view_desc = image_view->get_desc(image_view->self);
-        i3_rbk_image_i* image = image_view->get_image(image_view->self);
-        const i3_rbk_image_desc_t* image_desc = image->get_desc(image->self);
-
-        attachment_ref[i] = (VkAttachmentReference){
-            .attachment = i,
-            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        };
-
-        attachments[i] = (VkAttachmentDescription){
-            .format = i3_vk_convert_format(image_view_desc->format),
-            .samples = image_desc->samples,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        };
-
-        image_views[i] = ((i3_vk_image_view_o*)desc->color_attachments[i].image_view->self)->handle;
+        image_views[i] = ((i3_vk_image_view_o*)desc->color_attachments[i]->self)->handle;
         framebuffer->color_attachments[i] = image_view;
     }
 
-    if (desc->depth_attachment)
+    if (desc->depth_stencil_attachment)
     {
         // retain image view
-        i3_rbk_image_view_i* image_view = desc->depth_attachment->image_view;
+        i3_rbk_image_view_i* image_view = desc->depth_stencil_attachment;
         i3_vk_use_list_add(&framebuffer->use_list, image_view);
 
-        const i3_rbk_image_view_desc_t* image_view_desc = image_view->get_desc(image_view->self);
-        i3_rbk_image_i* image = image_view->get_image(image_view->self);
-        const i3_rbk_image_desc_t* image_desc = image->get_desc(image->self);
-
-        attachment_ref[i] = (VkAttachmentReference){
-            .attachment = i,
-            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        };
-
-        attachments[i] = (VkAttachmentDescription){
-            .format = i3_vk_convert_format(image_view_desc->format),
-            .samples = image_desc->samples,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        };
-
-        image_views[i] = ((i3_vk_image_view_o*)desc->depth_attachment->image_view->self)->handle;
+        image_views[desc->color_attachment_count] = ((i3_vk_image_view_o*)desc->depth_stencil_attachment->self)->handle;
         framebuffer->depth_attachment = image_view;
     }
-
-    // create render pass
-    VkSubpassDescription subpass = {
-        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .colorAttachmentCount = desc->color_attachment_count,
-        .pColorAttachments = attachment_ref,
-        .pDepthStencilAttachment = desc->depth_attachment ? &attachment_ref[i] : NULL,
-    };
-
-    VkRenderPassCreateInfo render_pass_ci = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .attachmentCount = attachment_count,
-        .pAttachments = attachments,
-    };
-
-    i3_vk_check(vkCreateRenderPass(device->handle, &render_pass_ci, NULL, &framebuffer->render_pass));
 
     // create framebuffer
     VkFramebufferCreateInfo framebuffer_ci = {

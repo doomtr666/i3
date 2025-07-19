@@ -1,7 +1,6 @@
 #include "native/core/arena.h"
 
 #include "convert.h"
-#include "framebuffer.h"
 #include "pipeline.h"
 #include "pipeline_layout.h"
 #include "shader_module.h"
@@ -26,11 +25,12 @@ static void i3_vk_pipeline_release(i3_rbk_resource_o* self)
     {
         vkDestroyPipeline(pipeline->device->handle, pipeline->handle, NULL);
 
+        // destroy render pass
+        if (pipeline->render_pass != VK_NULL_HANDLE)
+            vkDestroyRenderPass(pipeline->device->handle, pipeline->render_pass, NULL);
+
         // release pipeline layout
         i3_rbk_resource_release(pipeline->layout);
-
-        // release framebuffer
-        i3_rbk_resource_release(pipeline->framebuffer);
 
         i3_memory_pool_free(&pipeline->device->pipeline_pool, pipeline);
     }
@@ -106,6 +106,85 @@ static i3_vk_pipeline_o* i3_vk_allocate_pipeline(i3_vk_device_o* device)
     pipeline->device = device;
     pipeline->use_count = 1;
     return pipeline;
+}
+
+// create render pass
+static VkRenderPass i3_vk_create_render_pass(i3_arena_t* arena,
+                                             i3_rbk_device_o* device,
+                                             const i3_rbk_graphics_pipeline_desc_t* desc)
+{
+    assert(arena != NULL);
+    assert(device != NULL);
+    assert(desc != NULL);
+
+    uint32_t attachment_count = desc->color_attachment_count + (desc->depth_stencil_attachment ? 1 : 0);
+
+    VkAttachmentDescription* attachments = i3_arena_alloc(arena, sizeof(VkAttachmentDescription) * attachment_count);
+    VkAttachmentReference* references = i3_arena_alloc(arena, sizeof(VkAttachmentReference) * attachment_count);
+
+    // create color attachments descriptions
+    for (uint32_t i = 0; i < desc->color_attachment_count; i++)
+    {
+        const i3_rbk_attachment_desc_t* attachment = &desc->color_attachments[i];
+        attachments[i] = (VkAttachmentDescription){
+            .format = i3_vk_convert_format(attachment->format),
+            .samples = i3_vk_convert_sample_count(attachment->samples),
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        references[i] = (VkAttachmentReference){
+            .attachment = i,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+    }
+
+    // create depth-stencil attachment description if present
+    if (desc->depth_stencil_attachment)
+    {
+        const i3_rbk_attachment_desc_t* attachment = desc->depth_stencil_attachment;
+        attachments[desc->color_attachment_count] = (VkAttachmentDescription){
+            .format = i3_vk_convert_format(attachment->format),
+            .samples = i3_vk_convert_sample_count(attachment->samples),
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+
+        references[desc->color_attachment_count] = (VkAttachmentReference){
+            .attachment = desc->color_attachment_count,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+    }
+
+    // create subpass description
+    VkSubpassDescription subpass_desc = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = desc->color_attachment_count,
+        .pColorAttachments = references,
+        .pDepthStencilAttachment = desc->depth_stencil_attachment ? &references[desc->color_attachment_count] : NULL,
+    };
+
+    // create render pass
+    VkRenderPassCreateInfo render_pass_ci = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = attachment_count,
+        .pAttachments = attachments,
+        .subpassCount = 1,
+        .pSubpasses = &subpass_desc,
+    };
+
+    VkRenderPass render_pass;
+    i3_vk_check(vkCreateRenderPass(((i3_vk_device_o*)device)->handle, &render_pass_ci, NULL, &render_pass));
+
+    return render_pass;
 }
 
 // create stages
@@ -455,10 +534,6 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
     i3_arena_t arena;
     i3_arena_init(&arena, 4 * I3_KB);
 
-    // keep ref to framebuffer
-    pipeline->framebuffer = desc->framebuffer;
-    i3_rbk_resource_add_ref(desc->framebuffer);
-
     // keep ref to pipeline layout
     pipeline->layout = desc->layout;
     i3_rbk_resource_add_ref(desc->layout);
@@ -467,8 +542,14 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
     VkGraphicsPipelineCreateInfo pipeline_ci = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .layout = ((i3_vk_pipeline_layout_o*)desc->layout->self)->handle,
-        .renderPass = ((i3_vk_framebuffer_o*)desc->framebuffer->self)->render_pass,
     };
+
+    // create render pass
+    if ((desc->color_attachment_count > 0 && desc->color_attachments != NULL) || desc->depth_stencil_attachment != NULL)
+    {
+        pipeline->render_pass = i3_vk_create_render_pass(&arena, self, desc);
+        pipeline_ci.renderPass = pipeline->render_pass;
+    }
 
     // create stages
     if (desc->stage_count > 0 && desc->stages != NULL)
@@ -480,7 +561,6 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
     // vertex input state
     if (desc->vertex_input != NULL)
         pipeline_ci.pVertexInputState = i3_vk_create_vertex_input_states(&arena, desc->vertex_input);
-
     // input assembly state
     if (desc->input_assembly != NULL)
         pipeline_ci.pInputAssemblyState = i3_vk_create_input_assembly_states(&arena, desc->input_assembly);

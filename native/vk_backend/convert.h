@@ -79,3 +79,8 @@ VkDescriptorType i3_vk_convert_descriptor_type(i3_rbk_descriptor_type_t type);
 
 // index type
 VkIndexType i3_vk_convert_index_type(i3_rbk_index_type_t type);
+
+// attachment load op
+VkAttachmentLoadOp i3_vk_convert_attachment_load_op(i3_rbk_attachment_load_op_t op);
+// attachment store op
+VkAttachmentStoreOp i3_vk_convert_attachment_store_op(i3_rbk_attachment_store_op_t op);

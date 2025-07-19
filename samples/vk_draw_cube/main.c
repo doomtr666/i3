@@ -125,21 +125,6 @@ int main()
 
     i3_rbk_image_view_i* image_view = device->create_image_view(device->self, image, &image_view_info);
 
-    // create framebuffer
-    i3_rbk_framebuffer_attachment_desc_t framebuffer_attachment = {
-        .image_view = image_view,
-    };
-
-    i3_rbk_framebuffer_desc_t framebuffer_desc = {
-        .width = 800,
-        .height = 600,
-        .layers = 1,
-        .color_attachment_count = 1,
-        .color_attachments = &framebuffer_attachment,
-    };
-
-    i3_rbk_framebuffer_i* frame_buffer = device->create_framebuffer(device->self, &framebuffer_desc);
-
     // create descriptor set layout
     i3_rbk_descriptor_set_layout_binding_t descriptor_set_layout_bindings[] = {{
         .binding = 0,
@@ -279,8 +264,16 @@ int main()
         .dynamic_states = dynamic_states,
     };
 
+    // create attachment description
+    i3_rbk_attachment_desc_t attachment = {
+        .format = I3_RBK_FORMAT_R8G8B8A8_UNORM,
+        .samples = 1,
+    };
+
     // graphics pipeline
     i3_rbk_graphics_pipeline_desc_t pipeline_desc = {
+        .color_attachment_count = 1,
+        .color_attachments = &attachment,
         .stage_count = 2,
         .stages = stages,
         .vertex_input = &vertex_input,
@@ -291,10 +284,21 @@ int main()
         .color_blend = &color_blend,
         .dynamic = &dynamic,
         .layout = pipeline_layout,
-        .framebuffer = frame_buffer,
     };
 
     i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
+
+    // create framebuffer
+    i3_rbk_framebuffer_desc_t framebuffer_desc = {
+        .width = 800,
+        .height = 600,
+        .layers = 1,
+        .graphics_pipeline = pipeline,
+        .color_attachment_count = 1,
+        .color_attachments = &image_view,
+    };
+
+    i3_rbk_framebuffer_i* frame_buffer = device->create_framebuffer(device->self, &framebuffer_desc);
 
     // update descriptor set
     i3_rbk_descriptor_set_write_t descriptor_set_write = {

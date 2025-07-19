@@ -334,6 +334,20 @@ typedef enum
     I3_RBK_INDEX_TYPE_UINT32,
 } i3_rbk_index_type_t;
 
+// attachment load/store ops
+typedef enum
+{
+    I3_RBK_ATTACHMENT_LOAD_OP_LOAD = 0,
+    I3_RBK_ATTACHMENT_LOAD_OP_CLEAR,
+    I3_RBK_ATTACHMENT_LOAD_OP_DONT_CARE,
+} i3_rbk_attachment_load_op_t;
+
+typedef enum
+{
+    I3_RBK_ATTACHMENT_STORE_OP_STORE = 0,
+    I3_RBK_ATTACHMENT_STORE_OP_DONT_CARE,
+} i3_rbk_attachment_store_op_t;
+
 // viewport
 typedef struct i3_rbk_viewport_t
 {
@@ -614,31 +628,6 @@ typedef struct i3_rbk_pipeline_layout_i
     void (*destroy)(i3_rbk_pipeline_layout_o* self);
 } i3_rbk_pipeline_layout_i;
 
-// framebuffer
-typedef struct i3_rbk_framebuffer_attachment_desc_t
-{
-    i3_rbk_image_view_i* image_view;
-} i3_rbk_framebuffer_attachment_desc_t;
-
-typedef struct i3_rbk_framebuffer_desc_t
-{
-    uint32_t width;
-    uint32_t height;
-    uint32_t layers;
-    uint32_t color_attachment_count;
-    const i3_rbk_framebuffer_attachment_desc_t* color_attachments;
-    i3_rbk_framebuffer_attachment_desc_t* depth_attachment;
-} i3_rbk_framebuffer_desc_t;
-
-typedef struct i3_rbk_framebuffer_o i3_rbk_framebuffer_o;
-
-typedef struct i3_rbk_framebuffer_i
-{
-    i3_rbk_framebuffer_o* self;
-    i3_rbk_resource_i* (*get_resource)(i3_rbk_framebuffer_o* self);
-    void (*destroy)(i3_rbk_framebuffer_o* self);
-} i3_rbk_framebuffer_i;
-
 // shader module
 typedef struct i3_rbk_shader_module_desc_t
 {
@@ -656,6 +645,13 @@ typedef struct i3_rbk_shader_module_i
     i3_rbk_resource_i* (*get_resource)(i3_rbk_shader_module_o* self);
     void (*destroy)(i3_rbk_shader_module_o* self);
 } i3_rbk_shader_module_i;
+
+// attachment description
+typedef struct i3_rbk_attachment_desc_t
+{
+    i3_rbk_format_t format;
+    uint32_t samples;
+} i3_rbk_attachment_desc_t;
 
 // shader stage
 typedef struct i3_rbk_pipeline_shader_stage_desc_t
@@ -794,6 +790,9 @@ typedef struct i3_rbk_pipeline_dynamic_state_t
 // graphics pipeline
 typedef struct i3_rbk_graphics_pipeline_desc_t
 {
+    uint32_t color_attachment_count;
+    const i3_rbk_attachment_desc_t* color_attachments;
+    const i3_rbk_attachment_desc_t* depth_stencil_attachment;
     uint32_t stage_count;
     const i3_rbk_pipeline_shader_stage_desc_t* stages;
     const i3_rbk_pipeline_vertex_input_state_t* vertex_input;
@@ -805,7 +804,6 @@ typedef struct i3_rbk_graphics_pipeline_desc_t
     const i3_rbk_pipeline_depth_stencil_state_t* depth_stencil;
     const i3_rbk_pipeline_color_blend_state_t* color_blend;
     const i3_rbk_pipeline_dynamic_state_t* dynamic;
-    i3_rbk_framebuffer_i* framebuffer;
     i3_rbk_pipeline_layout_i* layout;
 } i3_rbk_graphics_pipeline_desc_t;
 
@@ -826,6 +824,27 @@ typedef struct i3_rbk_pipeline_i
     i3_rbk_resource_i* (*get_resource)(i3_rbk_pipeline_o* self);
     void (*destroy)(i3_rbk_pipeline_o* self);
 } i3_rbk_pipeline_i;
+
+// framebuffer
+typedef struct i3_rbk_framebuffer_desc_t
+{
+    uint32_t width;
+    uint32_t height;
+    uint32_t layers;
+    i3_rbk_pipeline_i* graphics_pipeline;
+    uint32_t color_attachment_count;
+    i3_rbk_image_view_i** color_attachments;
+    i3_rbk_image_view_i* depth_stencil_attachment;
+} i3_rbk_framebuffer_desc_t;
+
+typedef struct i3_rbk_framebuffer_o i3_rbk_framebuffer_o;
+
+typedef struct i3_rbk_framebuffer_i
+{
+    i3_rbk_framebuffer_o* self;
+    i3_rbk_resource_i* (*get_resource)(i3_rbk_framebuffer_o* self);
+    void (*destroy)(i3_rbk_framebuffer_o* self);
+} i3_rbk_framebuffer_i;
 
 // swapchain
 typedef struct i3_rbk_swapchain_desc_t
