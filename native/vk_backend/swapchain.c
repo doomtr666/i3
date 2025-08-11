@@ -128,6 +128,22 @@ bool i3_vk_recreate_swapchain(i3_vk_swapchain_o* swapchain)
     i3_vk_check(vkGetSwapchainImagesKHR(swapchain->device->handle, swapchain->handle, &swapchain->image_count,
                                         swapchain->images));
 
+    // recreate semaphores
+    vkDeviceWaitIdle(swapchain->device->handle);
+
+    for (uint32_t i = 0; i < swapchain->sem_count; i++)
+    {
+        vkDestroySemaphore(swapchain->device->handle, swapchain->acquire_sems[i], NULL);
+        vkDestroySemaphore(swapchain->device->handle, swapchain->present_sems[i], NULL);
+
+        vkCreateSemaphore(swapchain->device->handle,
+                          &(VkSemaphoreCreateInfo){.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}, NULL,
+                          &swapchain->acquire_sems[i]);
+        vkCreateSemaphore(swapchain->device->handle,
+                          &(VkSemaphoreCreateInfo){.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}, NULL,
+                          &swapchain->present_sems[i]);
+    }
+
     // reset out of date flag
     swapchain->out_of_date = false;
 
@@ -278,7 +294,7 @@ i3_rbk_swapchain_i* i3_vk_device_create_swapchain(i3_rbk_device_o* self,
         i3_vk_log_fatal("Failed to create swapchain");
 
     // create semaphores
-    swapchain->sem_count = 16;
+    swapchain->sem_count = I3_VK_SWAPCHAIN_MAX_SEM_COUNT;
 
     for (uint32_t i = 0; i < swapchain->sem_count; i++)
     {
@@ -300,7 +316,6 @@ uint32_t i3_vk_swapchain_acquire_image(i3_vk_swapchain_o* swapchain)
 
     // set up current semaphores
     swapchain->acquire_sem = swapchain->acquire_sems[swapchain->sem_index];
-    swapchain->present_sem = swapchain->present_sems[swapchain->sem_index];
 
     // acquire image
     uint32_t image_index = 0;
@@ -318,6 +333,7 @@ uint32_t i3_vk_swapchain_acquire_image(i3_vk_swapchain_o* swapchain)
         i3_vk_check(result);
 
     swapchain->sem_index = (swapchain->sem_index + 1) % swapchain->sem_count;
+    swapchain->present_sem = swapchain->present_sems[image_index];
 
     return image_index;
 }

@@ -82,6 +82,14 @@ static i3_rbk_device_i* i3_render_pass_get_device(i3_render_pass_o* self)
     return self->context->device;
 }
 
+static i3_content_store_i* i3_render_pass_get_content_store(i3_render_pass_o* self)
+{
+    assert(self != NULL);
+    assert(self->context != NULL);
+
+    return self->context->content_store;
+}
+
 static void i3_render_pass_get_render_size(i3_render_pass_o* self, uint32_t* width, uint32_t* height)
 {
     assert(self != NULL);
@@ -187,6 +195,7 @@ static i3_render_pass_o i3_render_pass_iface_ =
         .get_window = i3_render_pass_get_window,
         .get_renderer = i3_render_pass_get_renderer,
         .get_device = i3_render_pass_get_device,
+        .get_content_store = i3_render_pass_get_content_store,
         .get_render_size = i3_render_pass_get_render_size,
         .get_game_time = i3_render_pass_get_game_time,
         .get_cmd_buffer = i3_render_pass_get_cmd_buffer,

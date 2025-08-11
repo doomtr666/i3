@@ -104,6 +104,19 @@ static void i3_renderer_destroy_render_target(i3_renderer_o* self, i3_render_tar
     }
 }
 
+static void i3_renderer_create_framebuffer(i3_renderer_o* self,
+                                           i3_rbk_framebuffer_i** framebuffer,
+                                           i3_rbk_framebuffer_desc_t* desc)
+{
+    assert(self != NULL);
+    assert(desc != NULL);
+
+    if (*framebuffer != NULL)
+        (*framebuffer)->destroy((*framebuffer)->self);
+
+    *framebuffer = self->context.device->create_framebuffer(self->context.device->self, desc);
+}
+
 static void i3_renderer_render(i3_renderer_o* self, i3_game_time_t* game_time)
 {
     assert(self != NULL);
@@ -183,6 +196,7 @@ static i3_renderer_o i3_renderer_iface_ =
         .set_render_graph = i3_renderer_set_render_graph,
         .create_render_target = i3_renderer_create_render_target,
         .destroy_render_target = i3_renderer_destroy_render_target,
+        .create_framebuffer = i3_renderer_create_framebuffer,
         .render = i3_renderer_render,
         .destroy = i3_renderer_destroy,
     },

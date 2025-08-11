@@ -43,6 +43,10 @@ struct i3_renderer_i
 
     void (*destroy_render_target)(i3_renderer_o* self, i3_render_target_t* target);
 
+    void (*create_framebuffer)(i3_renderer_o* self,
+                               i3_rbk_framebuffer_i** framebuffer,
+                               i3_rbk_framebuffer_desc_t* desc);
+
     void (*render)(i3_renderer_o* self, i3_game_time_t* game_time);
 
     void (*destroy)(i3_renderer_o* self);

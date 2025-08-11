@@ -3,7 +3,7 @@
 #include "device.h"
 
 #define I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT 16
-#define I3_VK_SWAPCHAIN_MAX_SEM_COUNT (2 * I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT)
+#define I3_VK_SWAPCHAIN_MAX_SEM_COUNT I3_VK_SWAPCHAIN_MAX_IMAGE_COUNT
 
 typedef struct i3_vk_swapchain_o
 {

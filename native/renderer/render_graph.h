@@ -24,6 +24,7 @@ struct i3_render_pass_i
     i3_render_window_i* (*get_window)(i3_render_pass_o* self);
     i3_renderer_i* (*get_renderer)(i3_render_pass_o* self);
     i3_rbk_device_i* (*get_device)(i3_render_pass_o* self);
+    i3_content_store_i* (*get_content_store)(i3_render_pass_o* self);
     void (*get_render_size)(i3_render_pass_o* self, uint32_t* width, uint32_t* height);
     i3_game_time_t* (*get_game_time)(i3_render_pass_o* self);
 
