@@ -5,7 +5,7 @@
 typedef struct i3_deferred_root_uniform_buffer_t
 {
     i3_mat4_t proj_view;  // projection view matrix
-    float elapsed_time;   // elapsed time since the start of the application
+    float elapsed_time;   // elapsed time since last frame
     float total_time;     // total time since the start of the application
 } i3_deferred_root_uniform_buffer_t;
 
@@ -30,7 +30,7 @@ static void i3_renderer_deferred_root_pass_init(i3_render_pass_i* pass)
     ctx->main_uniform_buffer = device->create_buffer(device->self, &buffer_desc);
 
     // put the main uniform buffer into the render pass blackboard
-    pass->put(pass->self, "main_uniform_buffer", &ctx->main_uniform_buffer, sizeof(i3_rbk_buffer_i*));
+    pass->put(pass->self, "u_main_constants", &ctx->main_uniform_buffer, sizeof(i3_rbk_buffer_i*));
 }
 
 static void i3_renderer_deferred_root_pass_destroy(i3_render_pass_i* pass)

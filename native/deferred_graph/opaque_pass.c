@@ -6,9 +6,11 @@ typedef struct i3_renderer_opaque_pass_ctx_t
     i3_render_target_t g_normal;
     i3_render_target_t g_albedo;
     i3_render_target_t g_metalic_roughness;
+    i3_rbk_buffer_i* u_main_constants;
 
     i3_rbk_pipeline_i* opaque_pipeline;
     i3_rbk_framebuffer_i* framebuffer;
+    i3_rbk_descriptor_set_i* descriptor_set;
 } opaque_pass_ctx_t;
 
 static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
@@ -18,6 +20,9 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
     pass->set_user_data(pass->self, ctx);
 
     i3_rbk_device_i* device = pass->get_device(pass->self);
+
+    // get main uniform buffer
+    pass->get(pass->self, "u_main_constants", &ctx->u_main_constants);
 
     // create descriptor set layout
     i3_rbk_descriptor_set_layout_binding_t descriptor_set_layout_bindings[] = {{
@@ -34,6 +39,18 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
 
     i3_rbk_descriptor_set_layout_i* descriptor_set_layout
         = device->create_descriptor_set_layout(device->self, &descriptor_set_layout_desc);
+
+    // create descriptor set
+    ctx->descriptor_set = device->create_descriptor_set(device->self, descriptor_set_layout);
+
+    // update descriptor set
+    i3_rbk_descriptor_set_write_t descriptor_set_write = {
+        .binding = 0,
+        .array_element = 0,
+        .descriptor_type = I3_RBK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .buffer = ctx->u_main_constants,
+    };
+    ctx->descriptor_set->update(ctx->descriptor_set->self, 1, &descriptor_set_write);
 
     // create pipeline layout
     i3_rbk_push_constant_range_t push_constant_range = {
@@ -203,6 +220,7 @@ static void i3_renderer_opaque_pass_destroy(i3_render_pass_i* pass)
 
     ctx->opaque_pipeline->destroy(ctx->opaque_pipeline->self);
     ctx->framebuffer->destroy(ctx->framebuffer->self);
+    ctx->descriptor_set->destroy(ctx->descriptor_set->self);
 
     i3_free(ctx);
 }
@@ -263,6 +281,29 @@ static void i3_renderer_opaque_pass_update(i3_render_pass_i* pass)
 static void i3_renderer_opaque_pass_render(i3_render_pass_i* pass)
 {
     opaque_pass_ctx_t* ctx = (opaque_pass_ctx_t*)pass->get_user_data(pass->self);
+
+    // render the scene
+    i3_renderer_i* renderer = pass->get_renderer(pass->self);
+    i3_scene_i* scene = renderer->get_scene(renderer->self);
+
+    i3_rbk_cmd_buffer_i* cmd_buffer = pass->get_cmd_buffer(pass->self);
+
+    cmd_buffer->begin_rendering(cmd_buffer->self, ctx->framebuffer,
+                                &(i3_rbk_rect_t){.offset = {0, 0}, .extent = {800, 600}});
+
+    cmd_buffer->bind_pipeline(cmd_buffer->self, ctx->opaque_pipeline);
+    cmd_buffer->bind_descriptor_sets(cmd_buffer->self, ctx->opaque_pipeline, 0, 1, &ctx->descriptor_set);
+    cmd_buffer->set_viewports(
+        cmd_buffer->self, 0, 1,
+        &(i3_rbk_viewport_t){
+            .x = 0.0f, .y = 0.0f, .width = 800.0f, .height = 600.0f, .min_depth = 0.0f, .max_depth = 1.0f});
+
+    cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &(i3_rbk_rect_t){.offset = {0, 0}, .extent = {800, 600}});
+
+    cmd_buffer->end_rendering(cmd_buffer->self);
+
+    pass->submit_cmd_buffers(pass->self, 1, &cmd_buffer);
+    cmd_buffer->destroy(cmd_buffer->self);
 }
 
 i3_render_pass_desc_t* i3_get_opaque_pass_desc(void)

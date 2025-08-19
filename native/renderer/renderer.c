@@ -8,17 +8,6 @@ struct i3_renderer_o
     i3_scene_i* scene;
 };
 
-static i3_model_i* i3_renderer_create_model(i3_renderer_o* self,
-                                            i3_rbk_cmd_buffer_i* cmb_buffer,
-                                            i3_content_i* model_content)
-{
-    assert(self != NULL);
-    assert(cmb_buffer != NULL);
-    assert(model_content != NULL);
-
-    return i3_model_create(&self->context, cmb_buffer, model_content);
-}
-
 static i3_scene_i* i3_renderer_create_scene(i3_renderer_o* self)
 {
     assert(self != NULL);
@@ -188,7 +177,6 @@ static i3_renderer_o i3_renderer_iface_ =
 {
     .iface =
     {
-        .create_model = i3_renderer_create_model,
         .create_scene = i3_renderer_create_scene,
         .set_scene = i3_renderer_set_scene,
         .get_scene = i3_renderer_get_scene,

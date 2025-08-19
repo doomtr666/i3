@@ -168,10 +168,10 @@ static i3_vk_descriptor_set_o i3_vk_descriptor_set_iface_ = {
 };
 
 i3_rbk_descriptor_set_i* i3_vk_device_create_descriptor_set(i3_rbk_device_o* self,
-                                                            const i3_rbk_descriptor_set_desc_t* desc)
+                                                            i3_rbk_descriptor_set_layout_i* layout)
 {
     assert(self != NULL);
-    assert(desc != NULL);
+    assert(layout != NULL);
 
     i3_vk_device_o* device = (i3_vk_device_o*)self;
     i3_vk_descriptor_set_o* descriptor_set = i3_memory_pool_alloc(&device->descriptor_set_pool);
@@ -181,7 +181,7 @@ i3_rbk_descriptor_set_i* i3_vk_device_create_descriptor_set(i3_rbk_device_o* sel
     descriptor_set->iface.self = (i3_rbk_descriptor_set_o*)descriptor_set;
     descriptor_set->device = device;
     descriptor_set->use_count = 1;
-    descriptor_set->layout = desc->layout;
+    descriptor_set->layout = layout;
 
     // retain the descriptor set layout
     i3_rbk_resource_add_ref(descriptor_set->layout);
@@ -190,7 +190,7 @@ i3_rbk_descriptor_set_i* i3_vk_device_create_descriptor_set(i3_rbk_device_o* sel
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = device->descriptor_pool,
         .descriptorSetCount = 1,
-        .pSetLayouts = &((i3_vk_descriptor_set_layout_o*)(desc->layout->self))->handle,
+        .pSetLayouts = &((i3_vk_descriptor_set_layout_o*)(layout->self))->handle,
     };
 
     i3_vk_check(vkAllocateDescriptorSets(device->handle, &alloc_info, &descriptor_set->handle));

@@ -13,4 +13,4 @@ typedef struct i3_vk_descriptor_set_o
 } i3_vk_descriptor_set_o;
 
 i3_rbk_descriptor_set_i* i3_vk_device_create_descriptor_set(i3_rbk_device_o* self,
-                                                            const i3_rbk_descriptor_set_desc_t* desc);
+                                                            const i3_rbk_descriptor_set_layout_i* layout);

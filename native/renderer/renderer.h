@@ -18,9 +18,6 @@ struct i3_renderer_i
 {
     i3_renderer_o* self;
 
-    // create a model
-    i3_model_i* (*create_model)(i3_renderer_o* self, i3_rbk_cmd_buffer_i* cmb_buffer, i3_content_i* model_content);
-
     // create a scene
     i3_scene_i* (*create_scene)(i3_renderer_o* self);
 

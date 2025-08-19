@@ -11,6 +11,7 @@ typedef struct i3_game_context_t
     i3_render_graph_i* render_graph;
     i3_scene_i* scene;
     i3_content_i* cube_model_content;
+    i3_model_i* cube_model;
     i3_model_instance_i* cube_instance;
 } i3_game_context_t;
 
@@ -46,8 +47,11 @@ static void init(i3_game_i* game)
     // load the cube model
     ctx->cube_model_content = content_store->load(content_store->self, "cube.bin");
 
+    // create the cube model
+    ctx->cube_model = ctx->scene->add_model(ctx->scene->self, ctx->cube_model_content);
+
     // add the cube model instance to the scene
-    ctx->cube_instance = ctx->scene->add_instance(ctx->scene->self, ctx->cube_model_content, i3_mat4_identity());
+    ctx->cube_instance = ctx->scene->add_instance(ctx->scene->self, ctx->cube_model, i3_mat4_identity());
 
     // release the model instance
     ctx->cube_model_content->release(ctx->cube_model_content->self);

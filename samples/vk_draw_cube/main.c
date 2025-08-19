@@ -142,8 +142,7 @@ int main()
         = device->create_descriptor_set_layout(device->self, &descriptor_set_layout_desc);
 
     // create descriptor set
-    i3_rbk_descriptor_set_desc_t descriptor_set_desc = {.layout = descriptor_set_layout};
-    i3_rbk_descriptor_set_i* descriptor_set = device->create_descriptor_set(device->self, &descriptor_set_desc);
+    i3_rbk_descriptor_set_i* descriptor_set = device->create_descriptor_set(device->self, descriptor_set_layout);
 
     // create pipeline layout
     i3_rbk_push_constant_range_t push_constant_range = {

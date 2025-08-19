@@ -6,6 +6,91 @@ extern "C"
 
 #include "fbs/model_generated.h"
 
+static void i3_model_upload(i3_model_o* self, i3_rbk_cmd_buffer_i* cmd_buffer)
+{
+    assert(self != NULL);
+    assert(cmd_buffer != NULL);
+}
+
+static bool i3_model_is_loaded(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    return self->positions != NULL;
+}
+
+static void i3_model_destroy(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    // destroy the buffers
+    if (self->positions)
+        self->positions->destroy(self->positions->self);
+    if (self->normals)
+        self->normals->destroy(self->normals->self);
+    if (self->tangents)
+        self->tangents->destroy(self->tangents->self);
+    if (self->binormals)
+        self->binormals->destroy(self->binormals->self);
+    if (self->tex_coords)
+        self->tex_coords->destroy(self->tex_coords->self);
+    if (self->indices)
+        self->indices->destroy(self->indices->self);
+
+    // destroy the meshes array
+    i3_array_destroy(&self->meshes);
+    // destroy the nodes array
+    i3_array_destroy(&self->nodes);
+    // destroy the node transforms array
+    i3_array_destroy(&self->node_tranforms);
+    // destroy the node children array
+    i3_array_destroy(&self->node_children);
+    // destroy the node meshes array
+    i3_array_destroy(&self->node_meshes);
+
+    // release the content reference
+    if (self->content)
+        self->content->release(self->content->self);
+
+    i3_free(self);
+}
+
+i3_model_i* i3_model_create(i3_render_context_t* context, i3_content_i* model_content)
+{
+    assert(context != NULL);
+    assert(model_content != NULL);
+
+    auto data = model_content->get_data(model_content->self);
+    assert(data != NULL);
+    auto size = model_content->get_size(model_content->self);
+    assert(size > 0);
+
+    // verify the model content
+    auto verifier = flatbuffers::Verifier((const uint8_t*)data, size);
+    if (!content::VerifyModelBuffer(verifier))
+    {
+        i3_log_err(context->log, "Invalid model content");
+        return NULL;
+    }
+
+    // keep a reference to the content
+    model_content->add_ref(model_content->self);  // add a reference to the content
+
+    // create the model object
+    i3_model_o* model = (i3_model_o*)i3_alloc(sizeof(i3_model_o));
+    memset(model, 0, sizeof(i3_model_o));  // zero-initialize the model
+    model->iface.self = model;             // set the self pointer
+    model->iface.is_loaded = i3_model_is_loaded;
+    model->iface.upload = i3_model_upload;
+    model->iface.destroy = i3_model_destroy;
+    model->context = context;        // set the render context
+    model->content = model_content;  // set the model content
+
+    return &model->iface;
+}
+
+#if 0
+
 extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
                                        i3_rbk_cmd_buffer_i* cmd_buffer,
                                        i3_content_i* model_content)
@@ -19,14 +104,17 @@ extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
     assert(size > 0);
 
     // vertify the model content
-    if (!content::VerifyModelBuffer(flatbuffers::Verifier((const uint8_t*)data, size)))
+    auto verifier = flatbuffers::Verifier((const uint8_t*)data, size);
+    if (!content::VerifyModelBuffer(verifier))
     {
         i3_log_err(context->log, "Invalid model content");
         return NULL;
     }
 
     // create the model object
-    i3_model_o* model = i3_model_allocate();
+    i3_model_o* model = (i3_model_o*)i3_alloc(sizeof(i3_model_o));
+    *model = i3_model_iface_;   // initialize the interface
+    model->iface.self = model;  // set the self pointer
 
     // parse the model content
     auto model_data = content::GetModel(data);
@@ -167,3 +255,5 @@ extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
 
     return &model->iface;
 }
+
+#endif

@@ -397,17 +397,16 @@ void i3_vk_cmd_buffer_begin_rendering(i3_rbk_cmd_buffer_o* self,
 
     // add barriers
     i3_vk_barrier_t* barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-    i3_vk_image_usage_t* barrier = i3_vk_add_image_barrier(barriers);
     i3_vk_framebuffer_o* fb = (i3_vk_framebuffer_o*)framebuffer->self;
 
     // color attachments
     for (uint32_t i = 0; i < fb->color_attachment_count; i++)
     {
+        i3_vk_image_usage_t* barrier = i3_vk_add_image_barrier(barriers);
         *barrier = (i3_vk_image_usage_t){
             .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
             .access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             .image_view = fb->color_attachments[i],
-            .access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         };
     }
@@ -415,11 +414,12 @@ void i3_vk_cmd_buffer_begin_rendering(i3_rbk_cmd_buffer_o* self,
     // depth attachment
     if (fb->depth_attachment != NULL)
     {
+        barriers = i3_vk_cmd_add_barriers(cmd_buffer, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+        i3_vk_image_usage_t* barrier = i3_vk_add_image_barrier(barriers);
         *barrier = (i3_vk_image_usage_t){
             .queue_family_index = VK_QUEUE_FAMILY_IGNORED,
             .access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             .image_view = fb->depth_attachment,
-            .access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
     }
@@ -591,7 +591,6 @@ static i3_vk_cmd_buffer_o i3_vk_cmd_buffer_iface_ =
 };
 
 // create cmd buffer
-
 i3_rbk_cmd_buffer_i* i3_vk_device_create_cmd_buffer(i3_rbk_device_o* self)
 {
     assert(self != NULL);

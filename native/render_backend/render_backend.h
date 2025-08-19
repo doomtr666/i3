@@ -578,11 +578,6 @@ typedef struct i3_rbk_descriptor_set_layout_i
 } i3_rbk_descriptor_set_layout_i;
 
 // descriptor set
-typedef struct i3_rbk_descriptor_set_desc_t
-{
-    i3_rbk_descriptor_set_layout_i* layout;
-} i3_rbk_descriptor_set_desc_t;
-
 typedef struct i3_rbk_descriptor_set_o i3_rbk_descriptor_set_o;
 
 typedef struct i3_rbk_descriptor_set_write_t
@@ -995,7 +990,7 @@ struct i3_rbk_device_i
                                                                     const i3_rbk_descriptor_set_layout_desc_t* desc);
 
     // create descriptor set
-    i3_rbk_descriptor_set_i* (*create_descriptor_set)(i3_rbk_device_o* self, const i3_rbk_descriptor_set_desc_t* desc);
+    i3_rbk_descriptor_set_i* (*create_descriptor_set)(i3_rbk_device_o* self, i3_rbk_descriptor_set_layout_i* layout);
 
     // create pipeline layout
     i3_rbk_pipeline_layout_i* (*create_pipeline_layout)(i3_rbk_device_o* self,
