@@ -69,6 +69,14 @@ static i3_rbk_resource_i* i3_vk_pipeline_get_resource(i3_rbk_pipeline_o* self)
     return &pipeline->base;
 }
 
+static i3_rbk_pipeline_layout_i* i3_vk_pipeline_get_layout(i3_rbk_pipeline_o* self)
+{
+    assert(self != NULL);
+    i3_vk_pipeline_o* pipeline = (i3_vk_pipeline_o*)self;
+
+    return pipeline->layout;
+}
+
 static void i3_vk_pipeline_destroy(i3_rbk_pipeline_o* self)
 {
     assert(self != NULL);
@@ -89,6 +97,7 @@ static i3_vk_pipeline_o i3_vk_pipeline_iface_ =
     .iface =
     {
         .get_resource = i3_vk_pipeline_get_resource,
+        .get_layout = i3_vk_pipeline_get_layout,
         .destroy = i3_vk_pipeline_destroy,
     },
 };

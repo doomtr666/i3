@@ -93,11 +93,13 @@ class model_processor
         // create a node
         data.names.push_back(node->mName.C_Str());
 
-        // add transform
+        // extract transform
         float m[16];
         for (int i = 0; i < 16; i++)
             m[i] = node->mTransformation[i / 4][i % 4];
-        data.transforms.emplace_back(m);
+        content::Mat4 transform(m);
+
+        // data.transforms.emplace_back(m);
 
         // add children
         std::vector<uint32_t> children_indices;
@@ -121,7 +123,7 @@ class model_processor
         data.node_meshes.insert(data.node_meshes.end(), mesh_indices.begin(), mesh_indices.end());
 
         // add node
-        data.nodes.emplace_back(content::Node(mesh_offset, mesh_count, children_offset, children_count));
+        data.nodes.emplace_back(content::Node(transform, mesh_offset, mesh_count, children_offset, children_count));
     }
 
     bool process(const aiScene* scene, const std::string& output_file)
@@ -252,7 +254,6 @@ class model_processor
         model_builder.add_meshes(builder.CreateVectorOfStructs(meshes));
         model_builder.add_nodes(builder.CreateVectorOfStructs(nodes.nodes));
         model_builder.add_node_names(builder.CreateVectorOfStrings(nodes.names));
-        model_builder.add_node_transforms(builder.CreateVectorOfStructs(nodes.transforms));
         model_builder.add_node_children(builder.CreateVector(nodes.node_children));
         model_builder.add_node_meshes(builder.CreateVector(nodes.node_meshes));
         auto model = model_builder.Finish();

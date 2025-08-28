@@ -137,6 +137,8 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
                                    &metallic_roughness_view_desc);
     // put the g-buffer metallic roughness in the blackboard
     pass->put(pass->self, "g_metalic_roughness", &ctx->g_metalic_roughness, sizeof(ctx->g_metalic_roughness));
+
+    pass->put(pass->self, "output", &ctx->g_normal, sizeof(ctx->g_normal));
 }
 
 static void i3_renderer_gbuffer_pass_render(i3_render_pass_i* pass)

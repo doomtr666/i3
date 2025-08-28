@@ -6,10 +6,114 @@ extern "C"
 
 #include "fbs/model_generated.h"
 
+struct i3_model_o
+{
+    i3_model_i iface;  // interface for the model
+
+    i3_render_context_t* context;  // render context
+    i3_content_i* content;         // model content
+
+    i3_rbk_buffer_i* positions;   // position buffer
+    i3_rbk_buffer_i* normals;     // normal buffer
+    i3_rbk_buffer_i* tangents;    // tangent buffer
+    i3_rbk_buffer_i* binormals;   // binormal buffer
+    i3_rbk_buffer_i* tex_coords;  // texture coordinate buffer
+    i3_rbk_buffer_i* indices;     // index buffer
+
+    i3_array_t meshes;         // array of meshes in the model
+    i3_array_t nodes;          // array of nodes in the model
+    i3_array_t node_children;  // array of node children indices
+    i3_array_t node_meshes;    // array of node meshes indices
+};
+
 static void i3_model_upload(i3_model_o* self, i3_rbk_cmd_buffer_i* cmd_buffer)
 {
     assert(self != NULL);
     assert(cmd_buffer != NULL);
+
+    if (self->positions != NULL)
+        return;  // already uploaded
+
+    i3_rbk_device_i* device = self->context->device;
+
+    // parse the model content
+    auto model_data = content::GetModel(self->content->get_data(self->content->self));
+
+    // create and upload position buffer
+    if (model_data->positions() != nullptr & model_data->positions()->size() > 0)
+    {
+        i3_rbk_buffer_desc_t position_desc = {
+            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
+            model_data->positions()->size() * sizeof(content::Vec3),
+        };
+
+        self->positions = device->create_buffer(device->self, &position_desc);
+        cmd_buffer->write_buffer(cmd_buffer->self, self->positions, 0, position_desc.size,
+                                 model_data->positions()->Data());
+    }
+
+    // create and upload normal buffer
+    if (model_data->normals() != nullptr && model_data->normals()->size() > 0)
+    {
+        i3_rbk_buffer_desc_t normal_desc = {
+            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
+            model_data->normals()->size() * sizeof(content::Vec3),
+        };
+
+        self->normals = device->create_buffer(device->self, &normal_desc);
+        cmd_buffer->write_buffer(cmd_buffer->self, self->normals, 0, normal_desc.size, model_data->normals()->Data());
+    }
+
+    // create and upload tangent buffer
+    if (model_data->tangents() != nullptr && model_data->tangents()->size() > 0)
+    {
+        i3_rbk_buffer_desc_t tangent_desc = {
+            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
+            model_data->tangents()->size() * sizeof(content::Vec3),
+        };
+
+        self->tangents = device->create_buffer(device->self, &tangent_desc);
+        cmd_buffer->write_buffer(cmd_buffer->self, self->tangents, 0, tangent_desc.size,
+                                 model_data->tangents()->Data());
+    }
+
+    // create and upload binormal buffer
+    if (model_data->binormals() != nullptr && model_data->binormals()->size() > 0)
+    {
+        i3_rbk_buffer_desc_t binormal_desc = {
+            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
+            model_data->binormals()->size() * sizeof(content::Vec3),
+        };
+
+        self->binormals = device->create_buffer(device->self, &binormal_desc);
+        cmd_buffer->write_buffer(cmd_buffer->self, self->binormals, 0, binormal_desc.size,
+                                 model_data->binormals()->Data());
+    }
+
+    // create and upload texture coordinate buffer
+    if (model_data->tex_coords() != nullptr && model_data->tex_coords()->size() > 0)
+    {
+        i3_rbk_buffer_desc_t tex_coord_desc = {
+            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
+            model_data->tex_coords()->size() * sizeof(content::Vec2),
+        };
+
+        self->tex_coords = device->create_buffer(device->self, &tex_coord_desc);
+        cmd_buffer->write_buffer(cmd_buffer->self, self->tex_coords, 0, tex_coord_desc.size,
+                                 model_data->tex_coords()->Data());
+    }
+
+    // create and upload index buffer
+    if (model_data->indices() != nullptr && model_data->indices()->size() > 0)
+    {
+        i3_rbk_buffer_desc_t index_desc = {
+            I3_RBK_BUFFER_FLAG_INDEX_BUFFER,
+            model_data->indices()->size() * sizeof(uint32_t),
+        };
+
+        self->indices = device->create_buffer(device->self, &index_desc);
+        cmd_buffer->write_buffer(cmd_buffer->self, self->indices, 0, index_desc.size, model_data->indices()->Data());
+    }
 }
 
 static bool i3_model_is_loaded(i3_model_o* self)
@@ -17,6 +121,61 @@ static bool i3_model_is_loaded(i3_model_o* self)
     assert(self != NULL);
 
     return self->positions != NULL;
+}
+
+static void i3_model_bind_buffers(i3_model_o* self, i3_rbk_cmd_buffer_i* cmd_buffer)
+{
+    assert(self != NULL);
+    assert(cmd_buffer != NULL);
+
+    i3_rbk_buffer_i* buffers[] = {
+        self->positions, self->normals, self->tangents, self->binormals, self->tex_coords,
+    };
+
+    cmd_buffer->bind_vertex_buffers(cmd_buffer->self, 0, 5, buffers, NULL);
+    cmd_buffer->bind_index_buffer(cmd_buffer->self, self->indices, 0, I3_RBK_INDEX_TYPE_UINT32);
+}
+
+static i3_node_t* i3_model_get_nodes(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    return (i3_node_t*)i3_array_data(&self->nodes);
+}
+
+static uint32_t i3_model_get_node_count(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    return i3_array_count(&self->nodes);
+}
+
+static i3_mesh_t* i3_model_get_meshes(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    return (i3_mesh_t*)i3_array_data(&self->meshes);
+}
+
+static uint32_t i3_model_get_mesh_count(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    return i3_array_count(&self->meshes);
+}
+
+static uint32_t* i3_model_get_node_children(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    return (uint32_t*)i3_array_data(&self->node_children);
+}
+
+static uint32_t* i3_model_get_node_meshes(i3_model_o* self)
+{
+    assert(self != NULL);
+
+    return (uint32_t*)i3_array_data(&self->node_meshes);
 }
 
 static void i3_model_destroy(i3_model_o* self)
@@ -41,8 +200,6 @@ static void i3_model_destroy(i3_model_o* self)
     i3_array_destroy(&self->meshes);
     // destroy the nodes array
     i3_array_destroy(&self->nodes);
-    // destroy the node transforms array
-    i3_array_destroy(&self->node_tranforms);
     // destroy the node children array
     i3_array_destroy(&self->node_children);
     // destroy the node meshes array
@@ -82,118 +239,19 @@ i3_model_i* i3_model_create(i3_render_context_t* context, i3_content_i* model_co
     model->iface.self = model;             // set the self pointer
     model->iface.is_loaded = i3_model_is_loaded;
     model->iface.upload = i3_model_upload;
+    model->iface.bind_buffers = i3_model_bind_buffers;
+    model->iface.get_nodes = i3_model_get_nodes;
+    model->iface.get_node_count = i3_model_get_node_count;
+    model->iface.get_meshes = i3_model_get_meshes;
+    model->iface.get_mesh_count = i3_model_get_mesh_count;
+    model->iface.get_node_children = i3_model_get_node_children;
+    model->iface.get_node_meshes = i3_model_get_node_meshes;
     model->iface.destroy = i3_model_destroy;
     model->context = context;        // set the render context
     model->content = model_content;  // set the model content
 
-    return &model->iface;
-}
-
-#if 0
-
-extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
-                                       i3_rbk_cmd_buffer_i* cmd_buffer,
-                                       i3_content_i* model_content)
-{
-    assert(context != NULL);
-    assert(model_content != NULL);
-
-    auto data = model_content->get_data(model_content->self);
-    assert(data != NULL);
-    auto size = model_content->get_size(model_content->self);
-    assert(size > 0);
-
-    // vertify the model content
-    auto verifier = flatbuffers::Verifier((const uint8_t*)data, size);
-    if (!content::VerifyModelBuffer(verifier))
-    {
-        i3_log_err(context->log, "Invalid model content");
-        return NULL;
-    }
-
-    // create the model object
-    i3_model_o* model = (i3_model_o*)i3_alloc(sizeof(i3_model_o));
-    *model = i3_model_iface_;   // initialize the interface
-    model->iface.self = model;  // set the self pointer
-
     // parse the model content
-    auto model_data = content::GetModel(data);
-
-    // create and upload position buffer
-    if (model_data->positions() != nullptr & model_data->positions()->size() > 0)
-    {
-        i3_rbk_buffer_desc_t position_desc = {
-            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
-            model_data->positions()->size() * sizeof(content::Vec3),
-        };
-
-        model->positions = context->device->create_buffer(context->device->self, &position_desc);
-        cmd_buffer->write_buffer(cmd_buffer->self, model->positions, 0, position_desc.size,
-                                 model_data->positions()->Data());
-    }
-
-    // create and upload normal buffer
-    if (model_data->normals() != nullptr && model_data->normals()->size() > 0)
-    {
-        i3_rbk_buffer_desc_t normal_desc = {
-            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
-            model_data->normals()->size() * sizeof(content::Vec3),
-        };
-
-        model->normals = context->device->create_buffer(context->device->self, &normal_desc);
-        cmd_buffer->write_buffer(cmd_buffer->self, model->normals, 0, normal_desc.size, model_data->normals()->Data());
-    }
-
-    // create and upload tangent buffer
-    if (model_data->tangents() != nullptr && model_data->tangents()->size() > 0)
-    {
-        i3_rbk_buffer_desc_t tangent_desc = {
-            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
-            model_data->tangents()->size() * sizeof(content::Vec3),
-        };
-
-        model->tangents = context->device->create_buffer(context->device->self, &tangent_desc);
-        cmd_buffer->write_buffer(cmd_buffer->self, model->tangents, 0, tangent_desc.size,
-                                 model_data->tangents()->Data());
-    }
-
-    // create and upload binormal buffer
-    if (model_data->binormals() != nullptr && model_data->binormals()->size() > 0)
-    {
-        i3_rbk_buffer_desc_t binormal_desc = {
-            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
-            model_data->binormals()->size() * sizeof(content::Vec3),
-        };
-
-        model->binormals = context->device->create_buffer(context->device->self, &binormal_desc);
-        cmd_buffer->write_buffer(cmd_buffer->self, model->binormals, 0, binormal_desc.size,
-                                 model_data->binormals()->Data());
-    }
-
-    // create and upload texture coordinate buffer
-    if (model_data->tex_coords() != nullptr && model_data->tex_coords()->size() > 0)
-    {
-        i3_rbk_buffer_desc_t tex_coord_desc = {
-            I3_RBK_BUFFER_FLAG_VERTEX_BUFFER,
-            model_data->tex_coords()->size() * sizeof(content::Vec2),
-        };
-
-        model->tex_coords = context->device->create_buffer(context->device->self, &tex_coord_desc);
-        cmd_buffer->write_buffer(cmd_buffer->self, model->tex_coords, 0, tex_coord_desc.size,
-                                 model_data->tex_coords()->Data());
-    }
-
-    // create and upload index buffer
-    if (model_data->indices() != nullptr && model_data->indices()->size() > 0)
-    {
-        i3_rbk_buffer_desc_t index_desc = {
-            I3_RBK_BUFFER_FLAG_INDEX_BUFFER,
-            model_data->indices()->size() * sizeof(uint32_t),
-        };
-
-        model->indices = context->device->create_buffer(context->device->self, &index_desc);
-        cmd_buffer->write_buffer(cmd_buffer->self, model->indices, 0, index_desc.size, model_data->indices()->Data());
-    }
+    auto model_data = content::GetModel(model->content->get_data(model->content->self));
 
     // meshes
     i3_array_init_capacity(&model->meshes, sizeof(content::Mesh), model_data->meshes()->size());
@@ -215,27 +273,18 @@ extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
     i3_array_init_capacity(&model->nodes, sizeof(content::Node), model_data->nodes()->size());
     for (const auto& node : *model_data->nodes())
     {
+        i3_mat4_t transform;
+        for (size_t i = 0; i < 16; ++i)
+            transform.m[i] = node->transform().m()->Get(i);
+
         i3_node_t node_data = {
-            node->mesh_offset(),
-            node->mesh_count(),
-            node->children_offset(),
-            node->children_count(),
+            transform, node->mesh_offset(), node->mesh_count(), node->children_offset(), node->children_count(),
         };
 
         i3_array_push(&model->nodes, &node_data);
     }
 
     // TODO: node names
-
-    // node transforms
-    i3_array_init_capacity(&model->node_tranforms, sizeof(content::Mat4), model_data->node_transforms()->size());
-    for (const auto& transform : *model_data->node_transforms())
-    {
-        i3_mat4_t transform_data;
-        for (size_t i = 0; i < 16; ++i)
-            transform_data.m[i] = transform->m()->Get(i);
-        i3_array_push(&model->node_tranforms, &transform_data);
-    }
 
     // node meshes
     i3_array_init_capacity(&model->node_meshes, sizeof(uint32_t), model_data->node_meshes()->size());
@@ -255,5 +304,3 @@ extern "C" i3_model_i* i3_model_create(i3_render_context_t* context,
 
     return &model->iface;
 }
-
-#endif

@@ -96,6 +96,7 @@ typedef enum
     I3_RBK_FORMAT_A2R10G10B10_UNORM,
     I3_RBK_FORMAT_R16G16_FLOAT,
     I3_RBK_FORMAT_R16G16B16A16_FLOAT,
+    I3_RBK_FORMAT_R32G32_SFLOAT,
     I3_RBK_FORMAT_R32G32B32_SFLOAT,
     I3_RBK_FORMAT_R32G32B32A32_SFLOAT,
 
@@ -817,6 +818,8 @@ typedef struct i3_rbk_pipeline_i
     i3_rbk_pipeline_o* self;
 
     i3_rbk_resource_i* (*get_resource)(i3_rbk_pipeline_o* self);
+    i3_rbk_pipeline_layout_i* (*get_layout)(i3_rbk_pipeline_o* self);
+
     void (*destroy)(i3_rbk_pipeline_o* self);
 } i3_rbk_pipeline_i;
 

@@ -85,18 +85,25 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
 
     // vertex input state
     i3_rbk_pipeline_vertex_input_binding_desc_t bindings[] = {
-        {.binding = 0, .stride = 6 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
+        {.binding = 0, .stride = 3 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
+        {.binding = 1, .stride = 3 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
+        {.binding = 2, .stride = 3 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
+        {.binding = 3, .stride = 3 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
+        {.binding = 4, .stride = 2 * sizeof(float), .input_rate = I3_RBK_VERTEX_INPUT_RATE_VERTEX},
     };
 
     i3_rbk_pipeline_vertex_input_attribute_desc_t attributes[] = {
         {.location = 0, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
-        {.location = 1, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 3 * sizeof(float)},
+        {.location = 1, .binding = 1, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
+        {.location = 2, .binding = 1, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
+        {.location = 3, .binding = 1, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
+        {.location = 4, .binding = 1, .format = I3_RBK_FORMAT_R32G32_SFLOAT, .offset = 0},
     };
 
     i3_rbk_pipeline_vertex_input_state_t vertex_input = {
-        .binding_count = 1,
+        .binding_count = sizeof(bindings) / sizeof(bindings[0]),
         .bindings = bindings,
-        .attribute_count = 2,
+        .attribute_count = sizeof(attributes) / sizeof(attributes[0]),
         .attributes = attributes,
     };
 
@@ -118,7 +125,7 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
     i3_rbk_pipeline_rasterization_state_t rasterization = {
         .polygon_mode = I3_RBK_POLYGON_MODE_FILL,
         .cull_mode = I3_RBK_CULL_MODE_BACK_BIT,
-        .front_face = I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .front_face = I3_RBK_FRONT_FACE_CLOCKWISE,
         .depth_clamp_enable = false,
         .rasterizer_discard_enable = false,
         .depth_bias_enable = false,
@@ -278,9 +285,45 @@ static void i3_renderer_opaque_pass_update(i3_render_pass_i* pass)
     cmd_buffer->destroy(cmd_buffer->self);
 }
 
+static void i3_renderer_opaque_pass_instance_render(void* ctx,
+                                                    i3_rbk_cmd_buffer_i* cmd_buffer,
+                                                    i3_model_instance_i* instance)
+{
+    opaque_pass_ctx_t* opaque_ctx = (opaque_pass_ctx_t*)ctx;
+
+    // bind vertex buffers
+    i3_model_i* model = instance->get_model(instance->self);
+    model->bind_buffers(model->self, cmd_buffer);
+
+    // draw meshes
+    i3_node_t* nodes = model->get_nodes(model->self);
+    i3_mesh_t* meshes = model->get_meshes(model->self);
+    i3_mat4_t* transforms = instance->get_transforms(instance->self);
+
+    for (uint32_t i = 0; i < model->get_node_count(model->self); i++)
+    {
+        // transform as a push constant
+        cmd_buffer->push_constants(cmd_buffer->self,
+                                   opaque_ctx->opaque_pipeline->get_layout(opaque_ctx->opaque_pipeline->self),
+                                   I3_RBK_SHADER_STAGE_VERTEX, 0, sizeof(i3_mat4_t), &transforms[i]);
+
+        i3_node_t* node = &nodes[i];
+        for (uint32_t j = 0; j < node->mesh_count; j++)
+        {
+            i3_mesh_t* mesh = &meshes[node->mesh_offset + j];
+
+            cmd_buffer->draw_indexed(cmd_buffer->self, mesh->index_count, 1, mesh->index_offset, mesh->vertex_offset,
+                                     0);
+        }
+    }
+}
+
 static void i3_renderer_opaque_pass_render(i3_render_pass_i* pass)
 {
     opaque_pass_ctx_t* ctx = (opaque_pass_ctx_t*)pass->get_user_data(pass->self);
+
+    uint32_t width, height;
+    pass->get_render_size(pass->self, &width, &height);
 
     // render the scene
     i3_renderer_i* renderer = pass->get_renderer(pass->self);
@@ -289,16 +332,17 @@ static void i3_renderer_opaque_pass_render(i3_render_pass_i* pass)
     i3_rbk_cmd_buffer_i* cmd_buffer = pass->get_cmd_buffer(pass->self);
 
     cmd_buffer->begin_rendering(cmd_buffer->self, ctx->framebuffer,
-                                &(i3_rbk_rect_t){.offset = {0, 0}, .extent = {800, 600}});
+                                &(i3_rbk_rect_t){.offset = {0, 0}, .extent = {width, height}});
 
     cmd_buffer->bind_pipeline(cmd_buffer->self, ctx->opaque_pipeline);
     cmd_buffer->bind_descriptor_sets(cmd_buffer->self, ctx->opaque_pipeline, 0, 1, &ctx->descriptor_set);
     cmd_buffer->set_viewports(
         cmd_buffer->self, 0, 1,
         &(i3_rbk_viewport_t){
-            .x = 0.0f, .y = 0.0f, .width = 800.0f, .height = 600.0f, .min_depth = 0.0f, .max_depth = 1.0f});
+            .x = 0.0f, .y = 0.0f, .width = width, .height = height, .min_depth = 0.0f, .max_depth = 1.0f});
+    cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &(i3_rbk_rect_t){.offset = {0, 0}, .extent = {width, height}});
 
-    cmd_buffer->set_scissors(cmd_buffer->self, 0, 1, &(i3_rbk_rect_t){.offset = {0, 0}, .extent = {800, 600}});
+    scene->render(scene->self, cmd_buffer, ctx, i3_renderer_opaque_pass_instance_render);
 
     cmd_buffer->end_rendering(cmd_buffer->self);
 

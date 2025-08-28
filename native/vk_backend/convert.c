@@ -134,6 +134,8 @@ VkFormat i3_vk_convert_format(i3_rbk_format_t format)
         case I3_RBK_FORMAT_R16G16B16A16_FLOAT:
             return VK_FORMAT_R16G16B16A16_SFLOAT;
 
+        case I3_RBK_FORMAT_R32G32_SFLOAT:
+            return VK_FORMAT_R32G32_SFLOAT;
         case I3_RBK_FORMAT_R32G32B32_SFLOAT:
             return VK_FORMAT_R32G32B32_SFLOAT;
         case I3_RBK_FORMAT_R32G32B32A32_SFLOAT:

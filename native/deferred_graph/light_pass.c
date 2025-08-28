@@ -59,7 +59,7 @@ static void i3_renderer_light_pass_resolution_change(i3_render_pass_i* pass)
 
     // set graph output
     // TODO: this will move when more passes are implemented
-    pass->put(pass->self, "output", &ctx->light_buffer, sizeof(ctx->light_buffer));
+    // pass->put(pass->self, "output", &ctx->light_buffer, sizeof(ctx->light_buffer));
 }
 
 static void i3_renderer_light_pass_render(i3_render_pass_i* pass)

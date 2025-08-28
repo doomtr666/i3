@@ -32,6 +32,9 @@ struct Mesh
 
 struct Node
 {
+    // inital transform
+    transform:Mat4;
+    
     // meshes
     mesh_offset:uint;
     mesh_count:uint;
@@ -60,7 +63,7 @@ table Model {
     // nodes where nodes[0] is the root
     nodes:[Node];
     node_names:[string];
-    node_transforms:[Mat4];
+
     node_children:[uint];
     node_meshes:[uint];
 }

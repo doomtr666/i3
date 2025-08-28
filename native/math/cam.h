@@ -70,7 +70,12 @@ static inline void i3_cam_init_target(i3_cam_t* cam,
                                       float z_far)
 {
     assert(cam != NULL);
-    i3_cam(cam, position, i3_vec3_sub(target, position), up, fov_y_degree, z_near, z_far);
+
+    // i3_vec3_t direction = i3_vec3_sub(target, position);
+    // TODO: this is fishy ...
+    i3_vec3_t direction = i3_vec3_sub(position, target);
+
+    i3_cam(cam, position, direction, up, fov_y_degree, z_near, z_far);
 }
 
 static inline i3_vec3_t i3_cam_get_right(i3_cam_t* cam)
