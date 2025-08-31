@@ -28,6 +28,14 @@ static i3_mat4_t* i3_model_instance_get_transforms(i3_model_instance_o* self)
     return self->node_transforms;
 }
 
+static void i3_model_instance_set_transform(i3_model_instance_o* self, i3_mat4_t transform)
+{
+    assert(self != NULL);
+
+    self->transform = transform;
+    self->transforms_dirty = true;
+}
+
 // recursively update transforms
 static void i3_model_instance_transform_update_r(i3_model_instance_o* self, i3_mat4_t transform, uint32_t index)
 {
@@ -74,6 +82,7 @@ static i3_model_instance_o i3_model_instance_iface_ = {
         .self = NULL,
         .get_model = i3_model_instance_get_model,
         .get_transforms = i3_model_instance_get_transforms,
+        .set_transform = i3_model_instance_set_transform,
         .update = i3_model_instance_update,
         .destroy = i3_model_instance_destroy,
     },

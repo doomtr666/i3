@@ -95,9 +95,9 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
     i3_rbk_pipeline_vertex_input_attribute_desc_t attributes[] = {
         {.location = 0, .binding = 0, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
         {.location = 1, .binding = 1, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
-        {.location = 2, .binding = 1, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
-        {.location = 3, .binding = 1, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
-        {.location = 4, .binding = 1, .format = I3_RBK_FORMAT_R32G32_SFLOAT, .offset = 0},
+        {.location = 2, .binding = 2, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
+        {.location = 3, .binding = 3, .format = I3_RBK_FORMAT_R32G32B32_SFLOAT, .offset = 0},
+        {.location = 4, .binding = 4, .format = I3_RBK_FORMAT_R32G32_SFLOAT, .offset = 0},
     };
 
     i3_rbk_pipeline_vertex_input_state_t vertex_input = {

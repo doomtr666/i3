@@ -81,7 +81,6 @@ class model_processor
     struct nodes_data
     {
         std::vector<content::Node> nodes;
-        std::vector<content::Mat4> transforms;
         std::vector<std::string> names;
         std::vector<uint32_t> node_meshes;
         std::vector<uint32_t> node_children;
@@ -90,7 +89,10 @@ class model_processor
   public:
     void process_node(const aiNode* node, nodes_data& data)
     {
-        // create a node
+        uint32_t node_index = data.nodes.size();
+        data.nodes.resize(node_index + 1);
+
+        // add node name
         data.names.push_back(node->mName.C_Str());
 
         // extract transform
@@ -99,16 +101,15 @@ class model_processor
             m[i] = node->mTransformation[i / 4][i % 4];
         content::Mat4 transform(m);
 
-        // data.transforms.emplace_back(m);
-
         // add children
         std::vector<uint32_t> children_indices;
         for (uint32_t i = 0; i < node->mNumChildren; i++)
         {
             const aiNode* child = node->mChildren[i];
-            process_node(child, data);
             children_indices.push_back(data.nodes.size());
+            process_node(child, data);
         }
+
         uint32_t children_count = static_cast<uint32_t>(children_indices.size());
         uint32_t children_offset = children_count > 0 ? data.node_children.size() : 0;
         data.node_children.insert(data.node_children.end(), children_indices.begin(), children_indices.end());
@@ -122,15 +123,12 @@ class model_processor
         uint32_t mesh_offset = mesh_count > 0 ? data.node_meshes.size() : 0;
         data.node_meshes.insert(data.node_meshes.end(), mesh_indices.begin(), mesh_indices.end());
 
-        // add node
-        data.nodes.emplace_back(content::Node(transform, mesh_offset, mesh_count, children_offset, children_count));
+        data.nodes[node_index] = content::Node(transform, mesh_offset, mesh_count, children_offset, children_count);
     }
 
     bool process(const aiScene* scene, const std::string& output_file)
     {
         flatbuffers::FlatBufferBuilder builder;
-
-        content::ModelBuilder model_builder(builder);
 
         // compress meshes in a single vertex buffer for each channel
         std::vector<content::Vec3> positions;
@@ -142,10 +140,11 @@ class model_processor
 
         // meshes
         std::vector<content::Mesh> meshes;
-        // materials
-
         uint32_t vertex_offset = 0;
         uint32_t index_offset = 0;
+
+        // materials
+        std::vector<flatbuffers::Offset<content::Material>> materials;
 
         // position vector
         for (uint32_t i = 0; i < scene->mNumMeshes; i++)
@@ -220,7 +219,6 @@ class model_processor
         }
 
         // process materials
-        std::vector<flatbuffers::Offset<content::Material>> materials;
         for (uint32_t i = 0; i < scene->mNumMaterials; i++)
         {
             const aiMaterial* material = scene->mMaterials[i];
@@ -232,33 +230,68 @@ class model_processor
                 material_name = value.C_Str();
 
             auto name = builder.CreateString(material_name);
+
+            // TODO: other material properties can be added here
+
             content::MaterialBuilder material_builder(builder);
             material_builder.add_name(name);
             materials.push_back(material_builder.Finish());
-
-            // TODO: other material properties can be added here
         }
 
         // process nodes
         nodes_data nodes;
         process_node(scene->mRootNode, nodes);
 
-        // create the model
-        model_builder.add_positions(builder.CreateVectorOfStructs(positions));
-        model_builder.add_normals(builder.CreateVectorOfStructs(normals));
-        model_builder.add_tangents(builder.CreateVectorOfStructs(tangents));
-        model_builder.add_binormals(builder.CreateVectorOfStructs(bitangents));
-        model_builder.add_tex_coords(builder.CreateVectorOfStructs(tex_coords));
-        model_builder.add_indices(builder.CreateVector(indices));
-        model_builder.add_materials(builder.CreateVector(materials));
-        model_builder.add_meshes(builder.CreateVectorOfStructs(meshes));
-        model_builder.add_nodes(builder.CreateVectorOfStructs(nodes.nodes));
-        model_builder.add_node_names(builder.CreateVectorOfStrings(nodes.names));
-        model_builder.add_node_children(builder.CreateVector(nodes.node_children));
-        model_builder.add_node_meshes(builder.CreateVector(nodes.node_meshes));
-        auto model = model_builder.Finish();
+        // dump nodes
+        std::cout << "nodes:" << std::endl;
+        for (auto& n : nodes.nodes)
+        {
+            std::cout << "Node children (" << n.children_count() << "," << n.children_offset() << ")" << std::endl;
+        }
 
-        content::FinishModelBuffer(builder, model);
+        // dump node names
+        std::cout << "node names:" << std::endl;
+        for (auto& v : nodes.names)
+            std::cout << v << std::endl;
+
+        // dump mesh offset
+        std::cout << "node meshes:" << std::endl;
+        for (auto& v : nodes.node_meshes)
+            std::cout << v << std::endl;
+
+        // dump node children
+        std::cout << "node children:" << std::endl;
+        for (auto& v : nodes.node_children)
+            std::cout << v << std::endl;
+
+        // create the model
+        auto fb_positions = builder.CreateVectorOfStructs(positions);
+        auto fb_normals = builder.CreateVectorOfStructs(normals);
+        auto fb_tangents = builder.CreateVectorOfStructs(tangents);
+        auto fb_bitangents = builder.CreateVectorOfStructs(bitangents);
+        auto fb_tex_coords = builder.CreateVectorOfStructs(tex_coords);
+        auto fb_indices = builder.CreateVector(indices);
+        auto fb_materials = builder.CreateVector(materials);
+        auto fb_meshes = builder.CreateVectorOfStructs(meshes);
+        auto fb_nodes = builder.CreateVectorOfStructs(nodes.nodes);
+        auto fb_node_names = builder.CreateVectorOfStrings(nodes.names);
+        auto fb_node_children = builder.CreateVector(nodes.node_children);
+        auto fb_node_meshes = builder.CreateVector(nodes.node_meshes);
+
+        content::ModelBuilder model_builder(builder);
+        model_builder.add_positions(fb_positions);
+        model_builder.add_normals(fb_normals);
+        model_builder.add_tangents(fb_tangents);
+        model_builder.add_binormals(fb_bitangents);
+        model_builder.add_tex_coords(fb_tex_coords);
+        model_builder.add_indices(fb_indices);
+        model_builder.add_materials(fb_materials);
+        model_builder.add_meshes(fb_meshes);
+        model_builder.add_nodes(fb_nodes);
+        model_builder.add_node_names(fb_node_names);
+        model_builder.add_node_children(fb_node_children);
+        model_builder.add_node_meshes(fb_node_meshes);
+        content::FinishModelBuffer(builder, model_builder.Finish());
 
         // Save the flatbuffer to a file
         std::ofstream ofs(output_file, std::ios::binary);

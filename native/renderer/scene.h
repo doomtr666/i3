@@ -11,6 +11,7 @@ typedef struct i3_model_instance_i
 
     i3_model_i* (*get_model)(i3_model_instance_o* self);
     i3_mat4_t* (*get_transforms)(i3_model_instance_o* self);
+    void (*set_transform)(i3_model_instance_o* self, i3_mat4_t transform);
 
     void (*update)(i3_model_instance_o* self);
     void (*destroy)(i3_model_instance_o* self);
