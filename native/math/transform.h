@@ -254,8 +254,8 @@ static inline i3_mat4_t i3_mat4_look_to_rh(i3_vec3_t position, i3_vec3_t directi
 {
     // basis
     i3_vec3_t forward_vec = i3_vec3_normalize(direction);
-    i3_vec3_t right_vec = i3_vec3_normalize(i3_vec3_cross(up, forward_vec));
-    i3_vec3_t up_vec = i3_vec3_cross(forward_vec, right_vec);
+    i3_vec3_t right_vec = i3_vec3_normalize(i3_vec3_cross(forward_vec, up));
+    i3_vec3_t up_vec = i3_vec3_cross(right_vec, forward_vec);
 
     // translation
     i3_vec3_t t = i3_vec3_neg(position);

@@ -125,7 +125,7 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
     i3_rbk_pipeline_rasterization_state_t rasterization = {
         .polygon_mode = I3_RBK_POLYGON_MODE_FILL,
         .cull_mode = I3_RBK_CULL_MODE_BACK_BIT,
-        .front_face = I3_RBK_FRONT_FACE_CLOCKWISE,
+        .front_face = I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depth_clamp_enable = false,
         .rasterizer_discard_enable = false,
         .depth_bias_enable = false,
