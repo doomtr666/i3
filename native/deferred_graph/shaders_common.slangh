@@ -1,0 +1,24 @@
+#ifndef SHADERS_COMMON_H__
+#define SHADERS_COMMON_H__
+
+// Main constant buffer
+cbuffer Uniforms
+{
+    float4x4 projView;
+    float elapsedTime;
+    float totalTime;
+}
+
+// G Buffer Encoding / decoding
+
+float4 encode_normal(float3 normal)
+{
+    return float4(0.5 * normal + 0.5, 1.0f);
+}
+
+float3 decode_normal(float4 normal)
+{
+    return 2.0f * normal.xyz - 1.0f;
+}
+
+#endif  // SHADERS_COMMON_H__

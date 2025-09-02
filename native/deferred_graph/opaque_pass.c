@@ -70,7 +70,7 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
 
     // create shader module
     i3_content_store_i* content_store = pass->get_content_store(pass->self);
-    i3_content_i* shader_content = content_store->load(content_store->self, "shaders.spv");
+    i3_content_i* shader_content = content_store->load(content_store->self, "opaque_pass.spv");
 
     i3_rbk_shader_module_desc_t shader_desc = {.code = shader_content->get_data(shader_content->self),
                                                .code_size = shader_content->get_size(shader_content->self)};

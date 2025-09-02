@@ -1,12 +1,4 @@
-// shaders.slang
-
-// Uniform data to be passed from application -> shader.
-cbuffer Uniforms
-{
-    float4x4 projView;
-    float elapsedTime;
-    float totalTime;
-}
+#include "shaders_common.slangh"
 
 [vk::push_constant]
 cbuffer PushConstants
@@ -36,10 +28,13 @@ struct CoarseVertex
 // Output of the fragment shader
 struct Fragment
 {
-    float4 color;
+    float4 normal : SV_Target0;
+    float4 albedo : SV_Target1;
+    float4 metalic_roughness : SV_Target2;
 };
 
 // Vertex  Shader
+
 struct VertexStageOutput
 {
     CoarseVertex coarseVertex : CoarseVertex;
@@ -69,13 +64,12 @@ VertexStageOutput vertexMain(
 
 [shader("fragment")]
 Fragment fragmentMain(
-    CoarseVertex coarseVertex : CoarseVertex) : SV_Target
+    CoarseVertex coarseVertex : CoarseVertex)
 {
-    float3 normal = coarseVertex.normal;
-
-    float intensity = dot(normal, float3(1,0,0));
-
     Fragment output;
-    output.color = float4(1,0,0,1) * (0.5f * intensity + 0.5f); //float4(intensity * float3(1,1,1), 1.0);
+    output.albedo = float4(1,0,0,0);
+    output.normal = encode_normal(normalize(coarseVertex.normal));
+    output.metalic_roughness = 0;
+
     return output;
 }
