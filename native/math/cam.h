@@ -71,10 +71,7 @@ static inline void i3_cam_init_target(i3_cam_t* cam,
 {
     assert(cam != NULL);
 
-    // i3_vec3_t direction = i3_vec3_sub(target, position);
-    // TODO: this is fishy ...
-    i3_vec3_t direction = i3_vec3_sub(position, target);
-
+    i3_vec3_t direction = i3_vec3_sub(target, position);
     i3_cam(cam, position, direction, up, fov_y_degree, z_near, z_far);
 }
 

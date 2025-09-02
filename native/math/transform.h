@@ -252,16 +252,16 @@ static inline i3_mat4_t i3_mat4_persective_fov_rh(float fov, float aspect, float
 
 static inline i3_mat4_t i3_mat4_look_to_rh(i3_vec3_t position, i3_vec3_t direction, i3_vec3_t up)
 {
-    // basis
-    i3_vec3_t forward_vec = i3_vec3_normalize(direction);
-    i3_vec3_t right_vec = i3_vec3_normalize(i3_vec3_cross(forward_vec, up));
-    i3_vec3_t up_vec = i3_vec3_cross(right_vec, forward_vec);
+    // See full explanation here:
+    // https://www.scratchapixel.com/lessons/mathematics-physics-for-computer-graphics/lookat-function/framing-lookat-function.html
 
-    // translation
-    i3_vec3_t t = i3_vec3_neg(position);
+    // basis
+    i3_vec3_t f = i3_vec3_normalize(i3_vec3_neg(direction));
+    i3_vec3_t s = i3_vec3_normalize(i3_vec3_cross(f, up));
+    i3_vec3_t u = i3_vec3_cross(s, f);
 
     // TODO: check if this is correctly unfolded by the compiler, may need to be reduced manually
-    return i3_mat4_mult(i3_mat4_rotation_basis(right_vec, up_vec, forward_vec), i3_mat4_translation(t));
+    return i3_mat4_mult(i3_mat4_rotation_basis(s, u, f), i3_mat4_translation(i3_vec3_neg(position)));
 }
 
 static inline i3_mat4_t i3_mat4_look_at_rh(i3_vec3_t position, i3_vec3_t target, i3_vec3_t up)
