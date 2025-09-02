@@ -242,28 +242,6 @@ class model_processor
         nodes_data nodes;
         process_node(scene->mRootNode, nodes);
 
-        // dump nodes
-        std::cout << "nodes:" << std::endl;
-        for (auto& n : nodes.nodes)
-        {
-            std::cout << "Node children (" << n.children_count() << "," << n.children_offset() << ")" << std::endl;
-        }
-
-        // dump node names
-        std::cout << "node names:" << std::endl;
-        for (auto& v : nodes.names)
-            std::cout << v << std::endl;
-
-        // dump mesh offset
-        std::cout << "node meshes:" << std::endl;
-        for (auto& v : nodes.node_meshes)
-            std::cout << v << std::endl;
-
-        // dump node children
-        std::cout << "node children:" << std::endl;
-        for (auto& v : nodes.node_children)
-            std::cout << v << std::endl;
-
         // create the model
         auto fb_positions = builder.CreateVectorOfStructs(positions);
         auto fb_normals = builder.CreateVectorOfStructs(normals);
