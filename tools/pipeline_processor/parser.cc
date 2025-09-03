@@ -1,34 +1,28 @@
 #include "parser.h"
 
 static const char* grammar_ = R"x(
-# full pipeline definition
+# file definition
 file <- file_stmt*
 
-# pipeline stmt
-file_stmt <- pipeline
+# file stmt
+file_stmt <- pipeline / slang
+
+# slang section
+slang <- "#slang" <((!"#end") .)*> "#end"
 
 # pipeline
-pipeline <- pipeline_kw id l_brace pipeline_stmt* r_brace
+pipeline <- "pipeline" id "{" pipeline_stmt* "}"
 
 # pipeline stmt
-pipeline_stmt <- compile_stmt
+pipeline_stmt <- pipeline_compile_stmt
 
-compile_stmt <- compile_kw l_paren id comma id r_paren semicolon
+# compile shader stmt
+pipeline_compile_stmt <- "compile" "(" id "," id ")" ";"
 
 # keywords
-pipeline_kw <- "pipeline"
-compile_kw <- "compile"
 
 # identifier
 id <- <[a-zA-Z_][a-zA-Z0-9_]*>
-
-# punct
-comma <- ","
-semicolon <- ";"
-l_paren <- "("
-r_paren <- ")"
-l_brace <- "{"
-r_brace <- "}"
 
 #white spaces
 comment <- "//" [^\n]* / "/*" (!"*/" .)* "*/"

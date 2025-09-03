@@ -6,8 +6,17 @@ int main(int argc, char** argv)
 
     const char* src = R"(
 
-    pipeline test_pipeline {
-        compile(vs, vertexMain);
+    #slang
+    #end
+
+    // test pipeline
+    pipeline  test_pipeline {  
+        /* shaders */
+        compile ( vs , vertexMain);   // vertex shader
+        compile( ps , pixelMain);    // pixel shader
+    }
+
+    pipeline  test_pipeline2 {
     }
 
     )";
