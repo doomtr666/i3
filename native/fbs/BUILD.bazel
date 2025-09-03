@@ -3,3 +3,9 @@ filegroup(
     srcs = ["model.fbs"],
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "pipeline_fbs",
+    srcs = ["pipeline.fbs"],
+    visibility = ["//visibility:public"],
+)

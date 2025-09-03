@@ -1,0 +1,8 @@
+namespace content;
+
+table Pipeline  {
+    
+}
+
+root_type Pipeline;
+file_identifier "I3PL";

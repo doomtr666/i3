@@ -1,7 +1,26 @@
+load("//bazel:flatc.bzl", "flatc")
+
+flatc(
+    name = "pipeline_fbs",
+    srcs = [
+        "//native/fbs:pipeline_fbs",
+    ],
+)
+
 cc_binary(
     name = "pipeline_processor",
-    srcs = glob(["*.cc"]),
+    srcs = glob([
+        "*.cc",
+        "*.h",
+    ]),
+    cxxopts = [
+        "/std:c++20",
+        "/Zc:__cplusplus",
+        "/wd4566",
+    ],
     visibility = ["//visibility:public"],
     deps = [
+        ":pipeline_fbs",
+        "@vcpkg//:flatbuffers",
     ],
 )

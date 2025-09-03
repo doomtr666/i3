@@ -69,7 +69,7 @@ Fragment fragmentMain(
     Fragment output;
     output.albedo = float4(1,0,0,0);
     output.normal = encode_normal(normalize(coarseVertex.normal));
-    output.metalic_roughness = 0;
+    output.metalic_roughness = float4(0,0.2f,0,0);
 
     return output;
 }
