@@ -32,6 +32,6 @@ TEST(transform, look_to)
 
     EXPECT_FLOAT_EQ(tx.x, x.x);
     EXPECT_FLOAT_EQ(tx.y, x.y);
-    EXPECT_FLOAT_EQ(tx.z, x.z);
+    EXPECT_FLOAT_EQ(tx.z, -x.z);
     EXPECT_FLOAT_EQ(tx.w, x.w);
 }

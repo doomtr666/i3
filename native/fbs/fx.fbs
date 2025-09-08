@@ -1,0 +1,12 @@
+namespace content;
+
+table Pipeline {
+
+}
+
+table Effect  {
+    pipelines:[Pipeline];
+}
+
+root_type Effect;
+file_identifier "I3FX";

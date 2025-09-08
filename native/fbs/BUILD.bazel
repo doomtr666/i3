@@ -5,7 +5,7 @@ filegroup(
 )
 
 filegroup(
-    name = "pipeline_fbs",
-    srcs = ["pipeline.fbs"],
+    name = "fx_fbs",
+    srcs = ["fx.fbs"],
     visibility = ["//visibility:public"],
 )
