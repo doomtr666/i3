@@ -12,4 +12,6 @@ class parser
   public:
     parser();
     std::shared_ptr<peg::Ast> parse(const char* source, const char* path = nullptr);
+
+    void error(const std::shared_ptr<peg::Ast>& node, const std::string& message);
 };

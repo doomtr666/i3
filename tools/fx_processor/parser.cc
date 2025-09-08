@@ -69,6 +69,11 @@ void parser::error(const std::string& path, size_t line, size_t col, const std::
     std::cerr << path << ":" << line << ":" << col << ": " << message << std::endl;
 }
 
+void parser::error(const std::shared_ptr<peg::Ast>& node, const std::string& message)
+{
+    error(path_, node->line, node->column, message);
+}
+
 std::shared_ptr<peg::Ast> parser::parse(const char* source, const char* path)
 {
     if (path == nullptr)

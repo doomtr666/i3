@@ -14,8 +14,9 @@ class fx_processor
 
     std::deque<fx_file> files_;
     bool debug_ = false;
+    int import_counter_ = 0;
 
-    std::string read_file(const std::string& path)
+    bool read_file(const std::string& path, std::string& content)
     {
         std::ifstream file(path);
         if (!file.is_open())
@@ -26,14 +27,13 @@ class fx_processor
 
         std::stringstream buffer;
         buffer << file.rdbuf();
-        return buffer.str();
+        content = buffer.str();
     }
 
     bool resolve(const std::string& base_path, const std::string& path, std::string& resolved_path)
     {
         // default is local path
         resolved_path = std::filesystem::path(base_path).replace_filename(path).generic_string();
-        std::cout << "resolving: " << resolved_path << std::endl;
         if (!std::filesystem::exists(resolved_path))
             return false;
         return true;
@@ -44,10 +44,13 @@ class fx_processor
 
     bool process_file(const std::string& path)
     {
-        auto src = read_file(path);
+        parser parser_;
 
-        parser p;
-        auto ast = p.parse(src.c_str(), path.c_str());
+        std::string src;
+        if (!read_file(path, src))
+            return false;
+
+        auto ast = parser_.parse(src.c_str(), path.c_str());
 
         if (ast == nullptr)
             return false;
@@ -66,11 +69,14 @@ class fx_processor
         {
             if (node->name == "import")
             {
-                auto import_file = node->nodes[0]->token_to_string();
+                auto import_file = node->nodes[0];
+                auto import_file_str = import_file->token_to_string();
+
                 std::string resolved_path;
-                if (!resolve(path, import_file, resolved_path))
+                if (!resolve(path, import_file_str, resolved_path))
                 {
-                    std::cerr << "failed to resolve import: " << import_file << std::endl;
+                    parser_.error(node->nodes[0], "failed to open import file: " + import_file_str);
+                    return false;
                 }
 
                 imports.push_front(resolved_path);
@@ -80,10 +86,7 @@ class fx_processor
         for (auto& import : imports)
         {
             if (!process_file(import))
-            {
-                std::cerr << "failed to process file: " << import << std::endl;
                 return false;
-            }
         }
 
         return true;
