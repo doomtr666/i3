@@ -6,15 +6,18 @@
 
 class fx_processor
 {
+    parser parser_;
+
     struct fx_file
     {
         std::string path;
+        std::string content;
         std::shared_ptr<peg::Ast> ast;
     };
 
-    std::deque<fx_file> files_;
+    std::map<std::string, fx_file> files_;
+
     bool debug_ = false;
-    int import_counter_ = 0;
 
     bool read_file(const std::string& path, std::string& content)
     {
@@ -22,29 +25,33 @@ class fx_processor
         if (!file.is_open())
         {
             std::cerr << "failed to open file: " << path << std::endl;
-            return "";
+            return false;
         }
 
         std::stringstream buffer;
         buffer << file.rdbuf();
         content = buffer.str();
+
+        return true;
     }
 
     bool resolve(const std::string& base_path, const std::string& path, std::string& resolved_path)
     {
         // default is local path
-        resolved_path = std::filesystem::path(base_path).replace_filename(path).generic_string();
+        auto target =
+            std::filesystem::weakly_canonical(std::filesystem::path(base_path).replace_filename(path).make_preferred());
+
+        resolved_path = target.string();
+
         if (!std::filesystem::exists(resolved_path))
             return false;
         return true;
     }
 
-  public:
-    void enable_debug() { debug_ = true; }
-
-    bool process_file(const std::string& path)
+    bool parse_file(const std::string& path, std::vector<std::string>& imports)
     {
-        parser parser_;
+        if (files_.find(path) != files_.end())
+            return true;
 
         std::string src;
         if (!read_file(path, src))
@@ -55,16 +62,7 @@ class fx_processor
         if (ast == nullptr)
             return false;
 
-        if (debug_)
-        {
-            std::cout << "file: " << path << std::endl;
-            std::cout << peg::ast_to_s(ast) << std::endl;
-        }
-
-        files_.push_front({path, ast});
-
         // process imports
-        std::deque<std::string> imports;
         for (auto& node : ast->nodes)
         {
             if (node->name == "import")
@@ -75,18 +73,41 @@ class fx_processor
                 std::string resolved_path;
                 if (!resolve(path, import_file_str, resolved_path))
                 {
-                    parser_.error(node->nodes[0], "failed to open import file: " + import_file_str);
+                    parser_.error(import_file, "failed to open import file: " + import_file_str);
                     return false;
                 }
-
-                imports.push_front(resolved_path);
+                imports.push_back(resolved_path);
             }
         }
 
-        for (auto& import : imports)
+        // add file to the map
+        files_[path] = {path, src, ast};
+    }
+
+  public:
+    void enable_debug() { debug_ = true; }
+
+    bool process(const std::string& path)
+    {
+        std::vector<std::string> imports;
+        imports.push_back(path);
+
+        while (!imports.empty())
         {
-            if (!process_file(import))
+            auto path = imports.back();
+            imports.pop_back();
+
+            if (!parse_file(path, imports))
                 return false;
+        }
+
+        if (debug_)
+        {
+            for (auto& [path, file] : files_)
+            {
+                std::cout << "file: " << path << std::endl;
+                std::cout << peg::ast_to_s(file.ast) << std::endl;
+            }
         }
 
         return true;
@@ -100,7 +121,7 @@ int main(int argc, char** argv)
     fx_processor processor;
     processor.enable_debug();
 
-    if (!processor.process_file(path))
+    if (!processor.process(path))
     {
         std::cerr << "failed to process file: " << path << std::endl;
         return EXIT_FAILURE;
