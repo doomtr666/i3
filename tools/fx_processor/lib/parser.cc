@@ -18,10 +18,10 @@ import <- "import" string_literal ";" { no_ast_opt }
 parameter <- annotations parameter_type id ";"
 
 # slang section
-slang <- "#slang" <((!"#end") .)*> "#end"
+slang <- "#slang" (((!"#end") .)*) "#end" { no_ast_opt }
 
 # pipeline
-pipeline <- ( "graphics" / "compute" ) id "{" pipeline_stmt* "}"
+pipeline <- ( "graphics" / "compute" ) id (":" id)? "{" pipeline_stmt* "}"
 
 # pipeline stmt
 pipeline_stmt <- pipeline_var_stmt

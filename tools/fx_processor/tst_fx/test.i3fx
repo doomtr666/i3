@@ -1,1 +1,26 @@
+import "fullscreen_rect.i3fx";
 import "math.i3fx";
+
+
+#slang
+
+void fragmentMain()
+{
+
+}
+#end
+
+graphics light_pass : fs_rect
+{
+    fragment_program = "fragmentMain"
+
+    color_attachments = [
+        { format = R8G8B8A8_UNORM, samples = 1 },
+        [R8G8B8A8_UNORM, 1],
+        R8G8B8A8_UNORM
+    ]
+    depth_attachment = D32_SFLOAT
+
+}
+
+

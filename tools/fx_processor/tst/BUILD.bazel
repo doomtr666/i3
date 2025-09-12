@@ -1,6 +1,7 @@
-cc_binary(
-    name = "fx_processor",
-    srcs = ["main.cc"],
+cc_test(
+    name = "tst",
+    size = "small",
+    srcs = glob(["*.cc"]),
     cxxopts = [
         "/std:c++20",
         "/Zc:__cplusplus",
@@ -9,5 +10,6 @@ cc_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//tools/fx_processor/lib",
+        "@vcpkg//:gtest",
     ],
 )

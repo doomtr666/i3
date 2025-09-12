@@ -4,6 +4,6 @@ test_suite(
         "//native/content_store_tst",
         "//native/core_tst",
         "//native/math_tst",
-        "//tools/fx_processor:tst",
+        "//tools/fx_processor/tst",
     ],
 )

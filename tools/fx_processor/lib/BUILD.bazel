@@ -1,0 +1,24 @@
+load("//bazel:flatc.bzl", "flatc")
+
+flatc(
+    name = "fx_fbs",
+    srcs = [
+        "//native/fbs:fx_fbs",
+    ],
+)
+
+cc_library(
+    name = "lib",
+    srcs = glob(["*.cc"]),
+    hdrs = glob(["*.h"]),
+    cxxopts = [
+        "/std:c++20",
+        "/Zc:__cplusplus",
+        "/wd4566",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fx_fbs",
+        "@vcpkg//:flatbuffers",
+    ],
+)

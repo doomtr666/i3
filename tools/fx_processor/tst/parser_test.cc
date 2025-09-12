@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "parser.h"
+#include "../lib/parser.h"
 
 class ParserTest : public testing::Test
 {

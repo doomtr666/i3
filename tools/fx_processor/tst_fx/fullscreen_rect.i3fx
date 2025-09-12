@@ -1,0 +1,16 @@
+import "common.i3fx";
+
+
+#slang
+
+void vertexMain()
+{
+
+}
+
+#end
+
+graphics fs_rect {
+
+    vertex_program = "vertexMain"
+}
