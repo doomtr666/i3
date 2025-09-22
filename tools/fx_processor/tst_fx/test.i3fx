@@ -10,16 +10,14 @@ void fragmentMain()
 }
 #end
 
-graphics light_pass : fs_rect
+graphics light_pass : fs_rect, base
 {
-    fragment_program = "fragmentMain"
-
     color_attachments = [
         { format = R8G8B8A8_UNORM, samples = 1 },
-        [R8G8B8A8_UNORM, 1],
-        R8G8B8A8_UNORM
+        { format = R8G8B8A8_UNORM, samples = 1 },
+        { format = R8G8B8A8_UNORM, samples = 1 }
     ]
-    depth_attachment = D32_SFLOAT
+    depth_attachment = { format = R8G8B8A8_UNORM, samples = 1 }
 
 }
 

@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <numeric>
 
 std::string fx_processor::normalize_path(const std::string& path)
 {
@@ -120,66 +121,69 @@ bool fx_processor::is_cyclic(int u,
 
 bool fx_processor::order_files()
 {
-    // get edges
-    std::vector<std::pair<int, int>> edges;
-    for (uint32_t i = 0; i < files_.size(); i++)
+    const size_t num_files = files_.size();
+
+    // Build adjacency list for dependencies
+    std::vector<std::vector<int>> adj(num_files);
+    for (size_t i = 0; i < num_files; ++i)
     {
-        for (auto& import : files_[i].imports)
+        for (const auto& import : files_[i].imports)
         {
             auto it = parsed_files_.find(import);
             if (it == parsed_files_.end())
             {
-                // should not happen
-                std::cerr << "internal error" << std::endl;
+                std::cerr << "internal error: imported file not found in parsed_files_ map." << std::endl;
                 return false;
             }
-            edges.push_back({i, it->second});
+            adj[i].push_back(it->second);
         }
     }
 
-    // adjencency
-    std::vector<std::vector<int>> adj(files_.size());
-    for (auto& edge : edges)
-        adj[edge.first].push_back(edge.second);
-
-    std::vector<bool> visited(files_.size(), false);
-    std::vector<bool> recStack(files_.size(), false);
-
-    // Check for cycles starting from every unvisited node
-    for (int i = 0; i < files_.size(); i++)
+    // Detect cycles using DFS
+    std::vector<bool> visited(num_files, false);
+    std::vector<bool> recursion_stack(num_files, false);
+    for (size_t i = 0; i < num_files; ++i)
     {
-        if (!visited[i] && is_cyclic(i, adj, visited, recStack))
+        if (!visited[i] && is_cyclic(static_cast<int>(i), adj, visited, recursion_stack))
+        {
             return false;  // Cycle found
+        }
     }
 
-    // no cycles, get a correct order
-    std::vector<int> unordered;
+    // The current approach iteratively finds nodes with all dependencies met and adds them to ordered_
+    std::vector<int> remaining_files(num_files);
+    std::iota(remaining_files.begin(), remaining_files.end(), 0);  // Initialize with 0, 1, ..., num_files-1
 
-    for (uint32_t i = 0; i < files_.size(); i++)
-        unordered.push_back(i);
-
-    while (!unordered.empty())
+    while (!remaining_files.empty())
     {
-        for (uint32_t i = 0; i < unordered.size(); i++)
+        bool found_next = false;
+        for (auto it = remaining_files.begin(); it != remaining_files.end(); ++it)
         {
-            bool all_req = true;
-
-            for (uint32_t j = 0; j < adj[unordered[i]].size(); j++)
+            int current_file_idx = *it;
+            bool all_dependencies_met = true;
+            for (int dependency_idx : adj[current_file_idx])
             {
-                auto it = std::find(ordered_.begin(), ordered_.end(), adj[unordered[i]][j]);
-                if (it == ordered_.end())
+                if (std::find(ordered_.begin(), ordered_.end(), dependency_idx) == ordered_.end())
                 {
-                    all_req = false;
+                    all_dependencies_met = false;
                     break;
                 }
             }
-
-            if (all_req)
+            if (all_dependencies_met)
             {
-                ordered_.push_back(unordered[i]);
-                unordered.erase(unordered.begin() + i);
+                ordered_.push_back(current_file_idx);
+                remaining_files.erase(it);
+                found_next = true;
                 break;
             }
+        }
+        if (!found_next && !remaining_files.empty())
+        {
+            // This should not happen if there are no cycles and the graph is valid
+            std::cerr << "internal error: could not order remaining files, possibly due to an undetected cycle or "
+                         "logic error."
+                      << std::endl;
+            return false;
         }
     }
 
@@ -213,8 +217,53 @@ bool fx_processor::generate_shader(fx_file& file)
     return true;
 }
 
+bool fx_processor::generate_graphics_pipeline(std::shared_ptr<peg::Ast>& node)
+{
+    // name is first
+    auto name = node->nodes[0]->token_to_string();
+
+    // inherit
+    std::vector<std::string> inherits;
+    for (auto inherit : node->nodes[1]->nodes)
+        inherits.push_back(inherit->token_to_string());
+
+    for (uint32_t i = 2; i < node->nodes.size(); i++)
+    {
+        auto& stmt = node->nodes[i];
+
+        if (stmt->name == "pipeline_var_stmt")
+        {
+        }
+    }
+
+    return true;
+}
+
+bool fx_processor::generate_compute_pipeline(std::shared_ptr<peg::Ast>& node)
+{
+    // name is first
+    auto name = node->nodes[0]->token_to_string();
+
+    return true;
+}
+
 bool fx_processor::generate_pipelines(fx_file& file)
 {
+    // extract pipeline
+
+    for (auto& node : file.ast->nodes)
+    {
+        if (node->name == "graphics" || node->name == "compute")
+        {
+            if (node->name == "graphics")
+                if (!generate_graphics_pipeline(node))
+                    return false;
+            if (node->name == "compute")
+                if (!generate_compute_pipeline(node))
+                    return false;
+        }
+    }
+
     return true;
 }
 

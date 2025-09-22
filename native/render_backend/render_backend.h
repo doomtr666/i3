@@ -205,6 +205,7 @@ typedef enum
 // cull mode
 typedef enum
 {
+    I3_RBK_CULL_MODE_NONE = 0,
     I3_RBK_CULL_MODE_FRONT_BIT = i3_flag(0),
     I3_RBK_CULL_MODE_BACK_BIT = i3_flag(1),
     I3_RBK_CULL_MODE_FRONT_AND_BACK = I3_RBK_CULL_MODE_FRONT_BIT | I3_RBK_CULL_MODE_BACK_BIT,

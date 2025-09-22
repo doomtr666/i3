@@ -33,6 +33,9 @@ class fx_processor
 
     bool generate_parameters(fx_file& file);
     bool generate_shader(fx_file& file);
+    bool generate_graphics_pipeline(std::shared_ptr<peg::Ast>& node);
+    bool generate_compute_pipeline(std::shared_ptr<peg::Ast>& node);
+
     bool generate_pipelines(fx_file& file);
     bool generate();
 

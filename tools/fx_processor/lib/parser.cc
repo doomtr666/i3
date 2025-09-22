@@ -9,7 +9,8 @@ file_stmt <-
     import
     / parameter
     / slang
-    / pipeline 
+    / graphics
+    / compute
 
 # import
 import <- "import" string_literal ";" { no_ast_opt }
@@ -21,11 +22,15 @@ parameter <- annotations parameter_type id ";"
 slang <- "#slang" (((!"#end") .)*) "#end" { no_ast_opt }
 
 # pipeline
-pipeline <- ( "graphics" / "compute" ) id (":" id)? "{" pipeline_stmt* "}"
+graphics <- "graphics" id pipeline_inherit "{" pipeline_stmt* "}" { no_ast_opt }
+compute <- "compute" id "{" pipeline_stmt* "}" { no_ast_opt }
 
 # pipeline stmt
-pipeline_stmt <- pipeline_var_stmt
-pipeline_var_stmt <- id "=" pipeline_value
+
+pipeline_inherit <- (":" COMMA_LIST(id,","))? { no_ast_opt }
+
+pipeline_stmt <- pipeline_var_stmt 
+pipeline_var_stmt <- id "=" pipeline_value  { no_ast_opt }
 pipeline_value <- float_literal / int_literal / bool_literal / string_literal / id / pipeline_array / pipeline_dict
 pipeline_array <- "[" COMMA_LIST(pipeline_value, ",")? "]"
 pipeline_dict <- "{" COMMA_LIST(pipeline_dict_value, ",")?  "}"
