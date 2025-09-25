@@ -15,6 +15,8 @@ typedef struct i3_vk_pipeline_o
 } i3_vk_pipeline_o;
 
 i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
+                                                         i3_rbk_pipeline_layout_i* layout,
                                                          const i3_rbk_graphics_pipeline_desc_t* desc);
 i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self,
+                                                        i3_rbk_pipeline_layout_i* layout,
                                                         const i3_rbk_compute_pipeline_desc_t* desc);

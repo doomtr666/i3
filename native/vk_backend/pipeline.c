@@ -23,14 +23,15 @@ static void i3_vk_pipeline_release(i3_rbk_resource_o* self)
     pipeline->use_count--;
     if (pipeline->use_count == 0)
     {
-        vkDestroyPipeline(pipeline->device->handle, pipeline->handle, NULL);
-
         // destroy render pass
         if (pipeline->render_pass != VK_NULL_HANDLE)
             vkDestroyRenderPass(pipeline->device->handle, pipeline->render_pass, NULL);
 
         // release pipeline layout
         i3_rbk_resource_release(pipeline->layout);
+
+        // destroy pipeline
+        vkDestroyPipeline(pipeline->device->handle, pipeline->handle, NULL);
 
         i3_memory_pool_free(&pipeline->device->pipeline_pool, pipeline);
     }
@@ -530,6 +531,7 @@ static VkPipelineDynamicStateCreateInfo* i3_vk_create_dynamic_states(i3_arena_t*
 
 // create graphics pipeline
 i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
+                                                         i3_rbk_pipeline_layout_i* layout,
                                                          const i3_rbk_graphics_pipeline_desc_t* desc)
 {
     assert(self != NULL);
@@ -544,13 +546,13 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
     i3_arena_init(&arena, 4 * I3_KB);
 
     // keep ref to pipeline layout
-    pipeline->layout = desc->layout;
-    i3_rbk_resource_add_ref(desc->layout);
+    pipeline->layout = layout;
+    i3_rbk_resource_add_ref(pipeline->layout);
 
     // create pipeline
     VkGraphicsPipelineCreateInfo pipeline_ci = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .layout = ((i3_vk_pipeline_layout_o*)desc->layout->self)->handle,
+        .layout = ((i3_vk_pipeline_layout_o*)layout->self)->handle,
     };
 
     // create render pass
@@ -613,6 +615,7 @@ i3_rbk_pipeline_i* i3_vk_device_create_graphics_pipeline(i3_rbk_device_o* self,
 
 // create compute pipeline
 i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self,
+                                                        i3_rbk_pipeline_layout_i* layout,
                                                         const i3_rbk_compute_pipeline_desc_t* desc)
 {
     assert(self != NULL);
@@ -627,13 +630,13 @@ i3_rbk_pipeline_i* i3_vk_device_create_compute_pipeline(i3_rbk_device_o* self,
     i3_arena_init(&arena, I3_KB);
 
     // create pipeline layout
-    pipeline->layout = desc->layout;
-    // i3_rbk_resource_add_ref(desc->layout);
+    pipeline->layout = layout;
+    i3_rbk_resource_add_ref(pipeline->layout);
 
     // create pipeline
     VkComputePipelineCreateInfo pipeline_ci = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-        .layout = ((i3_vk_pipeline_layout_o*)desc->layout->self)->handle,
+        .layout = ((i3_vk_pipeline_layout_o*)layout->self)->handle,
     };
 
     // create stage

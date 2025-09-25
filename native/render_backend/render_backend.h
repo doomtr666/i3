@@ -801,14 +801,12 @@ typedef struct i3_rbk_graphics_pipeline_desc_t
     const i3_rbk_pipeline_depth_stencil_state_t* depth_stencil;
     const i3_rbk_pipeline_color_blend_state_t* color_blend;
     const i3_rbk_pipeline_dynamic_state_t* dynamic;
-    i3_rbk_pipeline_layout_i* layout;
 } i3_rbk_graphics_pipeline_desc_t;
 
 // compute pipeline
 typedef struct i3_rbk_compute_pipeline_desc_t
 {
     i3_rbk_pipeline_shader_stage_desc_t stage;
-    i3_rbk_pipeline_layout_i* layout;
 } i3_rbk_compute_pipeline_desc_t;
 
 // pipeline interface
@@ -1007,10 +1005,14 @@ struct i3_rbk_device_i
     i3_rbk_shader_module_i* (*create_shader_module)(i3_rbk_device_o* self, const i3_rbk_shader_module_desc_t* desc);
 
     // create graphics pipeline
-    i3_rbk_pipeline_i* (*create_graphics_pipeline)(i3_rbk_device_o* self, const i3_rbk_graphics_pipeline_desc_t* desc);
+    i3_rbk_pipeline_i* (*create_graphics_pipeline)(i3_rbk_device_o* self,
+                                                   i3_rbk_pipeline_layout_i* layout,
+                                                   const i3_rbk_graphics_pipeline_desc_t* desc);
 
     // create compute pipeline
-    i3_rbk_pipeline_i* (*create_compute_pipeline)(i3_rbk_device_o* self, const i3_rbk_compute_pipeline_desc_t* desc);
+    i3_rbk_pipeline_i* (*create_compute_pipeline)(i3_rbk_device_o* self,
+                                                  i3_rbk_pipeline_layout_i* layout,
+                                                  const i3_rbk_compute_pipeline_desc_t* desc);
 
     // create swapchain
     i3_rbk_swapchain_i* (*create_swapchain)(i3_rbk_device_o* self,

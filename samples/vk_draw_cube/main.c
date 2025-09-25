@@ -282,10 +282,9 @@ int main()
         .multisample = &multisample,
         .color_blend = &color_blend,
         .dynamic = &dynamic,
-        .layout = pipeline_layout,
     };
 
-    i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
+    i3_rbk_pipeline_i* pipeline = device->create_graphics_pipeline(device->self, pipeline_layout, &pipeline_desc);
 
     // create framebuffer
     i3_rbk_framebuffer_desc_t framebuffer_desc = {

@@ -210,10 +210,9 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
         .depth_stencil = &depth_stencil,
         .color_blend = &color_blend,
         .dynamic = &dynamic,
-        .layout = pipeline_layout,
     };
 
-    ctx->opaque_pipeline = device->create_graphics_pipeline(device->self, &pipeline_desc);
+    ctx->opaque_pipeline = device->create_graphics_pipeline(device->self, pipeline_layout, &pipeline_desc);
 
     // cleanup
     descriptor_set_layout->destroy(descriptor_set_layout->self);
