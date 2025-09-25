@@ -301,7 +301,7 @@ static VkPipelineTessellationStateCreateInfo* i3_vk_create_tessellation_states(
 
     *ci = (VkPipelineTessellationStateCreateInfo){
         .sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO,
-        .patchControlPoints = desc->path_control_points,
+        .patchControlPoints = desc->patch_control_points,
     };
 
     return ci;

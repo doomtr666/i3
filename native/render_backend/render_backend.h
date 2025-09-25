@@ -692,7 +692,7 @@ typedef struct i3_rbk_pipeline_input_assembly_state_t
 // tessellation
 typedef struct i3_rbk_pipeline_tessellation_state_t
 {
-    int path_control_points;
+    int patch_control_points;
 } i3_rbk_pipeline_tessellation_state_t;
 
 // viewport
@@ -1017,7 +1017,7 @@ struct i3_rbk_device_i
                                             i3_render_window_i* window,
                                             const i3_rbk_swapchain_desc_t* desc);
 
-    // create cmb buffer
+    // create cmd buffer
     i3_rbk_cmd_buffer_i* (*create_cmd_buffer)(i3_rbk_device_o* self);
 
     // submit cmd buffers
