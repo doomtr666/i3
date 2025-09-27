@@ -465,9 +465,9 @@ VkPolygonMode i3_vk_convert_polygon_mode(i3_rbk_polygon_mode_t mode)
 VkCullModeFlags i3_vk_convert_cull_mode_flags(i3_rbk_cull_mode_flag_bits_t flags)
 {
     VkCullModeFlags res = 0;
-    if (flags & I3_RBK_CULL_MODE_FRONT_BIT)
+    if (flags & I3_RBK_CULL_MODE_FRONT)
         res |= VK_CULL_MODE_FRONT_BIT;
-    if (flags & I3_RBK_CULL_MODE_BACK_BIT)
+    if (flags & I3_RBK_CULL_MODE_BACK)
         res |= VK_CULL_MODE_BACK_BIT;
 
     return res;
@@ -639,13 +639,13 @@ VkBlendOp i3_vk_convert_blend_op(i3_rbk_blend_op_t op)
 VkColorComponentFlags i3_vk_convert_color_component_flags(i3_rbk_color_component_flags_t flags)
 {
     VkColorComponentFlags res = 0;
-    if (flags & I3_RBK_COLOR_COMPONENT_R_BIT)
+    if (flags & I3_RBK_COLOR_COMPONENT_R)
         res |= VK_COLOR_COMPONENT_R_BIT;
-    if (flags & I3_RBK_COLOR_COMPONENT_G_BIT)
+    if (flags & I3_RBK_COLOR_COMPONENT_G)
         res |= VK_COLOR_COMPONENT_G_BIT;
-    if (flags & I3_RBK_COLOR_COMPONENT_B_BIT)
+    if (flags & I3_RBK_COLOR_COMPONENT_B)
         res |= VK_COLOR_COMPONENT_B_BIT;
-    if (flags & I3_RBK_COLOR_COMPONENT_A_BIT)
+    if (flags & I3_RBK_COLOR_COMPONENT_A)
         res |= VK_COLOR_COMPONENT_A_BIT;
 
     return res;

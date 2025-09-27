@@ -124,7 +124,7 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
     // rasterization state
     i3_rbk_pipeline_rasterization_state_t rasterization = {
         .polygon_mode = I3_RBK_POLYGON_MODE_FILL,
-        .cull_mode = I3_RBK_CULL_MODE_BACK_BIT,
+        .cull_mode = I3_RBK_CULL_MODE_BACK,
         .front_face = I3_RBK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depth_clamp_enable = false,
         .rasterizer_discard_enable = false,
@@ -152,19 +152,19 @@ static void i3_renderer_opaque_pass_init(i3_render_pass_i* pass)
     i3_rbk_pipeline_color_blend_attachment_state_t color_blend_attachments[] = {
         {
             .blend_enable = false,
-            .color_write_mask = I3_RBK_COLOR_COMPONENT_R_BIT | I3_RBK_COLOR_COMPONENT_G_BIT
-                                | I3_RBK_COLOR_COMPONENT_B_BIT | I3_RBK_COLOR_COMPONENT_A_BIT,
+            .color_write_mask
+            = I3_RBK_COLOR_COMPONENT_R | I3_RBK_COLOR_COMPONENT_G | I3_RBK_COLOR_COMPONENT_B | I3_RBK_COLOR_COMPONENT_A,
         },
         {
             .blend_enable = false,
-            .color_write_mask = I3_RBK_COLOR_COMPONENT_R_BIT | I3_RBK_COLOR_COMPONENT_G_BIT
-                                | I3_RBK_COLOR_COMPONENT_B_BIT | I3_RBK_COLOR_COMPONENT_A_BIT,
+            .color_write_mask
+            = I3_RBK_COLOR_COMPONENT_R | I3_RBK_COLOR_COMPONENT_G | I3_RBK_COLOR_COMPONENT_B | I3_RBK_COLOR_COMPONENT_A,
         },
         {
 
             .blend_enable = false,
-            .color_write_mask = I3_RBK_COLOR_COMPONENT_R_BIT | I3_RBK_COLOR_COMPONENT_G_BIT
-                                | I3_RBK_COLOR_COMPONENT_B_BIT | I3_RBK_COLOR_COMPONENT_A_BIT,
+            .color_write_mask
+            = I3_RBK_COLOR_COMPONENT_R | I3_RBK_COLOR_COMPONENT_G | I3_RBK_COLOR_COMPONENT_B | I3_RBK_COLOR_COMPONENT_A,
         },
     };
 

@@ -14,12 +14,35 @@ typedef struct i3_rbk_device_o i3_rbk_device_o;
 // flags
 typedef uint32_t i3_rbk_flags_t;
 
+#if 0
 // filter
 typedef enum
 {
     I3_RBK_FILTER_NEAREST = 0,
     I3_RBK_FILTER_LINEAR,
 } i3_rbk_filter_t;
+#endif
+
+// enums definition
+#define I3_RBK_ENUMS()                    \
+    I3_RBK_BEGIN_ENUM(filter)             \
+    I3_RBK_ENUM_VALUE(FILTER, NEAREST, 0) \
+    I3_RBK_ENUM_VALUE(FILTER, LINEAR, 1)  \
+    I3_RBK_END_ENUM(filter)
+
+#define I3_RBK_BEGIN_ENUM(name) \
+    typedef enum                \
+    {
+#define I3_RBK_ENUM_VALUE(prefix, name, value) I3_RBK_##prefix##_##name = value,
+#define I3_RBK_END_ENUM(name) \
+    }                         \
+    i3_rbk_##name##_t;
+
+I3_RBK_ENUMS()
+
+#undef I3_RBK_BEGIN_ENUM
+#undef I3_RBK_ENUM_VALUE
+#undef I3_RBK_END_ENUM
 
 // sampler mipmap mode
 typedef enum
@@ -206,9 +229,9 @@ typedef enum
 typedef enum
 {
     I3_RBK_CULL_MODE_NONE = 0,
-    I3_RBK_CULL_MODE_FRONT_BIT = i3_flag(0),
-    I3_RBK_CULL_MODE_BACK_BIT = i3_flag(1),
-    I3_RBK_CULL_MODE_FRONT_AND_BACK = I3_RBK_CULL_MODE_FRONT_BIT | I3_RBK_CULL_MODE_BACK_BIT,
+    I3_RBK_CULL_MODE_FRONT = i3_flag(0),
+    I3_RBK_CULL_MODE_BACK = i3_flag(1),
+    I3_RBK_CULL_MODE_FRONT_AND_BACK = I3_RBK_CULL_MODE_FRONT | I3_RBK_CULL_MODE_BACK,
 } i3_rbk_cull_mode_flag_bits_t;
 
 typedef i3_rbk_flags_t i3_rbk_cull_mode_flags_t;
@@ -291,10 +314,10 @@ typedef enum
 // color component flags
 typedef enum
 {
-    I3_RBK_COLOR_COMPONENT_R_BIT = i3_flag(0),
-    I3_RBK_COLOR_COMPONENT_G_BIT = i3_flag(1),
-    I3_RBK_COLOR_COMPONENT_B_BIT = i3_flag(2),
-    I3_RBK_COLOR_COMPONENT_A_BIT = i3_flag(3),
+    I3_RBK_COLOR_COMPONENT_R = i3_flag(0),
+    I3_RBK_COLOR_COMPONENT_G = i3_flag(1),
+    I3_RBK_COLOR_COMPONENT_B = i3_flag(2),
+    I3_RBK_COLOR_COMPONENT_A = i3_flag(3),
 } i3_rbk_color_component_flag_bits_t;
 
 typedef i3_rbk_flags_t i3_rbk_color_component_flags_t;
