@@ -100,7 +100,7 @@ int main()
 
     // create image
     i3_rbk_image_desc_t image_desc = {
-        .type = I3_RBK_IMAGE_TYPE_2D,
+        .type = I3_RBK_IMAGE_TYPE_D2,
         .format = I3_RBK_FORMAT_R8G8B8A8_UNORM,
         .width = 800,
         .height = 600,
@@ -114,7 +114,7 @@ int main()
 
     // create image view
     i3_rbk_image_view_desc_t image_view_info = {
-        .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
+        .type = I3_RBK_IMAGE_VIEW_TYPE_D2,
         .format = I3_RBK_FORMAT_R8G8B8A8_UNORM,
         .aspect_mask = I3_RBK_IMAGE_ASPECT_COLOR,
         .base_mip_level = 0,

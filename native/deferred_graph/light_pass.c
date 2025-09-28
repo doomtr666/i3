@@ -33,7 +33,7 @@ static void i3_renderer_light_pass_resolution_change(i3_render_pass_i* pass)
 
     // create light buffer
     i3_rbk_image_desc_t light_buffer_image_desc = {
-        .type = I3_RBK_IMAGE_TYPE_2D,
+        .type = I3_RBK_IMAGE_TYPE_D2,
         .format = I3_RBK_FORMAT_R16G16B16A16_FLOAT,
         .width = width,
         .height = height,
@@ -44,7 +44,7 @@ static void i3_renderer_light_pass_resolution_change(i3_render_pass_i* pass)
     };
 
     i3_rbk_image_view_desc_t light_buffer_view_desc = {
-        .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
+        .type = I3_RBK_IMAGE_VIEW_TYPE_D2,
         .format = light_buffer_image_desc.format,
         .aspect_mask = I3_RBK_IMAGE_ASPECT_COLOR,
         .level_count = 1,

@@ -40,7 +40,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
 
     // create g-buffer depth
     i3_rbk_image_desc_t depth_image_desc = {
-        .type = I3_RBK_IMAGE_TYPE_2D,
+        .type = I3_RBK_IMAGE_TYPE_D2,
         .format = I3_RBK_FORMAT_D24_UNORM_S8_UINT,
         .width = width,
         .height = height,
@@ -50,7 +50,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
         .samples = 1,
     };
     i3_rbk_image_view_desc_t depth_view_desc = {
-        .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
+        .type = I3_RBK_IMAGE_VIEW_TYPE_D2,
         .format = depth_image_desc.format,
         .aspect_mask = I3_RBK_IMAGE_ASPECT_DEPTH | I3_RBK_IMAGE_ASPECT_STENCIL,
         .level_count = 1,
@@ -64,7 +64,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
 
     // create g-buffer normal
     i3_rbk_image_desc_t normal_image_desc = {
-        .type = I3_RBK_IMAGE_TYPE_2D,
+        .type = I3_RBK_IMAGE_TYPE_D2,
         .format = I3_RBK_FORMAT_A2R10G10B10_UNORM,
         .width = width,
         .height = height,
@@ -75,7 +75,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
     };
 
     i3_rbk_image_view_desc_t normal_view_desc = {
-        .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
+        .type = I3_RBK_IMAGE_VIEW_TYPE_D2,
         .format = normal_image_desc.format,
         .aspect_mask = I3_RBK_IMAGE_ASPECT_COLOR,
         .level_count = 1,
@@ -89,7 +89,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
 
     // create g-buffer albedo
     i3_rbk_image_desc_t albedo_image_desc = {
-        .type = I3_RBK_IMAGE_TYPE_2D,
+        .type = I3_RBK_IMAGE_TYPE_D2,
         .format = I3_RBK_FORMAT_R8G8B8A8_UNORM,
         .width = width,
         .height = height,
@@ -100,7 +100,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
     };
 
     i3_rbk_image_view_desc_t albedo_view_desc = {
-        .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
+        .type = I3_RBK_IMAGE_VIEW_TYPE_D2,
         .format = albedo_image_desc.format,
         .aspect_mask = I3_RBK_IMAGE_ASPECT_COLOR,
         .level_count = 1,
@@ -114,7 +114,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
 
     // create g-buffer metallic roughness
     i3_rbk_image_desc_t metallic_roughness_image_desc = {
-        .type = I3_RBK_IMAGE_TYPE_2D,
+        .type = I3_RBK_IMAGE_TYPE_D2,
         .format = I3_RBK_FORMAT_R8G8B8A8_UNORM,
         .width = width,
         .height = height,
@@ -125,7 +125,7 @@ static void i3_renderer_gbuffer_pass_resolution_change(i3_render_pass_i* pass)
     };
 
     i3_rbk_image_view_desc_t metallic_roughness_view_desc = {
-        .type = I3_RBK_IMAGE_VIEW_TYPE_2D,
+        .type = I3_RBK_IMAGE_VIEW_TYPE_D2,
         .format = metallic_roughness_image_desc.format,
         .aspect_mask = I3_RBK_IMAGE_ASPECT_COLOR,
         .level_count = 1,

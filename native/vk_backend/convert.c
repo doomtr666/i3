@@ -198,11 +198,11 @@ VkImageType i3_vk_convert_image_type(i3_rbk_image_type_t type)
 {
     switch (type)
     {
-        case I3_RBK_IMAGE_TYPE_1D:
+        case I3_RBK_IMAGE_TYPE_D1:
             return VK_IMAGE_TYPE_1D;
-        case I3_RBK_IMAGE_TYPE_2D:
+        case I3_RBK_IMAGE_TYPE_D2:
             return VK_IMAGE_TYPE_2D;
-        case I3_RBK_IMAGE_TYPE_3D:
+        case I3_RBK_IMAGE_TYPE_D3:
             return VK_IMAGE_TYPE_3D;
         default:
         {
@@ -246,17 +246,17 @@ VkImageViewType i3_vk_convert_image_view_type(i3_rbk_image_view_type_t type)
 {
     switch (type)
     {
-        case I3_RBK_IMAGE_VIEW_TYPE_1D:
+        case I3_RBK_IMAGE_VIEW_TYPE_D1:
             return VK_IMAGE_VIEW_TYPE_1D;
-        case I3_RBK_IMAGE_VIEW_TYPE_2D:
+        case I3_RBK_IMAGE_VIEW_TYPE_D2:
             return VK_IMAGE_VIEW_TYPE_2D;
-        case I3_RBK_IMAGE_VIEW_TYPE_3D:
+        case I3_RBK_IMAGE_VIEW_TYPE_D3:
             return VK_IMAGE_VIEW_TYPE_3D;
         case I3_RBK_IMAGE_VIEW_TYPE_CUBE:
             return VK_IMAGE_VIEW_TYPE_CUBE;
-        case I3_RBK_IMAGE_VIEW_TYPE_1D_ARRAY:
+        case I3_RBK_IMAGE_VIEW_TYPE_D1_ARRAY:
             return VK_IMAGE_VIEW_TYPE_1D_ARRAY;
-        case I3_RBK_IMAGE_VIEW_TYPE_2D_ARRAY:
+        case I3_RBK_IMAGE_VIEW_TYPE_D2_ARRAY:
             return VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         case I3_RBK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
             return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
