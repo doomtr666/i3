@@ -312,7 +312,7 @@ VkImageAspectFlags i3_vk_convert_image_aspect_flags(i3_rbk_image_aspect_flags_t 
 }
 
 // shader stage
-VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flag_bits_t stage)
+VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flags_t stage)
 {
     switch (stage)
     {
@@ -353,7 +353,7 @@ VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flag_bits_t
     }
 }
 
-VkShaderStageFlags i3_vk_convert_shader_stage_flags(i3_rbk_shader_stage_flag_bits_t stage)
+VkShaderStageFlags i3_vk_convert_shader_stage_flags(i3_rbk_shader_stage_flags_t stage)
 {
     VkShaderStageFlags res = 0;
     if (stage & I3_RBK_SHADER_STAGE_VERTEX)
@@ -462,7 +462,7 @@ VkPolygonMode i3_vk_convert_polygon_mode(i3_rbk_polygon_mode_t mode)
 }
 
 // cull mode flags
-VkCullModeFlags i3_vk_convert_cull_mode_flags(i3_rbk_cull_mode_flag_bits_t flags)
+VkCullModeFlags i3_vk_convert_cull_mode_flags(i3_rbk_cull_mode_flags_t flags)
 {
     VkCullModeFlags res = 0;
     if (flags & I3_RBK_CULL_MODE_FRONT)

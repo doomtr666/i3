@@ -38,8 +38,8 @@ VkComponentSwizzle i3_vk_convert_component_swizzle(i3_rbk_component_swizzle_t sw
 VkImageAspectFlags i3_vk_convert_image_aspect_flags(i3_rbk_image_aspect_flags_t flags);
 
 // shader stage
-VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flag_bits_t stage);
-VkShaderStageFlags i3_vk_convert_shader_stage_flags(i3_rbk_shader_stage_flag_bits_t stage);
+VkShaderStageFlagBits i3_vk_convert_shader_stage(i3_rbk_shader_stage_flags_t stage);
+VkShaderStageFlags i3_vk_convert_shader_stage_flags(i3_rbk_shader_stage_flags_t stage);
 
 // vertex input rate
 VkVertexInputRate i3_vk_convert_vertex_input_rate(i3_rbk_vertex_input_rate_t rate);
@@ -51,7 +51,7 @@ VkPrimitiveTopology i3_vk_convert_primitive_topology(i3_rbk_primitive_topology_t
 VkPolygonMode i3_vk_convert_polygon_mode(i3_rbk_polygon_mode_t mode);
 
 // cull mode flags
-VkCullModeFlags i3_vk_convert_cull_mode_flags(i3_rbk_cull_mode_flag_bits_t flags);
+VkCullModeFlags i3_vk_convert_cull_mode_flags(i3_rbk_cull_mode_flags_t flags);
 
 // front face
 VkFrontFace i3_vk_convert_front_face(i3_rbk_front_face_t face);

@@ -94,9 +94,7 @@ typedef enum
     I3_RBK_BUFFER_FLAG_UNIFORM_BUFFER = i3_flag(3),
     I3_RBK_BUFFER_FLAG_STORAGE_BUFFER = i3_flag(4),
     I3_RBK_BUFFER_FLAG_STAGING = i3_flag(5),
-} i3_rbk_buffer_flag_bits_t;
-
-typedef i3_rbk_flags_t i3_rbk_buffer_flags_t;
+} i3_rbk_buffer_flags_t;
 
 // image types
 typedef enum
@@ -134,9 +132,7 @@ typedef enum
 typedef enum
 {
     I3_RBK_IMAGE_FLAG_NONE = 0,
-} i3_rbk_image_flag_bits_t;
-
-typedef i3_rbk_flags_t i3_rbk_image_flags_t;
+} i3_rbk_image_flags_t;
 
 // image view types
 typedef enum
@@ -169,9 +165,7 @@ typedef enum
     I3_RBK_IMAGE_ASPECT_COLOR = i3_flag(0),
     I3_RBK_IMAGE_ASPECT_DEPTH = i3_flag(1),
     I3_RBK_IMAGE_ASPECT_STENCIL = i3_flag(2),
-} i3_rbk_image_aspect_flag_bits_t;
-
-typedef i3_rbk_flags_t i3_rbk_image_aspect_flags_t;
+} i3_rbk_image_aspect_flags_t;
 
 // shader stage
 typedef enum
@@ -190,9 +184,7 @@ typedef enum
     I3_RBK_SHADER_STAGE_CALLABLE = i3_flag(11),
     I3_RBK_SHADER_STAGE_TASK = i3_flag(12),
     I3_RBK_SHADER_STAGE_MESH = i3_flag(13),
-} i3_rbk_shader_stage_flag_bits_t;
-
-typedef i3_rbk_flags_t i3_rbk_shader_stage_flags_t;
+} i3_rbk_shader_stage_flags_t;
 
 // vertex input rate
 typedef enum
@@ -232,9 +224,7 @@ typedef enum
     I3_RBK_CULL_MODE_FRONT = i3_flag(0),
     I3_RBK_CULL_MODE_BACK = i3_flag(1),
     I3_RBK_CULL_MODE_FRONT_AND_BACK = I3_RBK_CULL_MODE_FRONT | I3_RBK_CULL_MODE_BACK,
-} i3_rbk_cull_mode_flag_bits_t;
-
-typedef i3_rbk_flags_t i3_rbk_cull_mode_flags_t;
+} i3_rbk_cull_mode_flags_t;
 
 // stencil op
 typedef enum
@@ -318,9 +308,7 @@ typedef enum
     I3_RBK_COLOR_COMPONENT_G = i3_flag(1),
     I3_RBK_COLOR_COMPONENT_B = i3_flag(2),
     I3_RBK_COLOR_COMPONENT_A = i3_flag(3),
-} i3_rbk_color_component_flag_bits_t;
-
-typedef i3_rbk_flags_t i3_rbk_color_component_flags_t;
+} i3_rbk_color_component_flags_t;
 
 // dynamic state
 typedef enum
@@ -676,7 +664,7 @@ typedef struct i3_rbk_attachment_desc_t
 // shader stage
 typedef struct i3_rbk_pipeline_shader_stage_desc_t
 {
-    i3_rbk_shader_stage_flag_bits_t stage;
+    i3_rbk_shader_stage_flags_t stage;
     i3_rbk_shader_module_i* shader_module;
     const char* entry_point;
 } i3_rbk_pipeline_shader_stage_desc_t;
