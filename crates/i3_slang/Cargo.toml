@@ -1,0 +1,8 @@
+[package]
+name = "i3_slang"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+i3_gfx.workspace = true

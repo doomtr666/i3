@@ -1,12 +1,9 @@
 [workspace]
 
 [package]
-name = "download-deps"
+name = "i3_diagnose"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "download"
-path = "download.rs"
-
 [dependencies]
+serde_json = "1.0"

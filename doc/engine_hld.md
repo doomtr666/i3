@@ -19,6 +19,9 @@ i3/
 ├── doc/                    # Architecture & Design Docs
 │   ├── engine_hld.md       # This file
 │   └── frame_graph_design.md
+├── third_party/            # Native dependencies & build support
+│   ├── libs/               # Downloaded binaries (gitignored)
+│   └── build-support/      # Shared build scripts
 └── tests/                  # Cross-crate integration tests (if any)
 ```
 
@@ -81,4 +84,24 @@ mod tests;
 Stored in the `tests/` directory at the crate root. These tests interact with the crate as an external consumer (only accessing public APIs).
 
 ### Null-Backend Tests
-A special category of integration tests. They run complex frame-graph scenarios against the `i3_null_backend` to validate the logical output (barriers, aliasing) in a deterministic way.
+A specialized category of integration tests. They run complex frame-graph scenarios against the `i3_null_backend` to validate the logical output (barriers, aliasing) in a deterministic way.
+
+## 6. Setup & Dependencies
+
+The engine requires several native dependencies that are managed through a automated bootstrap process.
+
+### Prerequisites
+- **Rust**: Latest stable (targeting Rust 2024 edition).
+- **Vulkan SDK**: Must be installed and the `VULKAN_SDK` environment variable set.
+- **Git**: For version control.
+
+### Initial Setup
+Run the bootstrap script from the repository root:
+- **Windows**: `.\bootstrap.ps1`
+- **Linux/macOS**: `./bootstrap.sh`
+
+### Native Dependency Management
+Native libraries (like SDL2) are stored in `third_party/libs/`. 
+
+- **Bootstrap System**: A dedicated Rust tool in `third_party/` handles downloading and extracting binaries to avoid committing large binary blobs to the repo.
+- **Build Support**: The `i3_build_support` module (in `third_party/build-support`) provides utilities for `build.rs` scripts to automatically link native libraries and copy necessary DLLs to the `target/` directory during build.

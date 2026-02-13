@@ -1,0 +1,25 @@
+[workspace]
+members = [
+    "crates/i3_gfx",
+    "crates/i3_vulkan_backend",
+    "crates/i3_null_backend",
+    "crates/i3_slang",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["C. Delacourt"]
+
+[workspace.lints.rust]
+warnings = "deny"
+
+
+[workspace.dependencies]
+# External (To be justified and approved one-by-one)
+bitflags = "2.6"
+log = "0.4"
+# Internal
+i3_gfx = { path = "crates/i3_gfx" }
+i3_slang = { path = "crates/i3_slang" }
