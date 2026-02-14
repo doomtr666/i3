@@ -1,8 +1,11 @@
 use ash::vk;
+#[cfg(debug_assertions)]
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::info;
+#[cfg(debug_assertions)]
+use tracing::{error, warn};
 
 #[cfg(debug_assertions)]
 unsafe extern "system" fn vulkan_debug_callback(
@@ -58,18 +61,18 @@ impl VulkanInstance {
             .engine_version(vk::make_api_version(0, 1, 0, 0))
             .api_version(vk::API_VERSION_1_3);
 
-        let mut extensions = vec![
+        let extensions = vec![
             ash::khr::surface::NAME.as_ptr(),
             #[cfg(target_os = "windows")]
             ash::khr::win32_surface::NAME.as_ptr(),
+            #[cfg(debug_assertions)]
+            ash::ext::debug_utils::NAME.as_ptr(),
         ];
 
-        #[cfg(debug_assertions)]
-        extensions.push(ash::ext::debug_utils::NAME.as_ptr());
-
-        let mut layer_names = Vec::new();
-        #[cfg(debug_assertions)]
-        layer_names.push(CString::new("VK_LAYER_KHRONOS_validation").unwrap());
+        let layer_names: Vec<CString> = vec![
+            #[cfg(debug_assertions)]
+            CString::new("VK_LAYER_KHRONOS_validation").unwrap(),
+        ];
 
         let layer_name_ptrs: Vec<*const i8> =
             layer_names.iter().map(|name| name.as_ptr()).collect();

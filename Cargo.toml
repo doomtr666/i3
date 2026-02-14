@@ -5,6 +5,9 @@ members = [
     "crates/i3_null_backend",
     "crates/i3_slang",
     "examples/draw_triangle",
+    "examples/common",
+    "tools/rust_diagnostics",
+    "tools/vulkan_diagnostics",
 ]
 resolver = "2"
 

@@ -1,18 +1,45 @@
+use examples_common::{ExampleApp, init_tracing, main_loop};
 use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
 use i3_vulkan_backend::VulkanBackend;
-use tracing::info;
+use std::time::Duration;
+
+struct TriangleApp {
+    backend: VulkanBackend,
+    pipeline_id: SymbolId,
+}
+
+impl ExampleApp for TriangleApp {
+    fn update(&mut self, _delta: Duration) {
+        // Update logic (animations, etc.) would go here
+    }
+
+    fn render(&mut self) {
+        // For MVP we re-compile and execute every frame
+        // In the future, CompiledGraph should be persistent
+        let mut graph = FrameGraph::new();
+        let pipeline_id = self.pipeline_id;
+
+        graph.record(move |builder| {
+            builder.add_node("MainPass", move |_builder| {
+                move |ctx| {
+                    ctx.bind_pipeline(PipelineHandle(pipeline_id));
+                    ctx.draw(3, 0);
+                }
+            });
+        });
+
+        let compiler = graph.compile();
+        compiler.execute(&mut self.backend);
+    }
+}
 
 fn main() -> Result<(), String> {
-    // 1. Initialize Tracing
-    tracing_subscriber::fmt::init();
-    info!("Starting Draw Triangle example...");
+    // 1. Initialize Tracing from common
+    init_tracing();
 
-    // 2. Initialize Backend
+    // 2. Initialize Backend & Window
     let mut backend = VulkanBackend::new()?;
-
-    // 3. Create Window & Swapchain
-    // In our simplified VulkanBackend, we create the window first
     let window = i3_vulkan_backend::window::VulkanWindow::new(
         backend.instance.clone(),
         "i3fx — Draw Triangle",
@@ -20,11 +47,12 @@ fn main() -> Result<(), String> {
         720,
     )?;
     backend.window = Some(window);
+    backend.create_swapchain(0, 0);
 
-    // Create swapchain via backend
-    backend.create_swapchain(0, 0); // Handles window internally for now
+    // 3. Obtain Event Pump
+    let event_pump = backend.take_event_pump().unwrap();
 
-    // 4. Compile Shader
+    // 4. Create Pipeline Resources
     let slang = SlangCompiler::new()?;
     let shader_code = r#"
         struct VSOutput {
@@ -64,30 +92,19 @@ fn main() -> Result<(), String> {
         ShaderTarget::Spirv,
     )?;
 
-    // 5. Create Pipeline
     let pipeline_desc = GraphicsPipelineDesc {
         shader,
         name: "triangle_pipeline".to_string(),
     };
     let pipeline_handle = backend.create_graphics_pipeline(&pipeline_desc);
-    let pipeline_id = pipeline_handle.0;
+    let pipeline_id = SymbolId(pipeline_handle.0);
 
-    // 6. Record & Execute Frame Graph
-    let mut graph = FrameGraph::new();
+    // 5. Run Main Loop
+    let app = TriangleApp {
+        backend,
+        pipeline_id,
+    };
+    main_loop(app, event_pump);
 
-    graph.record(move |builder| {
-        builder.add_node("MainPass", move |_builder| {
-            // We'll just execute basic commands here for the MVP
-            move |ctx| {
-                ctx.bind_pipeline(PipelineHandle(SymbolId(pipeline_id)));
-                ctx.draw(3, 0);
-            }
-        });
-    });
-
-    let compiler = graph.compile();
-    compiler.execute(&mut backend);
-
-    info!("Example finished successfully");
     Ok(())
 }

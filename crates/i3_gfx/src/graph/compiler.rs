@@ -102,7 +102,7 @@ pub struct PassRecorder<'a> {
 
 impl<'a> InternalPassBuilder for PassRecorder<'a> {
     fn publish_erased(&mut self, _type_id: TypeId, name: &str, data: Box<dyn Any + Send + Sync>) {
-        tracing::info!(name, "Publishing CPU data");
+        tracing::trace!(name, "Publishing CPU data");
         self.storage.symbols.publish(
             name,
             Symbol {
@@ -116,7 +116,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
 
     fn consume_erased(&self, _type_id: TypeId, name: &str) -> &dyn Any {
         if let Some(id) = self.storage.symbols.resolve(name) {
-            tracing::info!(name, "Consuming CPU data (local)");
+            tracing::trace!(name, "Consuming CPU data (local)");
             return self
                 .storage
                 .symbols
@@ -124,7 +124,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 .expect("Symbol exists but has no data");
         } else if let Some(parent) = self.parent_symbols {
             if let Some(id) = parent.resolve(name) {
-                tracing::info!(name, "Consuming CPU data (inherited)");
+                tracing::trace!(name, "Consuming CPU data (inherited)");
                 return parent
                     .get_data(id)
                     .expect("Symbol in parent exists but has no data");
@@ -258,7 +258,7 @@ impl FrameGraph {
     }
 
     pub fn compile(self) -> CompiledGraph {
-        tracing::info!("Compiling hierarchical frame graph");
+        tracing::debug!("Compiling hierarchical frame graph");
         CompiledGraph { _root: self.root }
     }
 }
@@ -269,7 +269,7 @@ pub struct CompiledGraph {
 
 impl CompiledGraph {
     pub fn execute(self, backend: &mut dyn RenderBackend) {
-        tracing::info!("Executing hierarchical frame graph");
+        tracing::debug!("Executing hierarchical frame graph");
 
         // 1. Resource Resolution & Allocation
         // We simple-mindedly walk all symbols and allocate what's needed.

@@ -37,6 +37,10 @@ impl VulkanBackend {
             render_finished_semaphores: Vec::new(),
         })
     }
+
+    pub fn take_event_pump(&mut self) -> Option<sdl2::EventPump> {
+        self.window.as_ref().and_then(|w| w.take_event_pump())
+    }
 }
 
 impl RenderBackend for VulkanBackend {
@@ -175,7 +179,7 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn begin_pass(&mut self, name: &str, f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>) {
-        info!(pass = %name, "Beginning Vulkan pass");
+        tracing::debug!(pass = %name, "Beginning Vulkan pass");
 
         // Use a simple command pool/buffer for now
         let pool_info = vk::CommandPoolCreateInfo::default()

@@ -1,0 +1,13 @@
+[package]
+name = "examples_common"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sdl2 = { workspace = true }
+i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }

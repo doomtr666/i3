@@ -10,7 +10,7 @@ pub struct VulkanWindow {
     pub video: sdl2::VideoSubsystem,
     pub handle: sdl2::video::Window,
     pub surface: vk::SurfaceKHR,
-    pub event_pump: Mutex<sdl2::EventPump>,
+    pub event_pump: Mutex<Option<sdl2::EventPump>>,
 }
 
 impl VulkanWindow {
@@ -46,8 +46,12 @@ impl VulkanWindow {
             video,
             handle,
             surface,
-            event_pump: Mutex::new(event_pump),
+            event_pump: Mutex::new(Some(event_pump)),
         })
+    }
+
+    pub fn take_event_pump(&self) -> Option<sdl2::EventPump> {
+        self.event_pump.lock().unwrap().take()
     }
 }
 
