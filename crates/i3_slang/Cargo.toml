@@ -1,8 +1,8 @@
 [package]
 name = "i3_slang"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
+version = "0.1.0"
+edition = "2024"
 
 [dependencies]
-i3_gfx.workspace = true
+shader-slang = { git = "https://github.com/FloatyMonkey/slang-rs" }
+i3_gfx = { path = "../i3_gfx" }

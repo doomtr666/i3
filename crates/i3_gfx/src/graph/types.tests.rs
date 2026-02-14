@@ -1,13 +1,12 @@
 use super::*;
 
 #[test]
-fn test_handle_equality() {
-    let id1 = ImageHandle::new(1);
-    let id2 = ImageHandle::new(1);
-    let id3 = BufferHandle::new(1);
-    assert_eq!(id1, id2);
-    // Note: ImageHandle and BufferHandle are different types,
-    // so id1 == id3 won't even compile (which is what we want)
+fn test_image_handle_equality() {
+    let h1 = ImageHandle(SymbolId(1));
+    let h2 = ImageHandle(SymbolId(1));
+    let h3 = ImageHandle(SymbolId(2));
+    assert_eq!(h1, h2);
+    assert_ne!(h1, h3);
 }
 
 #[test]

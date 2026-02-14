@@ -27,14 +27,34 @@ i3/
 
 ## 2. Core Components
 
+### Error Management
+The engine standardizes on `thiserror` for internal error definitions. This ensure structured, type-safe errors with minimal boilerplate, facilitating robust validation (especially in the Frame Graph and NullBackend).
+
+### Diagnostics & Tracing
+The engine uses `tracing` for instrumenting execution. This provides:
+- Structured logs with fields (not just strings).
+- Hierarchy (Spans) to track pass execution across frames.
+- Low-overhead profiling integration.
+
 ### `i3_gfx` (The Brain)
 - **Frame Graph**: Manages the `Declare -> Compile -> Execute` pipeline.
 - **Resource Management**: Handles logical resources (`ResourceId`), lifetimes, and aliasing.
 - **Graph Compiler**: Resolves synchronization, barriers, and multi-queue assignments.
-- **HRI Abstraction**: Defines the traits that backends must implement.
+- **RenderBackend**: Agnostic abstraction for hardware (Vulkan, DX12, etc.).
+
+## Ergonomics & Best Practices
+
+### The Prelude Pattern
+To avoid "import hell" and provide a frictionless experience for users of the engine, every major crate (`i3_xxx`) must provide a `prelude` module.
+- **Location**: `pub mod prelude` in `src/lib.rs`.
+- **Content**:
+    - Essential Traits (those required to use methods on types).
+    - Core Handles (`ImageHandle`, `BufferHandle`).
+    - Main entry points (`FrameGraph`, `SlangCompiler`).
+- **Goal**: A user should be able to do `use i3_gfx::prelude::*;` and have 90% of what they need for common tasks.
 
 ### `i3_xx_backend` (The Muscle)
-- **HRI Implementation**: Translates logical graph commands into native API calls (`vkCmdXXX`).
+- **RenderBackend Implementation**: Translates logical graph commands into native API calls (`vkCmdXXX`).
 - **Memory Management**: Implements physical memory pools and aliasing.
 - **Synchronization**: Translates logical transitions into native barriers (`VkImageMemoryBarrier2`, etc.).
 - **Submission**: Handles asynchronous GPU submission and timeline semaphore tracking.

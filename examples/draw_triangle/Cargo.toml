@@ -1,0 +1,11 @@
+[package]
+name = "draw_triangle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+i3_gfx.workspace = true
+i3_vulkan_backend.workspace = true
+i3_slang.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

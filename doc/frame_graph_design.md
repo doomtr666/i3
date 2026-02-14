@@ -13,7 +13,7 @@ Explicit GPU APIs (Vulkan, DX12) require manual synchronization barriers between
 | Frostbite FrameGraph (Wihlidal, GDC) | 2017 | Established Declare/Compile/Execute pattern, transient resources, memory aliasing |
 | Granite Render Graph (themaister) | 2017 | Deep Vulkan implementation, CONCURRENT queue sharing, practical aliasing |
 | `VK_KHR_dynamic_rendering` | 2021 | Eliminates VkRenderPass/VkFramebuffer objects. Implementation convenience, not structural. |
-| Cyclic Render Graphs (Dolp, Vulkanised) | 2025 | Graph partitioning for cyclic dependencies (temporal reprojection, iterative denoising) |
+| Cyclic Render Graphs (Dolp, Vulkanised) | 2025 | Graph partitioning for cyclic dependencies (temporal reprojection, iterative denoising), SSA/Phi-node approach |
 
 **Our design builds on Frostbite's core pattern.** `VK_KHR_dynamic_rendering` simplifies the backend implementation but is not architecturally structuring — the graph compiler could generate `VkRenderPass` objects at compile time regardless.
 
@@ -53,18 +53,17 @@ Explicit GPU APIs (Vulkan, DX12) require manual synchronization barriers between
 3. **Single recording pass.** No deferred → resolve → re-record. Declare lightweight, compile fast, record once.
 4. **Multi-queue transparent.** Async compute/transfer supported natively; falls back silently on single-queue GPUs.
 5. **Memory aliasing from day one.** Transient resources share memory when lifetimes don't overlap.
+6. **Hierarchical Scoping.** Both CPU data and GPU resources live in a Scoped Symbol Table.
 
 ---
 
-## The Pass Invariant
+## The Node Invariant
 
-> **A Pass is an uninterruptible sequence of GPU commands that operates on a set of resources whose states are fixed at the pass boundaries.**
+> **The Graph is a tree of Nodes. A Node is either a leaf (Render Pass) or a branch (Scoped Node).**
 
-This is the foundational contract of the system. Formally:
-
-1. **Single sync point at entry.** All resource states required by the pass are resolved **before** the pass begins. No barriers are emitted during pass execution.
-2. **No mid-pass state transitions.** If a pass needs a resource in two different states (e.g., compute-write then shader-read), that's **two passes**, not one.
-3. **Atomic from the graph's perspective.** The compiler treats each pass as an indivisible node. It reasons about inter-pass dependencies, never intra-pass.
+1. **Atomic Leaf.** A Leaf (Pass) is an uninterruptible sequence of GPU commands.
+2. **Recursive Branch.** A Branch (Group) encapsulates a sub-tree of nodes and manages a local symbol scope.
+3. **No mid-pass state transitions.** If a pass needs a resource in two different states (e.g., compute-write then shader-read), that's **two passes**, not one.
 4. **Resource usage is declared, not discovered.** The `declare()` call is the **complete** and **exhaustive** contract. The `execute()` call must not use any resource not declared.
 
 ### What this enables
@@ -90,91 +89,64 @@ This is the foundational contract of the system. Formally:
 ┌──────────────────────────────────────────────────────┐
 │                   Frame N                            │
 │                                                      │
-│  1. DECLARE  ──►  2. COMPILE  ──►  3. EXECUTE        │
+│  1. RECORD    ──►  2. COMPILE  ──►  3. EXECUTE       │
 │  (sequential)     (sequential)     (parallel)        │
 │                                                      │
-│  Passes declare   Graph resolves   Passes record     │
-│  reads/writes     barriers,        into primary CBs  │
-│  (no GPU work)    aliasing,        (one per pass)    │
-│                   queue assign                       │
+│  Build Node Tree  Flatten tree,    Run closures,     │
+│  & Symbol Table   resolve sync,    emit barriers     │
+│                   aliasing         & commands        │
 └──────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Phase 1: Declare
+## Phase 1: Record
 
-Each pass implements a trait and declares its resource dependencies. **Zero GPU work.**
+The user builds an arborescent structure (Node Tree) by declaring passes and groups. CPU and GPU dependencies are handled via a **Scoped Symbol Table**.
+
+### Scoped Symbol Table (The "Internal Compiler")
+Inspired by compiler theory (SSA/Phi-nodes), the graph treats all dependencies as symbols.
+
+- **Symbols**: `ImageHandle`, `BufferHandle`, `Camera`, `RenderSettings`.
+- **Publish**: Register a symbol in the current node's scope.
+- **Consume**: Resolve a symbol by looking up the tree.
+- **Acquire**: Special publisher that introduces external resources (Swapchain, Static Assets) into the scope.
 
 ```rust
-pub enum ResourceUsage {
-    ColorAttachment,
-    DepthAttachment,
-    ShaderReadOnly,      // SRV
-    StorageReadWrite,    // UAV
-    TransferSrc,
-    TransferDst,
-    CpuRead,             // Readback / mapped access
-    CpuWrite,            // Upload / mapped access
-    /// Final state for swapchain images.
-    Present,
-}
-
-/// Defines what a pass IS and where it runs.
-/// Derived from the Pass Invariant: no barriers inside → one domain per pass.
-/// Replaces the separate "PassType" and "QueueAffinity" concepts.
-pub enum PassDomain {
-    /// CPU-only work. No command buffer. Runs on thread pool.
-    /// Use cases: culling, readback processing, asset baking.
-    Cpu,
-    /// Graphics queue: raster, mesh shaders, ray tracing, blits.
-    /// Pipeline type (raster vs RT vs mesh) is a bind-level concern, not a domain concern.
-    Graphics,
-    /// Compute queue. Falls back to Graphics if no async compute HW.
-    Compute,
-    /// Transfer queue. Falls back to Graphics if no dedicated transfer HW.
-    Transfer,
-}
-
-pub trait Pass {
+pub trait Node {
     fn name(&self) -> &str;
-    fn domain(&self) -> PassDomain;
+    
+    /// Define the node structure. 
+    /// If Leaf: declare resource usage (intents).
+    /// If Branch: create sub-nodes and manage symbol scoping.
+    fn record(&mut self, builder: &mut PassBuilder);
 
-    /// Declare resource dependencies. No GPU/CPU work here.
-    fn declare(&mut self, builder: &mut PassBuilder);
-
-    /// Execute the pass. Context adapts based on domain.
+    /// Execute the node commands. Only valid for Leaf nodes.
     fn execute(&self, ctx: &mut PassContext);
 }
 ```
 
-**PassBuilder API** (what the pass author sees):
+**PassBuilder API**:
 
 ```rust
 impl PassBuilder {
-    /// Declare a read on an existing resource.
-    fn read(&mut self, res: ResourceId, usage: ResourceUsage);
+    // --- Scoped Symbol Table ---
+    /// Register a typed symbol in the current scope.
+    fn publish<T>(&mut self, name: &str, data: T);
+    
+    /// Resolve a typed symbol from the current or parent scope.
+    fn consume<T>(&mut self, name: &str) -> &T;
 
-    /// Declare a write on an existing resource.
-    fn write(&mut self, res: ResourceId, usage: ResourceUsage);
+    // --- GPU Intents (GPU Leaf only) ---
+    fn read(&mut self, res: ImageHandle, usage: ResourceUsage);
+    fn write(&mut self, res: ImageHandle, usage: ResourceUsage);
 
-    /// Create a frame-transient resource (candidate for aliasing).
-    fn create_transient(&mut self, desc: &ResourceDesc) -> ResourceId;
+    // --- Resource Generation ---
+    fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle; // External input
 
-    /// Current render target dimensions (framebuffer size).
-    /// Use in declare() to compute derived sizes (e.g., quarter-res bloom).
-    fn render_size(&self) -> (u32, u32);
-
-    /// Hint: this pass is small and should be merged into a shared command buffer
-    /// with adjacent inline passes. Trades parallel recording for reduced CB overhead.
-    /// Default: false (standalone CB, eligible for parallel recording).
-    /// Ignored for Cpu domain.
-    fn set_inline(&mut self, inline: bool);
-
-    /// Access a specific version of a resource from the past.
-    /// offset: -1 for previous frame, -2 for two frames ago, etc.
-    /// Panics if offset < -history_depth.
-    fn read_history(&mut self, res: ResourceId, offset: i32, usage: ResourceUsage) -> ResourceId;
+    // --- Recursion (Node Tree) ---
+    fn add_pass(&mut self, name: &str, setup: impl FnOnce(&mut PassBuilder));
 }
 ```
 
@@ -202,13 +174,14 @@ pub enum PassContext<'a> {
 Sequential, pure data computation. No GPU API calls. **Must be fast** (target: <100μs for ~100 passes).
 
 ### Steps:
-1. **Dependency graph** — build DAG from read/write declarations.
-2. **Topological sort** — determine execution order.
-3. **Dead pass elimination** — passes whose outputs are never consumed are culled.
-4. **Barrier resolution** — for each resource, compute `(usage_before, usage_after)` at each transition point. Emit `BarrierBatch` between passes.
-5. **Memory aliasing** — compute lifetime intervals for transient resources. Assign overlapping memory blocks.
-6. **Queue assignment** — assign passes to queues based on affinity + GPU capabilities. Insert cross-queue sync points (timeline semaphores).
-7. **Parallelism groups** — identify passes with no mutual dependencies that can record concurrently.
+1. **Tree Flattening** — recursively traverse the Node Tree to produce a linear execution candidate.
+2. **Symbol Resolution** — resolve all `consume()` calls to their respective `publish()` or `acquire()` origins across scopes.
+3. **Dependency Graph** — build DAG from symbol read/write declarations.
+4. **Topological Sort** — determine final execution order.
+5. **Dead Node Elimination** — symbols that are never consumed (and don't have side effects like `present`) are culled.
+6. **Barrier Resolution** — for each GPU symbol, compute `(usage_before, usage_after)` at transition points.
+7. **Memory Aliasing** — compute lifetime intervals based on symbol scope. Assign overlapping memory blocks within `MemoryPools`.
+8. **Queue Assignment** — assign nodes to queues; insert cross-queue sync points (timeline semaphores).
 
 ### Output: `CompiledGraph`
 
@@ -322,52 +295,46 @@ The pass **never** creates/destroys resources or inserts barriers. It only recor
 We adopt **Vulkan terminology** (`GraphicsPipeline`, `ComputePipeline`, `RayTracingPipeline`) to avoid leveling down to lower-denominator APIs.
 
 - **Shader Language**: **Slang** is the primary target, providing high-level features while emitting performant SPIR-V/DXIL.
-- **PSO Ownership**: The `Pass` provides a `PipelineDescription`. The **backend** is responsible for caching and deduplication (leveraging `VkPipelineCache`). 
-- **Creation**: Pipeline compilation happens during or before graph execution, potentially as a `Cpu` pass in the asset pipeline or during a "warm-up" phase.
+- **PSO Ownership**: The `Node` provides a `PipelineDescription`. The **backend** is responsible for caching and deduplication.
+- **Creation**: Pipeline compilation happens during or before graph execution, potentially as a `Cpu` node.
 
 ---
 
-## Resource Model
+## Symbol Model
 
-Resources are **unified** under a single `ResourceId`. Both GPU and CPU data participate in the same dependency graph.
+Both GPU resources and CPU data are unified as **Symbols**. A symbol represents a typed value within the graph's scope tree.
 
 ```rust
-/// Opaque ID, valid for the current frame only. Covers GPU and CPU resources.
-pub struct ResourceId(u32);
-
-pub enum ResourceDesc {
-    Texture { width: u32, height: u32, format: Format, history_depth: u32, /* ... */ },
-    Buffer { size: u64, history_depth: u32, /* ... */ },
-    /// CPU-side data. Struct-level granularity.
-    CpuData { size: usize, history_depth: u32 },
+pub enum SymbolType {
+    Image(ImageDesc),
+    Buffer(BufferDesc),
+    CpuData(TypeId), // References std::any::TypeId
 }
 
-pub enum ResourceLifetime {
-    /// Exists only within this frame (history_depth = 0). 
-    /// Candidate for memory aliasing.
+pub enum SymbolLifetime {
+    /// Exists only within its declaring scope. 
+    /// Candidate for memory aliasing (GPU) or scope-exit drop (CPU).
     Transient,
-    /// Persists across frames (history_depth > 0). 
-    /// Owned by the graph.
+    /// Persists across frames. Owned by the graph.
     Persistent,
-    /// Owned by an external manager (ContentStore, Swapchain). 
-    /// Borrowed by the graph for synchronization.
-    Imported,
+    /// Injected from outside.
+    External,
 }
 ```
 
-### Temporal Resources (History)
+### Temporal Symbols (History)
 
-To support temporal algorithms (TAA, Reprojection, GI feedback), resources can declare a **history depth**. 
+To support temporal algorithms (TAA, GI feedback), symbols can declare a **history depth**. 
 
 - **Versioning**: The engine maintains a ring buffer of `depth + 1` versions.
-- **Reference**: Passes access versions relative to the current frame.
+- **Reference**: Nodes access versions relative to the current frame.
 
 ```rust
-fn declare(&mut self, builder: &mut PassBuilder) {
-    // Read previous frame's result
-    let prev_color = builder.read_history(self.color_id, -1, ShaderReadOnly);
-    // Write current frame's result
-    let curr_color = builder.write(self.color_id, ColorAttachment);
+fn record(&mut self, builder: &mut PassBuilder) {
+    // Read previous frame's result symbol
+    let prev_color = builder.read_history("ColorBuffer", -1, ShaderReadOnly);
+    // Write current frame's result symbol
+    builder.write("ColorBuffer", ColorAttachment);
 }
 ```
 
@@ -380,41 +347,34 @@ Even if `history_depth` is 0, resources are internally versioned by the engine t
 
 ### Resolution Change
 
-The graph propagates the current render size. Passes query it via `builder.render_size()` during `declare()` and compute dimensions in plain Rust.
+The graph propagates the current render size. Nodes query it during `record()` and compute dimensions.
 
 ```rust
-fn declare(&mut self, builder: &mut PassBuilder) {
+fn record(&mut self, builder: &mut PassBuilder) {
     let (w, h) = builder.render_size();
-    self.rt = builder.create_transient(&ResourceDesc::Texture {
-        width: w, height: h, format: RGBA8_UNORM,
-    });
+    builder.publish("InternalRT", ImageDesc::new(w, h, ...));
 }
 ```
 
 **On resize**: 
 1. The system detects a resolution change.
-2. The graph is rebuilt: all passes have their `declare()` method called.
-3. `builder.render_size()` returns new values; passes declare new resource sizes.
-4. For persistent resources (history), the builder detects the descriptor change and reallocates accordingly.
+2. The graph is rebuilt: all nodes have their `record()` method called.
+3. Persistent symbols detect descriptor changes and reallocate.
 
 `declare()` is the **unique source of truth** for all graph-managed resources. Passes do not need a separate resize hook.
 
-### Imported Resources (Static Assets)
+### External Symbols (Imported)
 
-Static assets (textures, meshes) are managed by a `ContentStore` or `AssetManager` outside the Frame Graph. 
+Static assets (textures, meshes) are managed outside the Frame Graph but are "bound" as symbols.
 
-- **Ownership**: The Frame Graph **never** owns or destroys imported resources.
-- **Importing**: Done at the start of the frame via `graph.import_texture(native_handle)`.
-- **Synchronization**: The graph tracks their state *across* frames.
-- **Swapchain Integration**: The backbuffer is a special case of imported resource. It is imported via `graph.import_backbuffer(swap_handle)`. 
+- **Ownership**: The Frame Graph **never** owns or destroys external symbols.
+- **Importing**: Done via `graph.bind_external<T>(name, handle)`.
+- **Swapchain Integration**: The backbuffer is a special external symbol introduced via `acquire_backbuffer()`.
 
 **The Flow:**
-1. **Acquire**: Call `vkAcquireNextImageKHR` externally. The resulting semaphore is passed to the HRI backend, NOT the graph API.
-2. **Import**: `graph.import_backbuffer(swap_handle)`. The HRI backend internally associates the acquire semaphore with this resource.
-3. **Wait**: The first pass using the backbuffer triggers the HRI to inject a semaphore wait in the command stream. This is transparent to the graph and the pass author.
-4. **Use**: Passes render directly into the backbuffer.
-5. **Final State**: The last pass (or a explicit pseudo-pass) declares `write(backbuffer, Present)`. This intent is only valid for backbuffers.
-6. **Present**: Call `vkQueuePresentKHR` externally after graph execution.
+1. **Acquire**: `builder.acquire_backbuffer(window)` creates a symbol.
+2. **Use**: Nodes render into the symbol.
+3. **Present**: `ctx.present(symbol)` triggers the queue call.
 
 ```rust
 // 1. External Acquire
@@ -434,24 +394,26 @@ graph.add_pass(Present_Pass {
 });
 ```
 
-### CPU Data Resources (Declared Blackboard)
+### CPU Data Symbols (Typed Blackboard)
 
-Traditional blackboards are an anti-pattern: shared mutable state with no contract. Our approach makes CPU data **declarative** — same `read()`/`write()` contract as GPU resources.
+The Scoped Symbol Table replaces the traditional untyped blackboard.
 
 ```rust
-// Import external CPU data (e.g., camera from game loop)
-let camera = graph.import_cpu::<CameraData>(&scene.camera);
+// Game loop binds external data symbols
+graph.bind_external("MainCamera", camera_controller.get());
 
-// CPU pass creates a constant buffer from camera data
-graph.add_pass(PrepareConstantsPass {
-    // declare(): read(camera, CpuRead), write(constants, CpuWrite)
-    // execute(): reads camera data → fills constant buffer struct
+// Pass A consumes camera, publishes internal data
+builder.add_pass("Culling", |sub| {
+    let cam = sub.consume::<Camera>("MainCamera");
+    let visible_list = perform_culling(cam);
+    sub.publish("VisibleObjects", visible_list);
+    |_| {}
 });
 
-// Graphics pass consumes the constant buffer
-graph.add_pass(GBufferPass {
-    // declare(): read(constants, UniformBuffer), ...
-    // execute(): uploads buffer, draws
+// Pass B (Graphics) consumes the culled list
+builder.add_pass("GBuffer", |sub| {
+    let list = sub.consume::<CullingResult>("VisibleObjects");
+    move |ctx| { ctx.draw_list(list); }
 });
 ```
 
@@ -464,37 +426,14 @@ graph.add_pass(GBufferPass {
 
 ---
 
-## Pass Groups (Subgraph Composition)
+## Node Hierarchy (Composition)
 
-A `PassGroup` is a composable container of child passes. From outside the graph, it's a single node with declared inputs/outputs. Inside, it's an ordered sub-graph.
-
-**Use case:** A renderer module (e.g., GBuffer) defines its structure, and other systems (voxels, decals) inject their passes into it.
-
-```rust
-// Renderer defines the GBuffer group
-let gbuffer = graph.add_group("gbuffer", |group| {
-    let albedo = group.create_transient(&albedo_desc);
-    let normal = group.create_transient(&normal_desc);
-    let depth  = group.create_transient(&depth_desc);
-
-    group.add_pass(ClearPass::new(albedo, normal, depth));
-    group.add_pass(OpaquePass::new(albedo, normal, depth));
-});
-
-// Voxel system extends the group (without knowing about OpaquePass)
-graph.extend_group("gbuffer", |group| {
-    group.add_pass(VoxelPass::new(
-        group.resource("albedo"),
-        group.resource("depth"),
-    ));
-});
-```
+Composition is achieved through nesting. A Node can contain children, effectively creating a sub-graph.
 
 **Rules:**
-- Resources created by the group are **scoped** — visible to children and to `extend_group`, not leaked to the global graph.
-- The group **exports** only what it explicitly declares as outputs.
-- The compiler flattens groups into individual passes for execution, preserving internal ordering.
-- Groups can be nested (a group can contain sub-groups).
+- **Symbol Scoping**: Symbols published by a node are visible to its descendants.
+- **Resource Aliasing**: The compiler tracks the "In-Use" range of a symbol based on its scope. If a branch node ends, all its transient GPU symbols are released for aliasing.
+- **Flattening**: During compilation, the tree is linearized into a list of hardware execution steps, while preserving the semantic barriers between scopes.
 
 ---
 
@@ -519,7 +458,7 @@ graph.extend_group("gbuffer", |group| {
 - Cross-queue sync via **timeline semaphores** (Vulkan 1.2).
 - **Queue sharing** (hybrid strategy):
   - **Buffers** cross-queue → `VK_SHARING_MODE_CONCURRENT` (no hardware compression to lose, zero overhead in practice).
-  - **Images** cross-queue → `VK_SHARING_MODE_EXCLUSIVE` (preserves DCC/Delta Color Compression on AMD; ownership transfers handled by the graph compiler, invisible to pass authors).
+  - **Images** cross-queue → `VK_SHARING_MODE_EXCLUSIVE` (preserves DCC; ownership transfers handled by the graph compiler via symbol tracking).
   - **Images** single-queue → `VK_SHARING_MODE_EXCLUSIVE` (default, no question).
 
 ---
@@ -578,9 +517,9 @@ To ensure the Frame Graph remains **API agnostic**, we enforce a strict separati
 
 ```mermaid
 graph LR
-    User["Pass Author"] -- "declare()" --> FG["Frame Graph (Agnostic)"]
-    FG -- "compile()" --> CG["Compiled Graph (Logical Plan)"]
-    CG -- "execute()" --> RHI["HRI Backend (Vulkan/DX12)"]
+    User["Engine/Pass Author"] -- "record tree" --> FG["Frame Graph (Agnostic)"]
+    FG -- "compile & flatten" --> CG["Compiled Graph (Linear Steps)"]
+    CG -- "execute (with Symbols)" --> RHI["RenderBackend (Vulkan/DX12)"]
     RHI -- "native calls" --> GPU["GPU"]
 ```
 
@@ -588,9 +527,9 @@ graph LR
 
 The Frame Graph doesn't know what a `VkImage` or `ID3D12Resource` is. It operates on **Logical Handles**.
 
-1.  **Logical Commands**: The graph produces a stream of commands (`Draw`, `Dispatch`, `SetPipeline`) using `ResourceId`.
-2.  **The Registry**: A backend-specific component that maps `ResourceId` to actual hardware resources (`VkImage`, `VkBuffer`).
-3.  **Barrier Translation**: The Runtime says "Transition Resource 42 to ColorAttachment". The Vulkan HRI translates this into a `VkImageMemoryBarrier2`.
+1.  **Logical Commands**: The graph produces a stream of commands (`Draw`, `Dispatch`) using **Symbol IDs**.
+2.  **The Registry**: Maps Symbol IDs to hardware resources (`VkImage`, `VkBuffer`).
+3.  **Barrier Translation**: The Runtime says "Transition Symbol 42 to ColorAttachment". The backend translates this into a `VkImageMemoryBarrier2`.
 
 ---
 
@@ -613,52 +552,47 @@ pub trait RenderPass {
 }
 ```
 
-### 2. PassBuilder (Declaration Phase)
-Sequential, logical only.
+### 2. PassBuilder & FrameGraph API
+Unified Symbol interaction.
 
 ```rust
 pub trait PassBuilder {
-    // Resource Management
-    fn create_transient(&mut self, desc: ResourceDesc) -> ResourceId;
-    fn read(&mut self, res: ResourceId, usage: ResourceUsage);
-    fn write(&mut self, res: ResourceId, usage: ResourceUsage);
-    fn read_history(&mut self, res: ResourceId, offset: i32, usage: ResourceUsage) -> ResourceId;
+    // Symbol Management
+    fn publish<T>(&mut self, name: &str, data: T);
+    fn consume<T>(&mut self, name: &str) -> &T;
+    
+    // GPU Generation
+    fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
-    // Intents
-    fn set_inline(&mut self, inline: bool);
-    fn render_size(&self) -> (u32, u32);
+    // Intents (Leaf only)
+    fn read(&mut self, handle: ImageHandle, usage: ResourceUsage);
+    fn write(&mut self, handle: ImageHandle, usage: ResourceUsage);
+
+    // Tree Construction
+    fn add_node(&mut self, name: &str, setup: impl FnOnce(&mut PassBuilder));
+}
+
+impl FrameGraph {
+    /// Entry point for external symbol binding.
+    fn bind_external<T>(&mut self, name: &str, data: T);
+    
+    /// Root node recording.
+    fn record(&mut self, setup: impl FnOnce(&mut PassBuilder));
 }
 ```
-
-pub trait FrameGraphBuilder {
-    // Import API (External Ownership)
-    fn import_texture(&mut self, handle: HriTexture, name: &str) -> ResourceId;
-    fn import_buffer(&mut self, handle: HriBuffer, name: &str) -> ResourceId;
-    
-    /// Specialized import for swapchain images. 
-    /// The HRI backend handles the acquire/present synchronization internally.
-    fn import_backbuffer(&mut self, handle: HriTexture, name: &str) -> ResourceId;
-
-    // Graph Construction
-    fn add_pass<T: RenderPass>(&mut self, pass: T);
-    fn add_group(&mut self, name: &str, f: impl FnOnce(&mut FrameGraphBuilder));
-}
 
 ### 3. PassContext (Execution Phase)
 The bridge to the HRI.
 
 ```rust
 pub trait PassContext {
-    // Pipeline Selection (Slang/Backend defined)
     fn set_pipeline(&mut self, pipeline: PipelineHandle);
-
-    // Standard Commands (Agnostic)
     fn draw(&mut self, count: u32, first: u32);
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
-    fn bind_resources(&mut self, set: u32, resources: &[ResourceBinding]);
-
-    // Parallelism
-    fn parallel_record<T>(&mut self, data: &[T], chunk_size: usize, f: impl Fn(&mut PassContext, &T) + Sync);
+    
+    /// Queue commands
+    fn present(&mut self, image: ImageHandle);
 }
 ```
 
@@ -690,17 +624,10 @@ pub trait HriBackend {
 
 Submission is the boundary where logical passes become asynchronous GPU work.
 
-### 1. Pending Submissions
-When the graph finishes recording, the HRI backend produces one or more `PendingSubmission` objects.
-- Each submission is associated with a **Timeline Semaphore** value.
-- The submission "pins" the resources it uses until the GPU reaches that value.
-
-### 2. Resource Pinning & GC
-- **Transient Resources**: Memory is returned to the pool only after the `PendingSubmission` signals completion.
-- **Imported/Persistent Resources**: Must not be destroyed by their external owners while referenced by an active `PendingSubmission`.
-- **Garbage Collection (GC)**: The engine calls `hri.collect_garbage()` periodically. It checks timeline values, retires finished submissions, and releases memory.
-
-This ensures **Zero Stall** between frames: the CPU can record Frame N+1 while Frame N is still executing on the GPU, provided sufficient memory is available.
+1.  **Multi-Framing**: The system maintains a ring buffer of `MemoryPool` objects.
+2.  **Safety**: A `MemoryPool` used in Frame N is **locked** until GPU completion. 
+3.  **Reuse**: The pool is reset once `collect_garbage()` detects completion.
+4.  **Symbol Tracking**: Persistent symbols (history) are managed via versioning in the root symbol table.
 
 ---
 

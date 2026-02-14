@@ -1,25 +1,92 @@
 use bitflags::bitflags;
+use std::any::TypeId;
 
-/// Opaque handle for a logical image within a single frame.
+/// Unique identifier for any entry in the Scoped Symbol Table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ImageHandle(pub u64);
+pub struct SymbolId(pub u64);
 
-/// Opaque handle for a logical buffer within a single frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BufferHandle(pub u64);
-
-impl ImageHandle {
+impl SymbolId {
     pub const INVALID: Self = Self(0);
-    pub fn new(val: u64) -> Self {
-        Self(val)
+}
+
+/// Handle for a virtual image resource, backed by a Symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImageHandle(pub SymbolId);
+
+/// Handle for a virtual buffer resource, backed by a Symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BufferHandle(pub SymbolId);
+
+/// Handle for a Window managed by the FrameGraph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WindowHandle(pub u64);
+
+/// Type-safe wrapper for an image acquired from a swapchain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SwapChainImageHandle(pub ImageHandle);
+
+/// Handle for a compiled Graphics or Compute pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PipelineHandle(pub SymbolId);
+
+impl std::ops::Deref for SwapChainImageHandle {
+    type Target = ImageHandle;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl BufferHandle {
-    pub const INVALID: Self = Self(0);
-    pub fn new(val: u64) -> Self {
-        Self(val)
+/// The underlying type of a Symbol in the table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymbolType {
+    Image(ImageDesc),
+    Buffer(BufferDesc),
+    CpuData(TypeId),
+}
+
+/// Defines the hardware or logical lifetime of a Symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolLifetime {
+    /// Temporary within its scope (eligible for aliasing).
+    Transient,
+    /// Persists across frames (owned by the graph).
+    Persistent,
+    /// Injected from external system (e.g., Swapchain, Global Settings).
+    External,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageDesc {
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+}
+
+impl ImageDesc {
+    pub fn new(width: u32, height: u32, format: u32) -> Self {
+        Self {
+            width,
+            height,
+            format,
+        }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferDesc {
+    pub size: u64,
+}
+
+impl ImageHandle {
+    pub const INVALID: Self = Self(SymbolId::INVALID);
+}
+
+impl BufferHandle {
+    pub const INVALID: Self = Self(SymbolId::INVALID);
+}
+
+impl PipelineHandle {
+    pub const INVALID: Self = Self(SymbolId::INVALID);
 }
 
 /// Execution domain for a render pass.

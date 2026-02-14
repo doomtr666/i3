@@ -6,3 +6,7 @@ authors.workspace = true
 
 [dependencies]
 i3_gfx.workspace = true
+ash.workspace = true
+sdl2.workspace = true
+vk-mem.workspace = true
+tracing.workspace = true

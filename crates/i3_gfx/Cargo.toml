@@ -6,3 +6,8 @@ authors.workspace = true
 
 [dependencies]
 bitflags.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+i3_null_backend = { path = "../i3_null_backend" }
+tracing-subscriber = { workspace = true }

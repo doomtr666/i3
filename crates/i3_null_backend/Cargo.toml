@@ -6,4 +6,5 @@ authors.workspace = true
 
 [dependencies]
 i3_gfx.workspace = true
-log.workspace = true # I'll need to add log to workspace deps as it's justified for an oracle
+tracing.workspace = true
+thiserror.workspace = true

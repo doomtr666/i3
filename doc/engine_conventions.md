@@ -1,4 +1,4 @@
-# i3fx Engine - Conventions and Coordinate Systems
+# i3 Engine - Conventions and Coordinate Systems
 
 This document is the **single source of truth** for the engine's mathematical and coordinate system conventions.
 

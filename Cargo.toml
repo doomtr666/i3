@@ -4,6 +4,7 @@ members = [
     "crates/i3_vulkan_backend",
     "crates/i3_null_backend",
     "crates/i3_slang",
+    "examples/draw_triangle",
 ]
 resolver = "2"
 
@@ -15,11 +16,17 @@ authors = ["C. Delacourt"]
 [workspace.lints.rust]
 warnings = "deny"
 
-
 [workspace.dependencies]
 # External (To be justified and approved one-by-one)
 bitflags = "2.6"
-log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+thiserror = "1.0"
+ash = { version = "0.38", features = ["linked"] }
+sdl2 = { version = "0.37", default-features = false }
+vk-mem = "0.5.0"
+
 # Internal
 i3_gfx = { path = "crates/i3_gfx" }
 i3_slang = { path = "crates/i3_slang" }
+i3_vulkan_backend = { path = "crates/i3_vulkan_backend" }
