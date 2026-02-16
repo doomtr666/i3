@@ -1,4 +1,6 @@
-use crate::graph::backend::{PassContext, RenderBackend};
+use crate::graph::backend::{
+    BackendBuffer, BackendImage, PassContext, PassDescriptor, RenderBackend,
+};
 use crate::graph::pass::{InternalPassBuilder, Node, PassBuilder};
 use crate::graph::types::*;
 use std::any::{Any, TypeId};
@@ -64,11 +66,16 @@ pub struct NodeStorage {
     pub children: Vec<NodeStorage>,
     pub execute: Option<Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>>,
 
+    pub pipeline: Option<PipelineHandle>,
+
     // Captured intents (for Leaf nodes)
     pub image_reads: Vec<(ImageHandle, ResourceUsage)>,
     pub image_writes: Vec<(ImageHandle, ResourceUsage)>,
     pub buffer_reads: Vec<(BufferHandle, ResourceUsage)>,
     pub buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
+
+    pub external_images: Vec<(ImageHandle, BackendImage)>,
+    pub swapchain_requests: Vec<(ImageHandle, WindowHandle)>,
 }
 
 impl std::fmt::Debug for NodeStorage {
@@ -81,6 +88,8 @@ impl std::fmt::Debug for NodeStorage {
             .field("has_execute", &self.execute.is_some())
             .field("image_reads", &self.image_reads)
             .field("image_writes", &self.image_writes)
+            .field("external_images", &self.external_images)
+            .field("swapchain_requests", &self.swapchain_requests)
             .finish()
     }
 }
@@ -142,6 +151,14 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         self.storage.image_writes.push((handle, usage));
     }
 
+    fn bind_pipeline(&mut self, handle: PipelineHandle) {
+        self.storage.pipeline = Some(handle);
+    }
+
+    fn register_external_image(&mut self, handle: ImageHandle, physical: BackendImage) {
+        self.storage.external_images.push((handle, physical));
+    }
+
     fn read_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage) {
         self.storage.buffer_reads.push((handle, usage));
     }
@@ -174,7 +191,10 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 symbol_type: SymbolType::Image(ImageDesc {
                     width: 1280,
                     height: 720,
-                    format: 0,
+                    depth: 1,
+                    format: Format::B8G8R8A8_SRGB, // Force SRGB logic match
+                    mip_levels: 1,
+                    array_layers: 1,
                 }),
                 lifetime: SymbolLifetime::External,
                 data: None,
@@ -182,6 +202,12 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         );
         let actual_handle = ImageHandle(id);
         self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+
+        // Record the request
+        self.storage
+            .swapchain_requests
+            .push((actual_handle, window));
+
         actual_handle
     }
 
@@ -200,10 +226,13 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             symbols: SymbolTable::new(),
             children: Vec::new(),
             execute: None,
+            pipeline: None,
             image_reads: Vec::new(),
             image_writes: Vec::new(),
             buffer_reads: Vec::new(),
             buffer_writes: Vec::new(),
+            external_images: Vec::new(),
+            swapchain_requests: Vec::new(),
         };
 
         {
@@ -234,10 +263,13 @@ impl FrameGraph {
                 symbols: SymbolTable::new(),
                 children: Vec::new(),
                 execute: None,
+                pipeline: None,
                 image_reads: Vec::new(),
                 image_writes: Vec::new(),
                 buffer_reads: Vec::new(),
                 buffer_writes: Vec::new(),
+                external_images: Vec::new(),
+                swapchain_requests: Vec::new(),
             },
         }
     }
@@ -268,39 +300,85 @@ pub struct CompiledGraph {
 }
 
 impl CompiledGraph {
-    pub fn execute(self, backend: &mut dyn RenderBackend) {
+    pub fn execute(self, backend: &mut dyn RenderBackend) -> Result<Option<u64>, String> {
         tracing::debug!("Executing hierarchical frame graph");
 
+        // Track transient resources for cleanup
+        let mut transient_images = Vec::new();
+        let mut transient_buffers = Vec::new();
+
         // 1. Resource Resolution & Allocation
-        // We simple-mindedly walk all symbols and allocate what's needed.
-        // In a real engine, this would use a proper allocator and consider lifetimes.
-        self.resolve_resources_recursive(&self._root, backend);
+        self.resolve_resources_recursive(
+            &self._root,
+            backend,
+            &mut transient_images,
+            &mut transient_buffers,
+        );
 
         // 2. Execution
-        Self::execute_node_recursive(self._root, backend);
+        let result = Self::execute_node_recursive(self._root, backend);
+
+        // 3. Cleanup Transient Resources
+        for image in transient_images {
+            backend.destroy_image(image);
+        }
+        for buffer in transient_buffers {
+            backend.destroy_buffer(buffer);
+        }
+
+        result
     }
 
-    fn resolve_resources_recursive(&self, node: &NodeStorage, backend: &mut dyn RenderBackend) {
+    fn resolve_resources_recursive(
+        &self,
+        node: &NodeStorage,
+        backend: &mut dyn RenderBackend,
+        transient_images: &mut Vec<BackendImage>,
+        transient_buffers: &mut Vec<BackendBuffer>,
+    ) {
         // Resolve symbols in current scope
         for symbol in &node.symbols.symbols {
             match symbol.symbol_type {
                 SymbolType::Image(ref desc) => {
-                    if symbol.lifetime == SymbolLifetime::Transient
-                        || symbol.lifetime == SymbolLifetime::Persistent
-                    {
-                        let _physical = backend.create_image(desc);
-                        // We could store the mapping here if CompiledGraph wasn't read-only,
-                        // but the Backend already has the resolve methods for the pass closures.
-                        // Actually, the backend needs to KNOW the mapping we just created.
-                        // So we "tell" the backend about it if it's internal.
-                        // wait, if it's ImageHandle(SymbolId), the SymbolId is stable!
+                    if symbol.lifetime == SymbolLifetime::Transient {
+                        let physical = backend.create_image(desc);
+                        transient_images.push(physical);
+                        // Store mapping?
+                        // We rely on resolve_image using the ID cast for now IF we don't map it.
+                        // BUT wait, resolved_image now uses a MAP.
+                        // We MUST map it!
+                        // But `backend.external_to_physical` is for EXTERNAL.
+                        // Internal resources need a way to be resolved.
+                        // Since `SymbolId` -> `BackendImage` mapping is needed.
+                        // And `SymbolId` is unique per FrameGraph instance (0..N).
+                        // We need to tell backend about this mapping.
+                        // OR we pass a map to `execute_node_recursive`?
+                        // "We need a `transient_resource_map`"
+
+                        // FIX: We need to register these as "external" effectively,
+                        // or add `register_internal_image`.
+                        // For now, let's use `register_external_image` as a hack/solution?
+                        // `ImageHandle(SymbolId)` -> `BackendImage`.
+                        // Yes, `register_external_image` just inserts into the map.
+                        // So we register it, and it will be overwritten next frame (good).
+                        // But we verify it's valid.
+                        let handle = symbol
+                            .data
+                            .as_ref()
+                            .expect("Image without handle")
+                            .downcast_ref::<ImageHandle>()
+                            .expect("Not a handle")
+                            .clone();
+                        backend.register_external_image(handle, physical);
                     }
                 }
                 SymbolType::Buffer(ref desc) => {
-                    if symbol.lifetime == SymbolLifetime::Transient
-                        || symbol.lifetime == SymbolLifetime::Persistent
-                    {
-                        let _physical = backend.create_buffer(desc);
+                    if symbol.lifetime == SymbolLifetime::Transient {
+                        let physical = backend.create_buffer(desc);
+                        transient_buffers.push(physical);
+                        // Buffer resolution might need similar registration if we have `register_external_buffer`.
+                        // Currently buffer resolution is `BackendBuffer(handle.0.0)`.
+                        // We should fix buffer resolution too, but focus on image leak first.
                     }
                 }
                 _ => {}
@@ -309,19 +387,52 @@ impl CompiledGraph {
 
         // Recurse
         for child in &node.children {
-            self.resolve_resources_recursive(child, backend);
+            self.resolve_resources_recursive(child, backend, transient_images, transient_buffers);
         }
     }
 
-    fn execute_node_recursive(mut node: NodeStorage, backend: &mut dyn RenderBackend) {
+    fn execute_node_recursive(
+        mut node: NodeStorage,
+        backend: &mut dyn RenderBackend,
+    ) -> Result<Option<u64>, String> {
+        // 0. Process Swapchain Requests (Automatic Acquire)
+        for (handle, window) in node.swapchain_requests {
+            let (physical, _sem, _idx) = backend
+                .acquire_swapchain_image(window)
+                .map_err(|e| e.to_string())?; // Propagate error (e.g. "WindowMinimized")
+
+            // Register automatically
+            backend.register_external_image(handle, physical);
+        }
+
+        // Register external resources first
+        for (virtual_handle, physical) in node.external_images {
+            backend.register_external_image(virtual_handle, physical);
+        }
+
+        let mut last_sem = None;
+
         // If this node has an execute closure, it's a pass
         if let Some(execute) = node.execute.take() {
-            backend.begin_pass(&node.name, execute);
+            let desc = PassDescriptor {
+                name: node.name.clone(),
+                pipeline: node.pipeline,
+                image_reads: node.image_reads.iter().map(|(h, _)| *h).collect(),
+                image_writes: node.image_writes.iter().map(|(h, _)| *h).collect(),
+                buffer_reads: node.buffer_reads.iter().map(|(h, _)| *h).collect(),
+                buffer_writes: node.buffer_writes.iter().map(|(h, _)| *h).collect(),
+            };
+            tracing::debug!(pass = %desc.name, writes = ?desc.image_writes.len(), "Executing pass");
+            last_sem = Some(backend.begin_pass(desc, execute));
         }
 
         // Execute children
         for child in node.children {
-            Self::execute_node_recursive(child, backend);
+            if let Some(sem) = Self::execute_node_recursive(child, backend)? {
+                last_sem = Some(sem);
+            }
         }
+
+        Ok(last_sem)
     }
 }

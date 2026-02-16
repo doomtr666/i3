@@ -51,6 +51,17 @@ impl<'a> PassBuilder<'a> {
         self.inner.acquire_backbuffer(window)
     }
 
+    pub fn bind_pipeline(&mut self, handle: crate::graph::types::PipelineHandle) {
+        self.inner.bind_pipeline(handle);
+    }
+
+    pub fn register_external_image(
+        &mut self,
+        handle: crate::graph::types::ImageHandle,
+        physical: crate::graph::backend::BackendImage,
+    ) {
+        self.inner.register_external_image(handle, physical);
+    }
     // --- Tree Construction ---
     /// Adds a sub-node to the current node.
     pub fn add_node<F, E>(&mut self, name: &str, setup: F)
@@ -84,6 +95,13 @@ pub(crate) trait InternalPassBuilder {
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
+    fn bind_pipeline(&mut self, handle: crate::graph::types::PipelineHandle);
+
+    fn register_external_image(
+        &mut self,
+        handle: crate::graph::types::ImageHandle,
+        physical: crate::graph::backend::BackendImage,
+    );
     fn add_node_erased(
         &mut self,
         name: &str,

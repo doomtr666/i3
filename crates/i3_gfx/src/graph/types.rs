@@ -55,19 +55,37 @@ pub enum SymbolLifetime {
     External,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(non_camel_case_types)]
+pub enum Format {
+    R8G8B8A8_UNORM,
+    B8G8R8A8_UNORM,
+    B8G8R8A8_SRGB,
+    R32_FLOAT,
+    R32G32B32A32_FLOAT,
+    D32_FLOAT,
+    // Add others as needed
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageDesc {
     pub width: u32,
     pub height: u32,
-    pub format: u32,
+    pub depth: u32,
+    pub format: Format,
+    pub mip_levels: u32,
+    pub array_layers: u32,
 }
 
 impl ImageDesc {
-    pub fn new(width: u32, height: u32, format: u32) -> Self {
+    pub fn new(width: u32, height: u32, format: Format) -> Self {
         Self {
             width,
             height,
+            depth: 1,
             format,
+            mip_levels: 1,
+            array_layers: 1,
         }
     }
 }

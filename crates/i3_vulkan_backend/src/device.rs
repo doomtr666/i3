@@ -11,6 +11,9 @@ pub struct VulkanDevice {
     pub graphics_queue: vk::Queue,
     pub graphics_family: u32,
     pub allocator: Mutex<Allocator>,
+
+    pub dynamic_rendering: ash::khr::dynamic_rendering::Device,
+    pub sync2: ash::khr::synchronization2::Device,
 }
 
 impl VulkanDevice {
@@ -29,6 +32,13 @@ impl VulkanDevice {
             .or_else(|| pdevices.first().copied())
             .ok_or_else(|| "No suitable GPU found".to_string())?;
 
+        Self::new_with_physical(instance, physical_device)
+    }
+
+    pub fn new_with_physical(
+        instance: Arc<crate::instance::VulkanInstance>,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<Self, String> {
         let props = unsafe {
             instance
                 .handle
@@ -80,7 +90,11 @@ impl VulkanDevice {
             .queue_family_index(graphics_family)
             .queue_priorities(&queue_priorities);
 
-        let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
+        let device_extensions = [
+            ash::khr::swapchain::NAME.as_ptr(),
+            ash::khr::dynamic_rendering::NAME.as_ptr(),
+            ash::khr::synchronization2::NAME.as_ptr(),
+        ];
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_create_info))
@@ -96,6 +110,10 @@ impl VulkanDevice {
 
         let graphics_queue = unsafe { handle.get_device_queue(graphics_family, 0) };
 
+        // Load extensions
+        let dynamic_rendering = ash::khr::dynamic_rendering::Device::new(&instance.handle, &handle);
+        let sync2 = ash::khr::synchronization2::Device::new(&instance.handle, &handle);
+
         // Initialize VMA Allocator
         let allocator_create_info =
             AllocatorCreateInfo::new(&instance.handle, &handle, physical_device);
@@ -109,6 +127,8 @@ impl VulkanDevice {
             graphics_queue,
             graphics_family,
             allocator: Mutex::new(allocator),
+            dynamic_rendering,
+            sync2,
         })
     }
 }

@@ -10,4 +10,5 @@ workspace = true
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sdl2 = { workspace = true }
+i3_gfx = { path = "../../crates/i3_gfx" }
 i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }

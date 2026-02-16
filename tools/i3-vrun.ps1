@@ -19,6 +19,8 @@ $DiagArgs = @()
 foreach ($arg in $ExtraArgs) {
     if ($arg -eq "-Werror" -or $arg -eq "--werror") {
         $DiagArgs += "--werror"
+    } elseif ($arg -eq "-v" -or $arg -eq "--verbose") {
+        $DiagArgs += "--verbose"
     } else {
         $RunArgs += $arg
     }
@@ -27,7 +29,8 @@ foreach ($arg in $ExtraArgs) {
 try {
     # Run the example and pipe output to vulkan_diagnostics
     # We merge stderr into stdout (2>&1) and pipe to our parser
-    cargo run --quiet -p $Example @RunArgs 2>&1 | cargo run --quiet --manifest-path tools/vulkan_diagnostics/Cargo.toml -- @DiagArgs
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    cargo run --quiet -p $Example @RunArgs *>&1 | cargo run --quiet --manifest-path tools/vulkan_diagnostics/Cargo.toml -- @DiagArgs
     $ExitCode = $LASTEXITCODE
     exit $ExitCode
 }

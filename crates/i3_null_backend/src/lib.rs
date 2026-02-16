@@ -50,6 +50,16 @@ impl RenderBackend for NullBackend {
         BackendBuffer(h)
     }
 
+    fn destroy_image(&mut self, handle: BackendImage) {
+        self.allocated_images.remove(&handle.0);
+        info!(handle = %handle.0, "Destroyed Image");
+    }
+
+    fn destroy_buffer(&mut self, handle: BackendBuffer) {
+        self.allocated_buffers.remove(&handle.0);
+        info!(handle = %handle.0, "Destroyed Buffer");
+    }
+
     fn create_graphics_pipeline(
         &mut self,
         desc: &i3_gfx::graph::backend::GraphicsPipelineDesc,
@@ -57,39 +67,86 @@ impl RenderBackend for NullBackend {
         let h = self.next_handle();
         self.allocated_pipelines.insert(h);
         info!(handle = h, name = %desc.name, "Created Graphics Pipeline");
+        let _ = desc.depth_format; // Ignore
+        let _ = desc.color_formats; // Ignore
         i3_gfx::graph::backend::BackendPipeline(h)
     }
 
-    fn create_swapchain(&mut self, window_handle: u64, usages: u32) -> u64 {
-        info!(window_handle, usages, "Created null swapchain");
-        0x1337 // Dummy SC handle
+    fn enumerate_devices(&self) -> Vec<i3_gfx::graph::backend::DeviceInfo> {
+        vec![i3_gfx::graph::backend::DeviceInfo {
+            id: 0,
+            name: "Null GPU".to_string(),
+            device_type: i3_gfx::graph::backend::DeviceType::Virtual,
+        }]
     }
 
-    fn present_swapchain(&mut self, sc_handle: u64, image: BackendImage) {
-        info!(
-            sc_handle,
-            image_handle = image.0,
-            "Presented null swapchain"
-        );
+    fn initialize(&mut self, _device_id: u32) -> Result<(), String> {
+        info!("Initialized Null Backend");
+        Ok(())
     }
 
-    fn begin_pass(&mut self, name: &str, f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>) {
-        info!(name, "Beginning null pass");
+    fn create_window(
+        &mut self,
+        desc: i3_gfx::graph::backend::WindowDesc,
+    ) -> Result<i3_gfx::graph::types::WindowHandle, String> {
+        info!(?desc, "Created Null Window");
+        Ok(i3_gfx::graph::types::WindowHandle(1))
+    }
+
+    fn destroy_window(&mut self, window: i3_gfx::graph::types::WindowHandle) {
+        info!(?window, "Destroyed Null Window");
+    }
+
+    fn configure_window(
+        &mut self,
+        window: i3_gfx::graph::types::WindowHandle,
+        config: i3_gfx::graph::backend::SwapchainConfig,
+    ) -> Result<(), String> {
+        info!(?window, ?config, "Configured Null Window");
+        Ok(())
+    }
+
+    fn poll_events(&mut self) -> Vec<i3_gfx::graph::backend::Event> {
+        Vec::new()
+    }
+
+    fn acquire_swapchain_image(
+        &mut self,
+        _window: i3_gfx::graph::types::WindowHandle,
+    ) -> Result<(BackendImage, u64, u32), String> {
+        Ok((BackendImage(1), 1, 0))
+    }
+
+    fn submit(
+        &mut self,
+        _batch: i3_gfx::graph::backend::CommandBatch,
+        _wait_sems: Vec<u64>,
+        _signal_sems: Vec<u64>,
+    ) -> Result<u64, String> {
+        Ok(0)
+    }
+
+    fn begin_pass(
+        &mut self,
+        desc: i3_gfx::graph::backend::PassDescriptor,
+        f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
+    ) -> u64 {
+        info!(name = %desc.name, "Beginning null pass");
         let mut ctx = NullPassContext::new(
-            name,
+            &desc.name,
             &self.allocated_images,
             &self.allocated_buffers,
             &self.allocated_pipelines,
         );
         f(&mut ctx);
+        0
     }
 
     fn resolve_image(
         &self,
         handle: i3_gfx::graph::types::ImageHandle,
     ) -> i3_gfx::graph::backend::BackendImage {
-        // In NullBackend we can just return a dummy or look up if we added a map.
-        // For now, let's just return a deterministic handle based on SymbolId.
+        // In NullBackend we can just return a deterministic handle based on SymbolId.
         i3_gfx::graph::backend::BackendImage(handle.0.0)
     }
 
@@ -189,8 +246,11 @@ impl<'a> PassContext for NullPassContext<'a> {
         info!(pass = %self.pass_name, x, y, z, "DISPATCH");
     }
 
-    fn present(&mut self, handle: i3_gfx::graph::types::ImageHandle) {
-        info!(pass = %self.pass_name, ?handle, "PRESENT");
+    fn present(&mut self, image: i3_gfx::graph::types::ImageHandle) {
+        info!(pass = %self.pass_name, ?image, "PRESENT");
+        if !self.allocated_images.contains(&image.0.0) {
+            self.report_error(ValidationError::ResourceNotFound(image.0.0));
+        }
     }
 }
 

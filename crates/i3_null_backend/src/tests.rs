@@ -5,11 +5,7 @@ use i3_gfx::graph::backend::{BackendImage, ImageDesc, RenderBackend};
 fn test_null_backend_existence_validation() {
     let mut backend = NullBackend::new();
 
-    let desc = ImageDesc {
-        width: 1024,
-        height: 1024,
-        format: 0,
-    };
+    let desc = ImageDesc::new(1024, 1024, i3_gfx::graph::types::Format::R8G8B8A8_UNORM);
     let valid_handle = backend.create_image(&desc);
     let invalid_handle = BackendImage(999);
 

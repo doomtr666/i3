@@ -37,7 +37,7 @@ impl FrameStats {
         self.frame_count += 1;
         self.accumulated_time += delta;
 
-        if self.frame_count >= 100 {
+        if self.frame_count >= 1000 {
             let avg = self.accumulated_time.as_secs_f32() / self.frame_count as f32;
             info!(
                 "Frame Stats: Avg Frame Time: {:.2}ms ({:.1} FPS)",
@@ -55,19 +55,20 @@ impl FrameStats {
 pub trait ExampleApp {
     fn update(&mut self, delta: Duration);
     fn render(&mut self);
+    fn poll_events(&mut self) -> Vec<i3_gfx::graph::backend::Event>;
 }
 
-pub fn main_loop<T: ExampleApp>(mut app: T, mut event_pump: sdl2::EventPump) {
+pub fn main_loop<T: ExampleApp>(mut app: T) {
     info!("Starting main loop...");
     let mut stats = FrameStats::default();
 
     'running: loop {
-        for event in event_pump.poll_iter() {
+        let events = app.poll_events();
+        for event in events {
             match event {
-                sdl2::event::Event::Quit { .. }
-                | sdl2::event::Event::KeyDown {
-                    keycode: Some(sdl2::keyboard::Keycode::Escape),
-                    ..
+                i3_gfx::graph::backend::Event::Quit
+                | i3_gfx::graph::backend::Event::KeyDown {
+                    key: i3_gfx::graph::backend::KeyCode::Escape,
                 } => break 'running,
                 _ => {}
             }

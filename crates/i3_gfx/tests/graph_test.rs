@@ -1,5 +1,6 @@
 mod common;
 
+use i3_gfx::graph::types::Format;
 use i3_gfx::prelude::*;
 use i3_null_backend::NullBackend;
 
@@ -27,7 +28,7 @@ fn test_triangle_frame_flow() {
 
     // 4. Compile & Execute
     let compiled = graph.compile();
-    compiled.execute(&mut backend);
+    compiled.execute(&mut backend).unwrap();
 
     // Success criteria: Test completed without panic.
     // NullBackend logs (viewable with --nocapture) would show the calls.
@@ -42,7 +43,10 @@ fn test_complex_hierarchical_graph() {
 
     graph.record(move |builder| {
         // 1. Root level setup
-        let main_target = builder.declare_image("MainTarget", ImageDesc::new(1920, 1080, 0));
+        let main_target = builder.declare_image(
+            "MainTarget",
+            ImageDesc::new(1920, 1080, Format::R8G8B8A8_UNORM),
+        );
         let backbuffer = builder.acquire_backbuffer(window);
 
         // Publish some shared CPU data
@@ -89,7 +93,7 @@ fn test_complex_hierarchical_graph() {
     });
 
     let compiled = graph.compile();
-    compiled.execute(&mut backend);
+    compiled.execute(&mut backend).unwrap();
 }
 
 // Modular helper for Scene rendering
@@ -119,7 +123,10 @@ fn test_modular_resource_lifecycle() {
 
     graph.record(move |builder| {
         let backbuffer = builder.acquire_backbuffer(window);
-        let scene_texture = builder.declare_image("SceneTex", ImageDesc::new(1920, 1080, 0));
+        let scene_texture = builder.declare_image(
+            "SceneTex",
+            ImageDesc::new(1920, 1080, Format::R8G8B8A8_UNORM),
+        );
 
         // Delegate to helper
         builder.add_node("SceneGroup", move |scene| {
@@ -133,11 +140,10 @@ fn test_modular_resource_lifecycle() {
             sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
             move |ctx| {
                 ctx.bind_image(0, scene_texture);
-                ctx.present(backbuffer);
             }
         });
     });
 
     let compiled = graph.compile();
-    compiled.execute(&mut backend);
+    compiled.execute(&mut backend).unwrap();
 }

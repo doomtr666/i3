@@ -1,4 +1,6 @@
 use examples_common::{ExampleApp, init_tracing, main_loop};
+use i3_gfx::backend::*;
+use i3_gfx::graph::types::Format;
 use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
 use i3_vulkan_backend::VulkanBackend;
@@ -7,6 +9,7 @@ use std::time::Duration;
 struct TriangleApp {
     backend: VulkanBackend,
     pipeline_id: SymbolId,
+    window: WindowHandle,
 }
 
 impl ExampleApp for TriangleApp {
@@ -15,22 +18,39 @@ impl ExampleApp for TriangleApp {
     }
 
     fn render(&mut self) {
-        // For MVP we re-compile and execute every frame
-        // In the future, CompiledGraph should be persistent
+        // 1. Execute Graph (Swapchain is acquired internally)
         let mut graph = FrameGraph::new();
         let pipeline_id = self.pipeline_id;
+        let window = self.window;
 
         graph.record(move |builder| {
-            builder.add_node("MainPass", move |_builder| {
+            let backbuffer = builder.acquire_backbuffer(window);
+            // Register the physical image for this virtual handle
+            // This is a temporary way to map them until FrameGraph handles this automatically
+
+            builder.add_node("MainPass", move |builder| {
+                builder.bind_pipeline(PipelineHandle(pipeline_id));
+                builder.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+
                 move |ctx| {
-                    ctx.bind_pipeline(PipelineHandle(pipeline_id));
                     ctx.draw(3, 0);
+                    ctx.present(backbuffer); // Present via command
                 }
             });
         });
 
         let compiler = graph.compile();
-        compiler.execute(&mut self.backend);
+        match compiler.execute(&mut self.backend) {
+            Ok(_) => {}
+            Err(e) if e == "WindowMinimized" => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => panic!("Graph execution failed: {}", e),
+        }
+    }
+
+    fn poll_events(&mut self) -> Vec<Event> {
+        self.backend.poll_events()
     }
 }
 
@@ -40,19 +60,30 @@ fn main() -> Result<(), String> {
 
     // 2. Initialize Backend & Window
     let mut backend = VulkanBackend::new()?;
-    let window = i3_vulkan_backend::window::VulkanWindow::new(
-        backend.instance.clone(),
-        "i3fx — Draw Triangle",
-        1280,
-        720,
-    )?;
-    backend.window = Some(window);
-    backend.create_swapchain(0, 0);
 
-    // 3. Obtain Event Pump
-    let event_pump = backend.take_event_pump().unwrap();
+    // Choose the first discrete GPU or first available
+    // Note: enumerate_devices might act differently now, relying on new() default.
+    // If we want specific device, we'd need to inspect instance.
+    // backend.initialize(0)?; // initialize with default device for MVP
 
-    // 4. Create Pipeline Resources
+    let devices = backend.enumerate_devices();
+    let selected_id = devices
+        .iter()
+        .find(|d| d.device_type == DeviceType::Discrete)
+        .map(|d| d.id)
+        .unwrap_or(devices[0].id);
+
+    backend.initialize(selected_id)?;
+
+    let window = backend.create_window(WindowDesc {
+        title: "i3fx — Draw Triangle".to_string(),
+        width: 1280,
+        height: 720,
+    })?;
+
+    // Swapchain is configured implicitly with defaults (VSync: false, MinImage: 3)
+
+    // 4. Create Pipeline Resources (requires initialized backend)
     let slang = SlangCompiler::new()?;
     let shader_code = r#"
         struct VSOutput {
@@ -92,19 +123,22 @@ fn main() -> Result<(), String> {
         ShaderTarget::Spirv,
     )?;
 
-    let pipeline_desc = GraphicsPipelineDesc {
+    // 3. Create Pipeline
+    let pipeline_handle = backend.create_graphics_pipeline(&GraphicsPipelineDesc {
         shader,
-        name: "triangle_pipeline".to_string(),
-    };
-    let pipeline_handle = backend.create_graphics_pipeline(&pipeline_desc);
+        name: "Triangle Pipeline".to_string(),
+        color_formats: vec![Format::B8G8R8A8_SRGB], // Match srgb: true
+        depth_format: None,
+    });
     let pipeline_id = SymbolId(pipeline_handle.0);
 
     // 5. Run Main Loop
     let app = TriangleApp {
         backend,
         pipeline_id,
+        window,
     };
-    main_loop(app, event_pump);
+    main_loop(app);
 
     Ok(())
 }
