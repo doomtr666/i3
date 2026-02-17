@@ -73,7 +73,7 @@ fn test_complex_hierarchical_graph() {
                 let local_settings = settings.clone();
 
                 move |ctx| {
-                    ctx.bind_image(0, main_target);
+                    // ctx.bind_image(0, main_target); // Removed: bind_image no longer exists
                     tracing::info!("Executing LightingPass with settings: {}", local_settings);
                     ctx.draw(3, 0); // Fullscreen quad
                 }
@@ -108,7 +108,7 @@ fn record_scene(scene: &mut PassBuilder, main_target: ImageHandle) {
     scene.add_node("LightingPass", move |sub| {
         sub.read_image(main_target, ResourceUsage::SHADER_READ);
         move |ctx| {
-            ctx.bind_image(0, main_target);
+            // ctx.bind_image(0, main_target);
             ctx.draw(3, 0); // Fullscreen quad
         }
     });
@@ -139,7 +139,7 @@ fn test_modular_resource_lifecycle() {
             sub.read_image(scene_texture, ResourceUsage::SHADER_READ);
             sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
             move |ctx| {
-                ctx.bind_image(0, scene_texture);
+                // ctx.bind_image(0, scene_texture);
             }
         });
     });

@@ -1177,10 +1177,11 @@ impl RenderBackend for VulkanBackend {
 
         let mut ctx = VulkanPassContext {
             cmd,
-            device: device.clone(),
+            device: self.get_device().clone(),
             present_request: None,
             image_handle_map: &self.image_views,
-            pipeline_map: &self.pipeline_map,
+            buffer_map: &self.buffer_map,
+            pipeline_map: &self.pipeline_map, // Fixed: accessing the map constructed earlier
         };
 
         // If pipeline is set, bind it
@@ -1475,17 +1476,73 @@ impl RenderBackend for VulkanBackend {
     fn resolve_pipeline(&self, handle: PipelineHandle) -> BackendPipeline {
         BackendPipeline(handle.0.0)
     }
-
     fn register_external_image(&mut self, handle: ImageHandle, physical: BackendImage) {
         self.external_to_physical.insert(handle.0.0, physical.0);
     }
+    fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String> {
+        let device = self.get_device();
+        let semaphore = self.timeline_sem; // Use backend's semaphore
+        let semaphores = [semaphore];
+        let values = [value];
+        let wait_info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        unsafe {
+            device
+                .handle
+                .wait_semaphores(&wait_info, timeout_ns)
+                .map_err(|e| format!("Wait failed: {}", e))
+        }
+    }
 
-    fn wait_for_timeline(&self, _value: u64, _timeout_ns: u64) -> Result<(), String> {
-        // Implementation coming in next steps
-        Ok(())
+    fn upload_buffer(
+        &mut self,
+        handle: BufferHandle,
+        data: &[u8],
+        offset: u64,
+    ) -> Result<(), String> {
+        // Extract device first to avoid borrow conflict
+        let device = self.get_device().clone();
+        let allocator_lock = device.allocator.lock().unwrap();
+
+        // Then get allocation
+        let id = handle.0.0;
+        if let Some(allocation) = self.buffer_allocations.get_mut(&id) {
+            // Map memory
+            let ptr = unsafe {
+                allocator_lock
+                    .map_memory(allocation)
+                    .map_err(|e| format!("Failed to map memory: {}", e))?
+            };
+
+            unsafe {
+                let dst = ptr.offset(offset as isize);
+                std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+
+                // Flush if not coherent
+                allocator_lock
+                    .flush_allocation(&*allocation, offset, data.len() as u64)
+                    .map_err(|e| format!("Failed to flush allocation: {}", e))?;
+
+                allocator_lock.unmap_memory(allocation);
+            }
+            Ok(())
+        } else {
+            Err(format!("Buffer not found: {:?}", handle))
+        }
+    }
+    fn allocate_descriptor_set(
+        &mut self,
+        _pipeline: PipelineHandle,
+        _set_index: u32,
+    ) -> Result<DescriptorSetHandle, String> {
+        // TODO: Implement Descriptor Pool and Allocation using Pipeline Reflection
+        Ok(DescriptorSetHandle(0)) // Dummy
+    }
+    fn update_descriptor_set(&mut self, _set: DescriptorSetHandle, _writes: &[DescriptorWrite]) {
+        // TODO: Implement vkUpdateDescriptorSets
     }
 }
-
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
         if self.timeline_sem != vk::Semaphore::null() {
@@ -1547,6 +1604,7 @@ pub struct VulkanPassContext<'a> {
     device: Arc<crate::device::VulkanDevice>,
     present_request: Option<ImageHandle>,
     image_handle_map: &'a HashMap<u64, vk::ImageView>,
+    buffer_map: &'a HashMap<u64, vk::Buffer>,
     pipeline_map: &'a HashMap<u64, vk::Pipeline>,
 }
 
@@ -1563,12 +1621,60 @@ impl<'a> PassContext for VulkanPassContext<'a> {
         }
     }
 
-    fn bind_image(&mut self, _slot: u32, _handle: ImageHandle) {
-        // Bind logic? Descriptor set updates?
+    fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
+        // Resolve buffer
+        if let Some(buf) = self.buffer_map.get(&handle.0.0) {
+            unsafe {
+                self.device
+                    .handle
+                    .cmd_bind_vertex_buffers(self.cmd, binding, &[*buf], &[0]);
+            }
+        }
     }
 
-    fn bind_buffer(&mut self, _slot: u32, _handle: BufferHandle) {
-        // Bind logic?
+    fn bind_index_buffer(&mut self, handle: BufferHandle, index_type: IndexType) {
+        if let Some(buf) = self.buffer_map.get(&handle.0.0) {
+            let vk_type = match index_type {
+                IndexType::Uint16 => vk::IndexType::UINT16,
+                IndexType::Uint32 => vk::IndexType::UINT32,
+            };
+            unsafe {
+                self.device
+                    .handle
+                    .cmd_bind_index_buffer(self.cmd, *buf, 0, vk_type);
+            }
+        }
+    }
+
+    fn bind_descriptor_set(&mut self, _set_index: u32, _handle: DescriptorSetHandle) {
+        // TODO: Bind actual descriptor set
+        // For now, no-op or log
+    }
+
+    fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        let viewport = vk::Viewport {
+            x,
+            y,
+            width,
+            height,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        unsafe {
+            self.device
+                .handle
+                .cmd_set_viewport(self.cmd, 0, &[viewport]);
+        }
+    }
+
+    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x, y },
+            extent: vk::Extent2D { width, height },
+        };
+        unsafe {
+            self.device.handle.cmd_set_scissor(self.cmd, 0, &[scissor]);
+        }
     }
 
     fn draw(&mut self, vertex_count: u32, first_vertex: u32) {

@@ -209,6 +209,34 @@ impl RenderBackend for NullBackend {
         info!(value, timeout_ns, "Waiting for timeline (NullBackend)");
         Ok(())
     }
+
+    fn upload_buffer(
+        &mut self,
+        handle: i3_gfx::graph::types::BufferHandle,
+        data: &[u8],
+        offset: u64,
+    ) -> Result<(), String> {
+        info!(?handle, size = data.len(), offset, "Uploaded buffer data");
+        Ok(())
+    }
+
+    fn allocate_descriptor_set(
+        &mut self,
+        _pipeline: i3_gfx::graph::types::PipelineHandle,
+        set_index: u32,
+    ) -> Result<i3_gfx::graph::backend::DescriptorSetHandle, String> {
+        let h = self.next_handle(); // Dummy handle
+        info!(set_index, handle = h, "Allocated Descriptor Set");
+        Ok(i3_gfx::graph::backend::DescriptorSetHandle(h))
+    }
+
+    fn update_descriptor_set(
+        &mut self,
+        set: i3_gfx::graph::backend::DescriptorSetHandle,
+        writes: &[i3_gfx::graph::backend::DescriptorWrite],
+    ) {
+        info!(?set, writes = writes.len(), "Updated Descriptor Set");
+    }
 }
 
 pub struct NullPassContext<'a> {
@@ -256,23 +284,38 @@ impl<'a> PassContext for NullPassContext<'a> {
         }
     }
 
-    fn bind_image(&mut self, slot: u32, handle: i3_gfx::graph::types::ImageHandle) {
-        info!(pass = %self.pass_name, slot, ?handle, "BIND_IMAGE");
-        let physical_id = self
-            .image_map
-            .get(&handle)
-            .map(|h| h.0)
-            .unwrap_or(handle.0.0);
-        if !self.allocated_images.contains(&physical_id) {
-            self.report_error(ValidationError::ResourceNotFound(physical_id));
-        }
-    }
-
-    fn bind_buffer(&mut self, slot: u32, handle: i3_gfx::graph::types::BufferHandle) {
-        info!(pass = %self.pass_name, slot, ?handle, "BIND_BUFFER");
+    fn bind_vertex_buffer(&mut self, binding: u32, handle: i3_gfx::graph::types::BufferHandle) {
+        info!(pass = %self.pass_name, binding, ?handle, "BIND_VERTEX_BUFFER");
         if !self.allocated_buffers.contains(&handle.0.0) {
             self.report_error(ValidationError::ResourceNotFound(handle.0.0));
         }
+    }
+
+    fn bind_index_buffer(
+        &mut self,
+        handle: i3_gfx::graph::types::BufferHandle,
+        index_type: i3_gfx::graph::pipeline::IndexType,
+    ) {
+        info!(pass = %self.pass_name, ?handle, ?index_type, "BIND_INDEX_BUFFER");
+        if !self.allocated_buffers.contains(&handle.0.0) {
+            self.report_error(ValidationError::ResourceNotFound(handle.0.0));
+        }
+    }
+
+    fn bind_descriptor_set(
+        &mut self,
+        set_index: u32,
+        handle: i3_gfx::graph::backend::DescriptorSetHandle,
+    ) {
+        info!(pass = %self.pass_name, set_index, ?handle, "BIND_DESCRIPTOR_SET");
+    }
+
+    fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        info!(pass = %self.pass_name, x, y, width, height, "SET_VIEWPORT");
+    }
+
+    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        info!(pass = %self.pass_name, x, y, width, height, "SET_SCISSOR");
     }
 
     fn draw(&mut self, vertex_count: u32, first_vertex: u32) {

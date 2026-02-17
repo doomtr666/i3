@@ -91,14 +91,29 @@ pub struct PassDescriptor {
 pub trait PassContext {
     // Pipeline & Binding (Logical interfaces)
     fn bind_pipeline(&mut self, pipeline: crate::graph::types::PipelineHandle);
-    fn bind_image(&mut self, slot: u32, handle: crate::graph::types::ImageHandle);
-    fn bind_buffer(&mut self, slot: u32, handle: crate::graph::types::BufferHandle);
+    fn bind_vertex_buffer(&mut self, binding: u32, handle: crate::graph::types::BufferHandle);
+    fn bind_index_buffer(
+        &mut self,
+        handle: crate::graph::types::BufferHandle,
+        index_type: crate::graph::pipeline::IndexType,
+    );
+    // Placeholder for descriptor binding - simplified for Phase 19
+    // In a real engine, we'd bind specific sets or resources.
+    // For now, let's assume specific sets are bound by their index.
+    fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle);
+
+    fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32);
+    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32);
 
     // Commands
     fn draw(&mut self, vertex_count: u32, first_vertex: u32);
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
 }
+
+/// Handle representing a physically allocated descriptor set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DescriptorSetHandle(pub u64);
 
 /// The main interface for hardware backends (Vulkan, DX12, Null).
 pub trait RenderBackend {
@@ -187,4 +202,62 @@ pub trait RenderBackend {
     /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
     /// Timeout is in nanoseconds.
     fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String>;
+
+    // --- Data Upload ---
+    /// Upload data to a buffer.
+    /// In a real engine, this would likely use a staging buffer and transfer command.
+    /// For this simplified backend, we might map memory directly.
+    fn upload_buffer(
+        &mut self,
+        handle: crate::graph::types::BufferHandle,
+        data: &[u8],
+        offset: u64,
+    ) -> Result<(), String>;
+
+    // --- Descriptor Management ---
+    // Simplified API: Allocate a set from the pipeline's layout.
+    // Index 0, 1, 2, 3 corresponding to set=0, set=1, etc. in shader.
+    fn allocate_descriptor_set(
+        &mut self,
+        pipeline: crate::graph::types::PipelineHandle,
+        set_index: u32,
+    ) -> Result<DescriptorSetHandle, String>;
+
+    fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]);
+}
+
+#[derive(Debug, Clone)]
+pub struct DescriptorWrite {
+    pub binding: u32,
+    pub array_element: u32,
+    pub descriptor_type: crate::graph::pipeline::BindingType, // Reusing from pipeline
+    pub buffer_info: Option<DescriptorBufferInfo>,
+    pub image_info: Option<DescriptorImageInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DescriptorBufferInfo {
+    pub buffer: crate::graph::types::BufferHandle,
+    pub offset: u64,
+    pub range: u64, // or whole size
+}
+
+#[derive(Debug, Clone)]
+pub struct DescriptorImageInfo {
+    pub image: crate::graph::types::ImageHandle,
+    pub image_layout: DescriptorImageLayout, // New type needed?
+    // Start with basic layout. Or reuse image layout from types?
+    // Actually vk::DescriptorImageInfo needs sampler too.
+    pub sampler: Option<SamplerHandle>, // Need SamplerHandle
+}
+
+// Temporary Sampler Handle until we have proper sampler resources
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SamplerHandle(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DescriptorImageLayout {
+    General,
+    ShaderReadOnlyOptimal,
+    // Add others as needed
 }

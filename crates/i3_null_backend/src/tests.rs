@@ -18,15 +18,13 @@ fn test_null_backend_existence_validation() {
         &backend.image_map,
     );
 
-    // Valid bind
     ctx.bind_image(
-        0,
+        0, // Assuming a binding point
         i3_gfx::graph::types::ImageHandle(i3_gfx::graph::types::SymbolId(valid_handle.0)),
     );
     assert!(ctx.failures().is_empty());
 
     // Invalid bind
-    ctx.bind_image(
         1,
         i3_gfx::graph::types::ImageHandle(i3_gfx::graph::types::SymbolId(invalid_handle.0)),
     );
