@@ -12,3 +12,4 @@ tracing-subscriber = { workspace = true }
 sdl2 = { workspace = true }
 i3_gfx = { path = "../../crates/i3_gfx" }
 i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }
+tracing-appender = "0.2.4"

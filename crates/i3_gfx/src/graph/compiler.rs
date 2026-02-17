@@ -320,10 +320,10 @@ impl CompiledGraph {
 
         // 3. Cleanup Transient Resources
         for image in transient_images {
-            backend.destroy_image(image);
+            backend.release_transient_image(image);
         }
         for buffer in transient_buffers {
-            backend.destroy_buffer(buffer);
+            backend.release_transient_buffer(buffer);
         }
 
         result
@@ -341,27 +341,8 @@ impl CompiledGraph {
             match symbol.symbol_type {
                 SymbolType::Image(ref desc) => {
                     if symbol.lifetime == SymbolLifetime::Transient {
-                        let physical = backend.create_image(desc);
+                        let physical = backend.create_transient_image(desc);
                         transient_images.push(physical);
-                        // Store mapping?
-                        // We rely on resolve_image using the ID cast for now IF we don't map it.
-                        // BUT wait, resolved_image now uses a MAP.
-                        // We MUST map it!
-                        // But `backend.external_to_physical` is for EXTERNAL.
-                        // Internal resources need a way to be resolved.
-                        // Since `SymbolId` -> `BackendImage` mapping is needed.
-                        // And `SymbolId` is unique per FrameGraph instance (0..N).
-                        // We need to tell backend about this mapping.
-                        // OR we pass a map to `execute_node_recursive`?
-                        // "We need a `transient_resource_map`"
-
-                        // FIX: We need to register these as "external" effectively,
-                        // or add `register_internal_image`.
-                        // For now, let's use `register_external_image` as a hack/solution?
-                        // `ImageHandle(SymbolId)` -> `BackendImage`.
-                        // Yes, `register_external_image` just inserts into the map.
-                        // So we register it, and it will be overwritten next frame (good).
-                        // But we verify it's valid.
                         let handle = symbol
                             .data
                             .as_ref()
@@ -374,11 +355,8 @@ impl CompiledGraph {
                 }
                 SymbolType::Buffer(ref desc) => {
                     if symbol.lifetime == SymbolLifetime::Transient {
-                        let physical = backend.create_buffer(desc);
+                        let physical = backend.create_transient_buffer(desc);
                         transient_buffers.push(physical);
-                        // Buffer resolution might need similar registration if we have `register_external_buffer`.
-                        // Currently buffer resolution is `BackendBuffer(handle.0.0)`.
-                        // We should fix buffer resolution too, but focus on image leak first.
                     }
                 }
                 _ => {}

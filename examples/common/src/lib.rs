@@ -2,14 +2,27 @@ use std::time::{Duration, Instant};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-pub fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,i3_vulkan_backend=info,i3_gfx=info"));
+pub fn init_tracing(file_name: &str) -> tracing_appender::non_blocking::WorkerGuard {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,i3_vulkan_backend=info,i3_gfx=info,i3_null_backend=warn")
+    });
+
+    // Ensure logs directory exists
+    let _ = std::fs::create_dir("logs");
+
+    // Create (truncate) the log file
+    let file =
+        std::fs::File::create(format!("logs/{}", file_name)).expect("Failed to create log file");
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(file);
 
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(non_blocking))
+        .with(fmt::layer()) // Also to stdout
         .with(filter)
         .init();
+
+    guard
 }
 
 pub struct FrameStats {

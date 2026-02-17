@@ -15,6 +15,7 @@ pub struct NullBackend {
     allocated_images: HashSet<u64>,
     allocated_buffers: HashSet<u64>,
     allocated_pipelines: HashSet<u64>,
+    image_map: std::collections::HashMap<i3_gfx::graph::types::ImageHandle, BackendImage>,
     next_handle: u64,
 }
 
@@ -24,6 +25,7 @@ impl NullBackend {
             allocated_images: HashSet::new(),
             allocated_buffers: HashSet::new(),
             allocated_pipelines: HashSet::new(),
+            image_map: std::collections::HashMap::new(),
             next_handle: 1, // 0 is INVALID
         }
     }
@@ -55,9 +57,31 @@ impl RenderBackend for NullBackend {
         info!(handle = %handle.0, "Destroyed Image");
     }
 
-    fn destroy_buffer(&mut self, handle: BackendBuffer) {
-        self.allocated_buffers.remove(&handle.0);
-        info!(handle = %handle.0, "Destroyed Buffer");
+    fn destroy_buffer(&mut self, _handle: BackendBuffer) {
+        // No-op for null backend
+    }
+
+    fn create_transient_image(&mut self, desc: &i3_gfx::graph::backend::ImageDesc) -> BackendImage {
+        self.create_image(desc)
+    }
+
+    fn create_transient_buffer(
+        &mut self,
+        desc: &i3_gfx::graph::backend::BufferDesc,
+    ) -> BackendBuffer {
+        self.create_buffer(desc)
+    }
+
+    fn release_transient_image(&mut self, handle: BackendImage) {
+        self.destroy_image(handle);
+    }
+
+    fn release_transient_buffer(&mut self, handle: BackendBuffer) {
+        self.destroy_buffer(handle);
+    }
+
+    fn garbage_collect(&mut self) {
+        // No-op
     }
 
     fn create_graphics_pipeline(
@@ -114,7 +138,9 @@ impl RenderBackend for NullBackend {
         &mut self,
         _window: i3_gfx::graph::types::WindowHandle,
     ) -> Result<(BackendImage, u64, u32), String> {
-        Ok((BackendImage(1), 1, 0))
+        let handle = 1000;
+        self.allocated_images.insert(handle);
+        Ok((BackendImage(handle), 1, 0))
     }
 
     fn submit(
@@ -137,6 +163,7 @@ impl RenderBackend for NullBackend {
             &self.allocated_images,
             &self.allocated_buffers,
             &self.allocated_pipelines,
+            &self.image_map,
         );
         f(&mut ctx);
         0
@@ -174,6 +201,12 @@ impl RenderBackend for NullBackend {
             ?physical,
             "Registered external image in NullBackend"
         );
+        self.image_map.insert(handle, physical);
+    }
+
+    fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String> {
+        info!(value, timeout_ns, "Waiting for timeline (NullBackend)");
+        Ok(())
     }
 }
 
@@ -183,6 +216,7 @@ pub struct NullPassContext<'a> {
     allocated_images: &'a HashSet<u64>,
     allocated_buffers: &'a HashSet<u64>,
     allocated_pipelines: &'a HashSet<u64>,
+    image_map: &'a std::collections::HashMap<i3_gfx::graph::types::ImageHandle, BackendImage>,
 }
 
 impl<'a> NullPassContext<'a> {
@@ -191,6 +225,7 @@ impl<'a> NullPassContext<'a> {
         allocated_images: &'a HashSet<u64>,
         allocated_buffers: &'a HashSet<u64>,
         allocated_pipelines: &'a HashSet<u64>,
+        image_map: &'a std::collections::HashMap<i3_gfx::graph::types::ImageHandle, BackendImage>,
     ) -> Self {
         Self {
             pass_name: name.to_string(),
@@ -198,6 +233,7 @@ impl<'a> NullPassContext<'a> {
             allocated_images,
             allocated_buffers,
             allocated_pipelines,
+            image_map,
         }
     }
 
@@ -221,8 +257,13 @@ impl<'a> PassContext for NullPassContext<'a> {
 
     fn bind_image(&mut self, slot: u32, handle: i3_gfx::graph::types::ImageHandle) {
         info!(pass = %self.pass_name, slot, ?handle, "BIND_IMAGE");
-        if !self.allocated_images.contains(&handle.0.0) {
-            self.report_error(ValidationError::ResourceNotFound(handle.0.0));
+        let physical_id = self
+            .image_map
+            .get(&handle)
+            .map(|h| h.0)
+            .unwrap_or(handle.0.0);
+        if !self.allocated_images.contains(&physical_id) {
+            self.report_error(ValidationError::ResourceNotFound(physical_id));
         }
     }
 
@@ -248,8 +289,20 @@ impl<'a> PassContext for NullPassContext<'a> {
 
     fn present(&mut self, image: i3_gfx::graph::types::ImageHandle) {
         info!(pass = %self.pass_name, ?image, "PRESENT");
-        if !self.allocated_images.contains(&image.0.0) {
-            self.report_error(ValidationError::ResourceNotFound(image.0.0));
+
+        let physical_id = if let Some(physical) = self.image_map.get(&image) {
+            physical.0
+        } else {
+            // Fallback to checking validity of the handle as direct physical ID (for testing without map)
+            // But for FrameGraph usage, it should be in the map.
+            // If internal handle is 0 (SymbolId::INVALID), we definitely want to look it up.
+            // If the handle IS the physical ID (e.g. direct backend usage), we use it.
+            // But ImageHandle wraps SymbolId.
+            image.0.0
+        };
+
+        if !self.allocated_images.contains(&physical_id) {
+            self.report_error(ValidationError::ResourceNotFound(physical_id));
         }
     }
 }

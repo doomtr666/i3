@@ -7,8 +7,9 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-i3_gfx.workspace = true
-i3_vulkan_backend.workspace = true
-i3_slang.workspace = true
+i3_gfx = { path = "../../crates/i3_gfx" }
+i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }
+i3_null_backend = { path = "../../crates/i3_null_backend" }
+i3_slang = { path = "../../crates/i3_slang" }
 examples_common = { path = "../common" }
-tracing.workspace = true
+tracing = "0.1"

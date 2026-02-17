@@ -31,5 +31,3 @@ vk-mem = "0.5.0"
 
 # Internal
 i3_gfx = { path = "crates/i3_gfx" }
-i3_slang = { path = "crates/i3_slang" }
-i3_vulkan_backend = { path = "crates/i3_vulkan_backend" }

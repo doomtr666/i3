@@ -67,7 +67,7 @@ pub enum Format {
     // Add others as needed
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageDesc {
     pub width: u32,
     pub height: u32,
@@ -90,7 +90,7 @@ impl ImageDesc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferDesc {
     pub size: u64,
 }

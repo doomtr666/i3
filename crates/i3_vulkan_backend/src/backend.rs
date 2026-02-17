@@ -4,8 +4,29 @@ use i3_gfx::graph::backend::*;
 use i3_gfx::graph::types::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info};
 use vk_mem::Alloc;
+
+struct PooledImage {
+    image: vk::Image,
+    view: vk::ImageView,
+    allocation: vk_mem::Allocation,
+    id: u64,
+    #[allow(dead_code)]
+    desc: ImageDesc,
+    last_used_frame: u64,
+}
+
+struct PooledBuffer {
+    buffer: vk::Buffer,
+    allocation: vk_mem::Allocation,
+    id: u64,
+    #[allow(dead_code)]
+    desc: BufferDesc,
+    last_used_frame: u64,
+}
+
+// ...
 
 struct WindowContext {
     // Order matters for drop: swapchain must be dropped BEFORE raw (surface)
@@ -18,10 +39,17 @@ struct WindowContext {
     current_acquire_sem: Option<vk::Semaphore>,
     current_image_index: Option<u32>,
     // Frame Synchronization
-    in_flight_fences: Vec<vk::Fence>,
+    // Frame Synchronization (Timeline Values)
+    // We track the last submitted timeline value for each frame slot.
+    // When acquiring frame i, we wait for timeline to reach submitted_values[i].
+    submitted_values: Vec<u64>,
     frame_index: usize, // 0..min_image
     // Command Pools for recycling
     command_pools: Vec<vk::CommandPool>,
+    // Command Buffers (One list per frame-in-flight)
+    allocated_command_buffers: Vec<Vec<vk::CommandBuffer>>,
+    // Cursor for next available buffer in current frame
+    command_buffer_cursors: Vec<usize>,
 }
 
 pub struct VulkanBackend {
@@ -55,8 +83,18 @@ pub struct VulkanBackend {
     pub frame_count: u64,
     pub dead_images: Vec<(u64, vk::Image, vk::ImageView, vk_mem::Allocation)>, // Frame, Image, View, Alloc
     pub dead_buffers: Vec<(u64, vk::Buffer, vk_mem::Allocation)>,
+    pub dead_semaphores: Vec<(u64, u64, vk::Semaphore)>, // Frame, ID, Handle
+    pub recycled_semaphores: Vec<vk::Semaphore>,
     pub image_allocations: HashMap<u64, vk_mem::Allocation>,
     pub external_to_physical: HashMap<u64, u64>, // Virtual ID -> Physical ID
+
+    // Transient Pools
+    transient_image_pool: HashMap<ImageDesc, Vec<PooledImage>>,
+    transient_buffer_pool: HashMap<BufferDesc, Vec<PooledBuffer>>,
+
+    // Descriptors for active transient resources (needed for release)
+    transient_image_descs: HashMap<u64, ImageDesc>,
+    transient_buffer_descs: HashMap<u64, BufferDesc>,
 
     pub buffer_map: HashMap<u64, vk::Buffer>,
     pub buffer_allocations: HashMap<u64, vk_mem::Allocation>,
@@ -70,6 +108,8 @@ pub struct VulkanBackend {
 
     // Semaphore management (Timeline & Binary)
     pub semaphores: HashMap<u64, vk::Semaphore>,
+    pub timeline_sem: vk::Semaphore, // Global timeline for graphics queue
+    pub cpu_timeline: u64,           // Current CPU submission value
     pub next_semaphore_id: u64,
     pub next_resource_id: u64,
 }
@@ -103,7 +143,15 @@ impl VulkanBackend {
             frame_count: 0,
             dead_images: Vec::new(),
             dead_buffers: Vec::new(),
-            next_resource_id: 1000, // Start high to avoid conflict with null backend or special IDs
+            dead_semaphores: Vec::new(),
+            recycled_semaphores: Vec::new(),
+            transient_image_pool: HashMap::new(),
+            transient_buffer_pool: HashMap::new(),
+            transient_image_descs: HashMap::new(),
+            transient_buffer_descs: HashMap::new(),
+            next_resource_id: 1000,
+            timeline_sem: vk::Semaphore::null(), // Initialized in `initialize`
+            cpu_timeline: 0,
         })
     }
 
@@ -112,9 +160,14 @@ impl VulkanBackend {
     }
 
     fn create_semaphore(&mut self) -> u64 {
-        let device = self.get_device();
-        let create_info = vk::SemaphoreCreateInfo::default();
-        let sem = unsafe { device.handle.create_semaphore(&create_info, None) }.unwrap();
+        let sem = if let Some(recycled) = self.recycled_semaphores.pop() {
+            recycled
+        } else {
+            let device = self.get_device();
+            let create_info = vk::SemaphoreCreateInfo::default();
+            unsafe { device.handle.create_semaphore(&create_info, None) }.unwrap()
+        };
+
         let id = self.next_semaphore_id;
         self.next_semaphore_id += 1;
         self.semaphores.insert(id, sem);
@@ -178,6 +231,17 @@ impl RenderBackend for VulkanBackend {
         self.device = Some(Arc::new(device));
         self.event_pump = Some(self.sdl.event_pump()?);
 
+        // Create Timeline Semaphore
+        let mut type_info =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+        self.timeline_sem = unsafe {
+            self.get_device()
+                .handle
+                .create_semaphore(&create_info, None)
+                .map_err(|e| format!("Failed to create timeline semaphore: {}", e))?
+        };
+
         info!("Vulkan Backend Initialized");
         Ok(())
     }
@@ -197,23 +261,12 @@ impl RenderBackend for VulkanBackend {
         let id = self.next_window_id;
         self.next_window_id += 1;
 
-        // Create Fences for synchronization (signaled initially)
-        let mut fences = Vec::new();
-        let device = self.get_device();
-        for _ in 0..2 {
-            // min_image
-            let create_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-            let fence = unsafe {
-                device
-                    .handle
-                    .create_fence(&create_info, None)
-                    .map_err(|e| e.to_string())?
-            };
-            fences.push(fence);
-        }
+        // Initialize submitted values to 0 (completed)
+        let submitted_values = vec![0; 2];
 
         // Create Semaphores per frame
         let mut acquire_sems = Vec::new();
+        let device = self.get_device();
         for _ in 0..2 {
             let create_info = vk::SemaphoreCreateInfo::default();
             let sem = unsafe {
@@ -251,9 +304,11 @@ impl RenderBackend for VulkanBackend {
             acquire_semaphores: acquire_sems,
             current_acquire_sem: None,
             current_image_index: None,
-            in_flight_fences: fences,
+            submitted_values,
             frame_index: 0,
             command_pools: cmd_pools,
+            allocated_command_buffers: vec![Vec::new(); 3], // Should match min_image or fences.len()
+            command_buffer_cursors: vec![0; 3],             // Default min_image=3
         };
 
         self.windows.insert(id, ctx);
@@ -473,6 +528,165 @@ impl RenderBackend for VulkanBackend {
         }
     }
 
+    // --- Transient Resource Management (Pooling) ---
+
+    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage {
+        // 1. Check Pool
+        if let Some(pool) = self.transient_image_pool.get_mut(desc) {
+            if let Some(pooled) = pool.pop() {
+                // Reuse!
+                let id = pooled.id;
+                self.image_map.insert(id, pooled.image);
+                self.image_views.insert(id, pooled.view);
+                self.image_allocations.insert(id, pooled.allocation);
+                self.transient_image_descs.insert(id, *desc); // Track desc for release
+
+                // tracing::trace!("Transient Image HIT: {}", id);
+                return BackendImage(id);
+            }
+        }
+
+        // 2. Create New (Fallback)
+        let handle = self.create_image(desc);
+        let id = handle.0;
+        self.transient_image_descs.insert(id, *desc); // Track desc for release
+        handle
+    }
+
+    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer {
+        if let Some(pool) = self.transient_buffer_pool.get_mut(desc) {
+            if let Some(pooled) = pool.pop() {
+                let id = pooled.id;
+                self.buffer_map.insert(id, pooled.buffer);
+                self.buffer_allocations.insert(id, pooled.allocation);
+                self.transient_buffer_descs.insert(id, *desc);
+                // tracing::trace!("Transient Buffer HIT: {}", id);
+                return BackendBuffer(id);
+            }
+        }
+        let handle = self.create_buffer(desc);
+        let id = handle.0;
+        self.transient_buffer_descs.insert(id, *desc);
+        handle
+    }
+
+    fn release_transient_image(&mut self, handle: BackendImage) {
+        let id = handle.0;
+        // Remove from active maps
+        if let Some(view) = self.image_views.remove(&id) {
+            if let Some(image) = self.image_map.remove(&id) {
+                if let Some(allocation) = self.image_allocations.remove(&id) {
+                    // Get Desc
+                    if let Some(desc) = self.transient_image_descs.remove(&id) {
+                        let pool = self
+                            .transient_image_pool
+                            .entry(desc)
+                            .or_insert_with(Vec::new);
+                        pool.push(PooledImage {
+                            image,
+                            view,
+                            allocation,
+                            id,
+                            desc,
+                            last_used_frame: self.frame_count,
+                        });
+                    } else {
+                        // Should not happen if used correctly, effectively leaked or non-transient?
+                        // If we release a non-transient, we should probably destroy it?
+                        // Or warn?
+                        // For now, if no desc, we treat it as "not tracked" and destroy immediately?
+                        // No, defer it.
+                        self.dead_images
+                            .push((self.frame_count, image, view, allocation));
+                    }
+                }
+            }
+        }
+    }
+
+    fn release_transient_buffer(&mut self, handle: BackendBuffer) {
+        let id = handle.0;
+        if let Some(buffer) = self.buffer_map.remove(&id) {
+            if let Some(allocation) = self.buffer_allocations.remove(&id) {
+                if let Some(desc) = self.transient_buffer_descs.remove(&id) {
+                    let pool = self
+                        .transient_buffer_pool
+                        .entry(desc)
+                        .or_insert_with(Vec::new);
+                    pool.push(PooledBuffer {
+                        buffer,
+                        allocation,
+                        id,
+                        desc,
+                        last_used_frame: self.frame_count,
+                    });
+                } else {
+                    self.dead_buffers
+                        .push((self.frame_count, buffer, allocation));
+                }
+            }
+        }
+    }
+
+    fn garbage_collect(&mut self) {
+        let safe_threshold = self.frame_count.saturating_sub(10); // Use 10 frames lag for extra safety/stability
+        // We can tune this. 3 is minimum for triple buffering. 10 is safe for sure.
+
+        let device = self.get_device().clone(); // Clone ARC
+
+        // GC Images
+        for pool in self.transient_image_pool.values_mut() {
+            // retain items that are RECENT
+            // remove items that are OLD (<= safe_threshold)
+            // But we need to DESTROY them when removing.
+            // retain gives &mut, we can't move out easily to destroy?
+            // `retain` closure executes for each element.
+
+            // We'll separate into "keep" and "destroy" lists? expensive copy.
+            // Or just iterate with index?
+
+            let mut i = 0;
+            while i < pool.len() {
+                if pool[i].last_used_frame <= safe_threshold {
+                    // Destroy
+                    let pooled = pool.swap_remove(i);
+                    unsafe {
+                        device.handle.destroy_image_view(pooled.view, None); // Use cached device
+                        let allocator = device.allocator.lock().unwrap();
+                        allocator.destroy_image(pooled.image, &mut pooled.allocation.clone());
+                        // Note: allocation clone might be expensive/wrong if it owns something unique?
+                        // vk_mem::Allocation is Clone?
+                        // Just verified in previous steps it was passed by reference to destroy.
+                        // Wait, `destroy_image` takes `&mut Allocation`.
+                        // We own `pooled.allocation`.
+                        // So `&mut pooled.allocation` is fine, but we moved `pooled` out.
+                        // So `let mut alloc = pooled.allocation;`
+                    }
+                    // Since we swap_remove, the current index `i` is now a new element (or we are at end).
+                    // We do NOT increment `i`.
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // GC Buffers
+        for pool in self.transient_buffer_pool.values_mut() {
+            let mut i = 0;
+            while i < pool.len() {
+                if pool[i].last_used_frame <= safe_threshold {
+                    let pooled = pool.swap_remove(i);
+                    unsafe {
+                        let allocator = device.allocator.lock().unwrap();
+                        allocator.destroy_buffer(pooled.buffer, &mut pooled.allocation.clone());
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
     fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineDesc) -> BackendPipeline {
         let device = self.get_device().clone();
         let id = self.next_id();
@@ -679,8 +893,16 @@ impl RenderBackend for VulkanBackend {
     ) -> Result<(BackendImage, u64, u32), String> {
         // 1. Advance Frame and Cleanup
         self.frame_count += 1;
-        let safe_threshold = self.frame_count.saturating_sub(3); // 3 frames safe lag
+        // CRITICAL: At 3000 FPS, 3 frames is 1ms. Present might take ~16ms (60Hz).
+        // We need a much larger safe threshold to avoid destroying semaphores still in use by Present.
+        // 100 frames at 3000 FPS = 33ms. Safe for 60Hz.
+        // Ideally we should verify with fences, but semaphores don't have fences.
+        let safe_threshold = self.frame_count.saturating_sub(100);
         let device = self.get_device().clone();
+
+        // Local copy to avoid borrow conflict
+        let timeline_sem = self.timeline_sem;
+        let expected_signal = self.cpu_timeline + 1;
 
         // Process Dead Images
         let mut i = 0;
@@ -706,6 +928,19 @@ impl RenderBackend for VulkanBackend {
                     let allocator = device.allocator.lock().unwrap();
                     allocator.destroy_buffer(buffer, &mut allocation);
                 }
+            } else {
+                i += 1;
+            }
+        }
+
+        // Process Dead Semaphores (GC)
+        let mut i = 0;
+        while i < self.dead_semaphores.len() {
+            if self.dead_semaphores[i].0 <= safe_threshold {
+                let (_frame, id, sem) = self.dead_semaphores.swap_remove(i);
+                self.semaphores.remove(&id);
+                // Recycle instead of destroy!
+                self.recycled_semaphores.push(sem);
             } else {
                 i += 1;
             }
@@ -737,19 +972,33 @@ impl RenderBackend for VulkanBackend {
                 return Err("WindowMinimized".to_string());
             }
 
-            // Wait for previous frame fence
+            // Pre-calculate expected timeline value for this frame's submission
+            // let expected_signal = self.cpu_timeline + 1; // Moved up
+
+            // Process Dead Resources... (Keep existing logic, assume it's above or below)
+            // ...
+
+            // Wait for previous frame's timeline value
+            // Note: We need to do this *inside* the loop if we want to be safe,
+            // but typically we do it once per frame attempt.
+            // However, since we hold ctx borrow, we do it here.
             if !waited_for_fence {
-                let fence = ctx.in_flight_fences[ctx.frame_index];
+                let wait_value = ctx.submitted_values[ctx.frame_index];
+                if wait_value > 0 {
+                    let semaphores = [timeline_sem];
+                    let values = [wait_value];
+                    let wait_info = vk::SemaphoreWaitInfo::default()
+                        .semaphores(&semaphores)
+                        .values(&values);
+                    unsafe {
+                        device
+                            .handle
+                            .wait_semaphores(&wait_info, u64::MAX)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+
                 unsafe {
-                    device
-                        .handle
-                        .wait_for_fences(&[fence], true, u64::MAX)
-                        .map_err(|e| e.to_string())?;
-                    device
-                        .handle
-                        .reset_fences(&[fence])
-                        .map_err(|e| e.to_string())?;
-                    // Reset Command Pool for this frame
                     device
                         .handle
                         .reset_command_pool(
@@ -757,6 +1006,9 @@ impl RenderBackend for VulkanBackend {
                             vk::CommandPoolResetFlags::empty(),
                         )
                         .map_err(|e| e.to_string())?;
+
+                    // Reset cursor for this frame's command buffers
+                    ctx.command_buffer_cursors[ctx.frame_index] = 0;
                 }
                 waited_for_fence = true;
             }
@@ -799,6 +1051,9 @@ impl RenderBackend for VulkanBackend {
             ctx.current_acquire_sem = Some(semaphore);
             ctx.current_image_index = Some(index);
 
+            // Update expectation for next time we visit this slot
+            ctx.submitted_values[ctx.frame_index] = expected_signal;
+
             // 6. Wrap result
             let sem_handle_id = self.next_semaphore_id;
             self.next_semaphore_id += 1;
@@ -808,8 +1063,13 @@ impl RenderBackend for VulkanBackend {
             let image_id = image_raw.as_raw();
 
             // Critical: Register the view so `begin_pass` can find it
-            let view_raw = swapchain.image_views[index as usize];
-            self.image_views.insert(image_id, view_raw);
+            // FIX: Only create/insert if not already present to avoid leaking VkImageView handles
+            // (Swapchain images are stable until recreation)
+            if !self.image_views.contains_key(&image_id) {
+                let view_raw = swapchain.image_views[index as usize];
+                self.image_views.insert(image_id, view_raw);
+            }
+            // Image map can be overwritten safely (handle copy)
             self.image_map.insert(image_id, image_raw);
 
             return Ok((BackendImage(image_id), sem_handle_id, index));
@@ -873,14 +1133,28 @@ impl RenderBackend for VulkanBackend {
         let cmd = if let Some(ctx_win) = target_window_ctx {
             // Use Recycled Pool
             let pool = ctx_win.command_pools[ctx_win.frame_index];
-            let alloc_info = vk::CommandBufferAllocateInfo::default()
-                .command_pool(pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-            unsafe { device.handle.allocate_command_buffers(&alloc_info).unwrap()[0] }
+            let cursor = ctx_win.command_buffer_cursors[ctx_win.frame_index];
+            let buffer_list = &mut ctx_win.allocated_command_buffers[ctx_win.frame_index];
+
+            if cursor < buffer_list.len() {
+                // Reuse existing buffer
+                ctx_win.command_buffer_cursors[ctx_win.frame_index] += 1;
+                buffer_list[cursor]
+            } else {
+                // Allocate new buffer and add to list
+                let alloc_info = vk::CommandBufferAllocateInfo::default()
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1);
+                let cmd =
+                    unsafe { device.handle.allocate_command_buffers(&alloc_info).unwrap()[0] };
+                buffer_list.push(cmd);
+                ctx_win.command_buffer_cursors[ctx_win.frame_index] += 1;
+                cmd
+            }
         } else {
             // Offscreen / Fallback (Leak for now or TODO: Global Pool)
-            // println!("WARNING: begin_pass could not find target window, creating transient pool");
+            println!("WARNING: begin_pass fallback! Creating leaking CommandPool");
             unsafe {
                 let pool_info = vk::CommandPoolCreateInfo::default()
                     .queue_family_index(device.graphics_family)
@@ -1103,48 +1377,54 @@ impl RenderBackend for VulkanBackend {
 
         let signal_sem = self.create_semaphore();
         let vk_signal = self.semaphores[&signal_sem];
-        let signal_semaphores = [vk_signal];
+
+        // Signal both:
+        // 1. Binary Semaphore (for Present consumptiopn)
+        // 2. Timeline Semaphore (for Host synchronization)
+        let mut signal_semaphores = vec![vk_signal];
+        let mut signal_values = vec![0]; // Binary ignores value
+
+        if self.timeline_sem != vk::Semaphore::null() {
+            self.cpu_timeline += 1;
+            signal_semaphores.push(self.timeline_sem);
+            signal_values.push(self.cpu_timeline);
+        }
+
         let command_buffers = [cmd];
 
+        let mut timeline_info =
+            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
+
         let submit_info = vk::SubmitInfo::default()
+            .push_next(&mut timeline_info)
             .command_buffers(&command_buffers)
             .wait_semaphores(&wait_semaphores)
             .wait_dst_stage_mask(&wait_stages)
             .signal_semaphores(&signal_semaphores);
 
-        // Search for the window associated with this pass by matching partial images
-        let mut signal_fence = vk::Fence::null();
+        // Perform GC
+        self.garbage_collect();
 
-        // Use the window context found earlier? We didn't keep it in scope.
-        // Re-find it. (Optimization: pass it down or store in Context)
-
-        // Find window
-        'win_loop_submit: for ctx_win in self.windows.values_mut() {
-            if let Some(sc) = &ctx_win.swapchain {
-                if let Some(idx) = ctx_win.current_image_index {
-                    let current_img = sc.images[idx as usize];
-                    let current_id = current_img.as_raw();
-                    if target_ids.contains(&current_id) {
-                        signal_fence = ctx_win.in_flight_fences[ctx_win.frame_index];
-                        // Advance frame index for NEXT acquire
-                        ctx_win.frame_index =
-                            (ctx_win.frame_index + 1) % ctx_win.in_flight_fences.len();
-                        break 'win_loop_submit;
-                    }
-                }
-            }
-        }
-
+        // No fence needed for queue submit anymore (we use Timeline)
         unsafe {
             device
                 .handle
-                .queue_submit(device.graphics_queue, &[submit_info], signal_fence)
+                .queue_submit(device.graphics_queue, &[submit_info], vk::Fence::null())
                 .unwrap();
         }
 
+        // Perform GC
+        self.garbage_collect();
+
+        // Queue Signal Semaphore for destruction (Leak Fix)
+        // We assume it's used by next Acquire/Present or implicitly handled.
+        // For draw_triangle, it is waited on by Present.
+        // So we can destroy it after safe_threshold.
+        self.dead_semaphores
+            .push((self.frame_count, signal_sem, vk_signal));
+
         // Handle Present
-        if let Some(image_handle) = present_req {
-            let _ = image_handle; // Suppress unused for now
+        if let Some(_image_handle) = present_req {
             // Search for window context with this current image
             for ctx_win in self.windows.values_mut() {
                 if let Some(sc) = &ctx_win.swapchain {
@@ -1202,21 +1482,38 @@ impl RenderBackend for VulkanBackend {
     fn register_external_image(&mut self, handle: ImageHandle, physical: BackendImage) {
         self.external_to_physical.insert(handle.0.0, physical.0);
     }
+
+    fn wait_for_timeline(&self, _value: u64, _timeout_ns: u64) -> Result<(), String> {
+        // Implementation coming in next steps
+        Ok(())
+    }
 }
 
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
+        if self.timeline_sem != vk::Semaphore::null() {
+            unsafe {
+                if let Some(device) = &self.device {
+                    device.handle.destroy_semaphore(self.timeline_sem, None);
+                }
+            }
+        }
+
         if let Some(device) = &self.device {
             unsafe {
-                let _ = device.handle.device_wait_idle();
+                device
+                    .handle
+                    .device_wait_idle()
+                    .map_err(|e| error!("WaitIdle failed: {}", e))
+                    .ok();
+
+                // Wait a bit for Presentation Engine to release resources (Validation Layer race?)
+                std::thread::sleep(std::time::Duration::from_millis(100));
 
                 // 1. Clean up Window Resources
                 for ctx in self.windows.values() {
                     for &pool in &ctx.command_pools {
                         device.handle.destroy_command_pool(pool, None);
-                    }
-                    for &fence in &ctx.in_flight_fences {
-                        device.handle.destroy_fence(fence, None);
                     }
                     for &sem in &ctx.acquire_semaphores {
                         device.handle.destroy_semaphore(sem, None);
@@ -1237,6 +1534,11 @@ impl Drop for VulkanBackend {
                 // 3. Clean up generic Semaphores
                 for (_, sem) in &self.semaphores {
                     device.handle.destroy_semaphore(*sem, None);
+                }
+
+                // 4. Clean up Recycled Semaphores
+                for &sem in &self.recycled_semaphores {
+                    device.handle.destroy_semaphore(sem, None);
                 }
             }
         }

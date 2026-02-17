@@ -3,8 +3,10 @@ use i3_gfx::backend::*;
 use i3_gfx::graph::types::Format;
 use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
-use i3_vulkan_backend::VulkanBackend;
 use std::time::Duration;
+
+use i3_vulkan_backend::VulkanBackend;
+// use i3_null_backend::NullBackend;
 
 struct TriangleApp {
     backend: VulkanBackend,
@@ -56,7 +58,7 @@ impl ExampleApp for TriangleApp {
 
 fn main() -> Result<(), String> {
     // 1. Initialize Tracing from common
-    init_tracing();
+    let _guard = init_tracing("draw_triangle.log");
 
     // 2. Initialize Backend & Window
     let mut backend = VulkanBackend::new()?;
@@ -66,14 +68,7 @@ fn main() -> Result<(), String> {
     // If we want specific device, we'd need to inspect instance.
     // backend.initialize(0)?; // initialize with default device for MVP
 
-    let devices = backend.enumerate_devices();
-    let selected_id = devices
-        .iter()
-        .find(|d| d.device_type == DeviceType::Discrete)
-        .map(|d| d.id)
-        .unwrap_or(devices[0].id);
-
-    backend.initialize(selected_id)?;
+    backend.initialize(0)?;
 
     let window = backend.create_window(WindowDesc {
         title: "i3fx — Draw Triangle".to_string(),

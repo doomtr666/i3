@@ -85,13 +85,23 @@ pub struct BackendBuffer(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendPipeline(pub u64);
 
-pub use crate::graph::types::{BufferDesc, ImageDesc};
+pub use crate::graph::types::{BufferDesc, ImageDesc, ResourceUsage};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowDesc {
     pub title: String,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GraphicsPipelineDescDummy {
+    // Renamed to avoid conflict with existing GraphicsPipelineDesc
+    // This is hard to hash/eq genericly. For MVP, we might use name?
+    // Or pointer?
+    // For now, let's assume we don't pool pipelines this way or used differently.
+    // Pipelines are usually cached by hash of state.
+    pub dummy: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +213,13 @@ pub trait RenderBackend {
     fn destroy_image(&mut self, handle: BackendImage);
     fn destroy_buffer(&mut self, handle: BackendBuffer);
 
+    // --- Transient Resource Management (Pooling) ---
+    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage;
+    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
+    fn release_transient_image(&mut self, handle: BackendImage);
+    fn release_transient_buffer(&mut self, handle: BackendBuffer);
+    fn garbage_collect(&mut self);
+
     // --- Frame Control (Internal) ---
 
     /// Acquire the next available image from the swapchain associated with the window.
@@ -238,4 +255,8 @@ pub trait RenderBackend {
         handle: crate::graph::types::ImageHandle,
         physical: BackendImage,
     );
+
+    /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
+    /// Timeout is in nanoseconds.
+    fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String>;
 }

@@ -15,6 +15,7 @@ fn test_null_backend_existence_validation() {
         &backend.allocated_images,
         &backend.allocated_buffers,
         &pipelines,
+        &backend.image_map,
     );
 
     // Valid bind
