@@ -1,6 +1,7 @@
 use ash::vk;
 use ash::vk::Handle;
 use i3_gfx::graph::backend::*;
+use i3_gfx::graph::pipeline::*;
 use i3_gfx::graph::types::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -377,15 +378,8 @@ impl RenderBackend for VulkanBackend {
             depth: desc.depth,
         };
 
-        // Translate format (Simplified mapping)
-        let format = match desc.format {
-            i3_gfx::graph::types::Format::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_UNORM,
-            i3_gfx::graph::types::Format::B8G8R8A8_UNORM => vk::Format::B8G8R8A8_UNORM,
-            i3_gfx::graph::types::Format::B8G8R8A8_SRGB => vk::Format::B8G8R8A8_SRGB,
-            i3_gfx::graph::types::Format::R32_FLOAT => vk::Format::R32_SFLOAT,
-            i3_gfx::graph::types::Format::R32G32B32A32_FLOAT => vk::Format::R32G32B32A32_SFLOAT,
-            i3_gfx::graph::types::Format::D32_FLOAT => vk::Format::D32_SFLOAT,
-        };
+        // Translate format
+        let format = crate::convert::convert_format(desc.format);
 
         // Translate usage
         // We set lots of usage bits for flexibility for now
@@ -687,10 +681,11 @@ impl RenderBackend for VulkanBackend {
         }
     }
 
-    fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineDesc) -> BackendPipeline {
+    fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineCreateInfo) -> BackendPipeline {
         let device = self.get_device().clone();
         let id = self.next_id();
-        info!(name = %desc.name, "Creating Graphics Pipeline");
+        info!("Creating Graphics Pipeline");
+        use crate::convert::*;
 
         // 1. Create Shader Modules
         let mut stages = Vec::new();
@@ -698,13 +693,13 @@ impl RenderBackend for VulkanBackend {
 
         // Create CStrings first to ensure stable pointers
         let entry_points: Vec<std::ffi::CString> = desc
-            .shader
+            .shader_module
             .stages
             .iter()
             .map(|s| std::ffi::CString::new(s.entry_point.as_str()).unwrap())
             .collect();
 
-        for (stage_info, entry_point_cstr) in desc.shader.stages.iter().zip(&entry_points) {
+        for (stage_info, entry_point_cstr) in desc.shader_module.stages.iter().zip(&entry_points) {
             // We need to re-find the bytecode portion?
             // desc.shader.bytecode is the WHOLE binary?
             // Wait, `ShaderModule` has one `bytecode: Vec<u8>`.
@@ -724,8 +719,8 @@ impl RenderBackend for VulkanBackend {
 
             let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
                 std::slice::from_raw_parts(
-                    desc.shader.bytecode.as_ptr() as *const u32,
-                    desc.shader.bytecode.len() / 4,
+                    desc.shader_module.bytecode.as_ptr() as *const u32,
+                    desc.shader_module.bytecode.len() / 4,
                 )
             });
 
@@ -776,7 +771,7 @@ impl RenderBackend for VulkanBackend {
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
         // 4. Depth Stencil
-        let depth_enable = desc.depth_format.is_some();
+        let depth_enable = desc.render_targets.depth_stencil_format.is_some();
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(depth_enable)
             .depth_write_enable(depth_enable)
@@ -811,16 +806,16 @@ impl RenderBackend for VulkanBackend {
 
         // Push Constants from reflection
         let pc_ranges: Vec<vk::PushConstantRange> = desc
-            .shader
+            .shader_module
             .reflection
             .push_constants
             .iter()
-            .map(|pc| {
-                vk::PushConstantRange {
-                    stage_flags: vk::ShaderStageFlags::ALL, // Simplify
-                    offset: pc.offset,
-                    size: pc.size,
-                }
+            .map(|pc| vk::PushConstantRange {
+                stage_flags: convert_shader_stage_flags(ShaderStageFlags::from_bits_truncate(
+                    pc.stage_flags.bits(),
+                )),
+                offset: pc.offset,
+                size: pc.size,
             })
             .collect();
 
@@ -830,14 +825,16 @@ impl RenderBackend for VulkanBackend {
 
         // 6. Dynamic Rendering Info
         let color_formats: Vec<vk::Format> = desc
-            .color_formats
+            .render_targets
+            .color_targets
             .iter()
-            .map(|&f| to_vk_format(f))
+            .map(|t| convert_format(t.format))
             .collect();
 
         let depth_format = desc
-            .depth_format
-            .map(|f| to_vk_format(f))
+            .render_targets
+            .depth_stencil_format
+            .map(|f| convert_format(f))
             .unwrap_or(vk::Format::UNDEFINED);
 
         let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
@@ -1542,17 +1539,6 @@ impl Drop for VulkanBackend {
                 }
             }
         }
-    }
-}
-
-fn to_vk_format(f: Format) -> vk::Format {
-    match f {
-        Format::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_UNORM,
-        Format::B8G8R8A8_UNORM => vk::Format::B8G8R8A8_UNORM,
-        Format::B8G8R8A8_SRGB => vk::Format::B8G8R8A8_SRGB,
-        Format::R32_FLOAT => vk::Format::R32_SFLOAT,
-        Format::R32G32B32A32_FLOAT => vk::Format::R32G32B32A32_SFLOAT,
-        Format::D32_FLOAT => vk::Format::D32_SFLOAT,
     }
 }
 

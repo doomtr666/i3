@@ -58,13 +58,82 @@ pub enum SymbolLifetime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types)]
 pub enum Format {
+    Undefined,
     R8G8B8A8_UNORM,
     B8G8R8A8_UNORM,
     B8G8R8A8_SRGB,
     R32_FLOAT,
     R32G32B32A32_FLOAT,
     D32_FLOAT,
-    // Add others as needed
+    R32_SINT,
+    R32G32_SINT,
+    R32G32B32_SINT,
+    R32G32B32A32_SINT,
+    R32_UINT,
+    R32G32_UINT,
+    R32G32B32_UINT,
+    R32G32B32A32_UINT,
+    R32_SFLOAT,
+    R32G32_SFLOAT,
+    R32G32B32_SFLOAT,
+    R32G32B32A32_SFLOAT,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageType {
+    Type1D,
+    Type2D,
+    Type3D,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageViewType {
+    Type1D,
+    Type2D,
+    Type3D,
+    TypeCube,
+    Type1DArray,
+    Type2DArray,
+    TypeCubeArray,
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct ImageUsageFlags: u32 {
+        const TRANSFER_SRC = 0x1;
+        const TRANSFER_DST = 0x2;
+        const SAMPLED = 0x4;
+        const STORAGE = 0x8;
+        const COLOR_ATTACHMENT = 0x10;
+        const DEPTH_STENCIL_ATTACHMENT = 0x20;
+        const TRANSIENT_ATTACHMENT = 0x40;
+        const INPUT_ATTACHMENT = 0x80;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct ImageAspectFlags: u32 {
+        const Color = 0x1;
+        const Depth = 0x2;
+        const Stencil = 0x4;
+        const Metadata = 0x8;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct BufferUsageFlags: u32 {
+        const TRANSFER_SRC = 0x1;
+        const TRANSFER_DST = 0x2;
+        const UNIFORM_TEXEL_BUFFER = 0x4;
+        const STORAGE_TEXEL_BUFFER = 0x8;
+        const UNIFORM_BUFFER = 0x10;
+        const STORAGE_BUFFER = 0x20;
+        const INDEX_BUFFER = 0x40;
+        const VERTEX_BUFFER = 0x80;
+        const INDIRECT_BUFFER = 0x100;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,6 +144,7 @@ pub struct ImageDesc {
     pub format: Format,
     pub mip_levels: u32,
     pub array_layers: u32,
+    pub usage: ImageUsageFlags,
 }
 
 impl ImageDesc {
@@ -86,6 +156,9 @@ impl ImageDesc {
             format,
             mip_levels: 1,
             array_layers: 1,
+            usage: ImageUsageFlags::SAMPLED
+                | ImageUsageFlags::TRANSFER_DST
+                | ImageUsageFlags::COLOR_ATTACHMENT, // Default usage
         }
     }
 }
@@ -93,6 +166,7 @@ impl ImageDesc {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferDesc {
     pub size: u64,
+    pub usage: BufferUsageFlags,
 }
 
 impl ImageHandle {
@@ -132,6 +206,49 @@ bitflags! {
         const TRANSFER_READ = 1 << 6;
         const TRANSFER_WRITE = 1 << 7;
     }
+}
+
+pub use crate::graph::pipeline::SampleCount; // Re-export if needed or redefine? 
+// SampleCount is in pipeline.rs. I should probably move it here if it's used in ImageDesc?
+// It's not in ImageDesc currently.
+// types.rs had SampleCount commented out/missing in my view?
+// No, I will import it in convert.rs from pipeline.rs.
+// But wait, convert.rs imports `SampleCount` from `types`?
+// In Step 7864: `use i3_gfx::graph::types::{..., SampleCount, ...};`
+// So I MUST put SampleCount here or change convert.rs.
+// It is better placed in pipeline.rs (MultisampleState).
+// I will change verify convert.rs imports later.
+
+// Added missing Enums for Sampler/ImageView
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AddressMode {
+    Repeat,
+    MirroredRepeat,
+    ClampToEdge,
+    ClampToBorder,
+    MirrorClampToEdge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Filter {
+    Nearest,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MipmapMode {
+    Nearest,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BorderColor {
+    FloatTransparentBlack,
+    IntTransparentBlack,
+    FloatOpaqueBlack,
+    IntOpaqueBlack,
+    FloatOpaqueWhite,
+    IntOpaqueWhite,
 }
 
 #[cfg(test)]

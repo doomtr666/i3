@@ -8,11 +8,21 @@
 //! ```
 
 pub use crate::graph::{
-    backend::{GraphicsPipelineDesc, PassContext, RenderBackend},
+    backend::{
+        DeviceInfo, DeviceType, Event, PassContext, RenderBackend, SwapchainConfig, WindowDesc,
+    },
     compiler::{CompiledGraph, FrameGraph},
     pass::{Node, PassBuilder},
+    pipeline::{
+        Binding, BindingType, BlendFactor, BlendOp, BlendState, BufferUsageFlags,
+        ColorComponentFlags, CompareOp, CullMode, DepthStencilState, FrontFace,
+        GraphicsPipelineCreateInfo, MultisampleState, PolygonMode, PrimitiveTopology,
+        PushConstantRange, RasterizationState, RenderTargetInfo, RenderTargetsInfo, ShaderModule,
+        ShaderReflection, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat,
+        VertexInputRate,
+    },
     types::{
-        BufferDesc, BufferHandle, ImageDesc, ImageHandle, PassDomain, PipelineHandle,
+        BufferDesc, BufferHandle, Format, ImageDesc, ImageHandle, PassDomain, PipelineHandle,
         ResourceUsage, SwapChainImageHandle, SymbolId, WindowHandle,
     },
 };

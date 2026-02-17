@@ -1,78 +1,3 @@
-use bitflags::bitflags;
-
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct ShaderStageFlags: u32 {
-        const Vertex = 1 << 0;
-        const Fragment = 1 << 1;
-        const Compute = 1 << 2;
-        const Geometry = 1 << 3;
-        const All = Self::Vertex.bits() | Self::Fragment.bits() | Self::Compute.bits() | Self::Geometry.bits();
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BindingType {
-    Unknown,
-    UniformBuffer,
-    StorageBuffer,
-    Texture,
-    StorageTexture,
-    Sampler,
-    CombinedImageSampler,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Binding {
-    pub name: String,
-    pub binding: u32,
-    pub set: u32,
-    pub count: u32,
-    pub binding_type: BindingType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryPointInfo {
-    pub name: String,
-    pub stage: String, // "vertex", "fragment", etc.
-    pub thread_group_size: Option<[u64; 3]>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PushConstantRange {
-    pub stage_flags: ShaderStageFlags,
-    pub offset: u32,
-    pub size: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShaderReflection {
-    pub entry_points: Vec<EntryPointInfo>,
-    pub bindings: Vec<Binding>,
-    pub push_constants: Vec<PushConstantRange>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShaderStageInfo {
-    pub stage: ShaderStageFlags,
-    pub entry_point: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShaderModule {
-    pub bytecode: Vec<u8>,
-    pub stages: Vec<ShaderStageInfo>,
-    pub reflection: ShaderReflection,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GraphicsPipelineDesc {
-    pub shader: ShaderModule,
-    pub name: String,
-    pub color_formats: Vec<crate::graph::types::Format>,
-    pub depth_format: Option<crate::graph::types::Format>,
-}
-
 /// Handle representing a physically allocated image in the backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendImage(pub u64);
@@ -208,7 +133,10 @@ pub trait RenderBackend {
     // --- Resource Management ---
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage;
     fn create_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
-    fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineDesc) -> BackendPipeline;
+    fn create_graphics_pipeline(
+        &mut self,
+        desc: &crate::graph::pipeline::GraphicsPipelineCreateInfo,
+    ) -> BackendPipeline;
 
     fn destroy_image(&mut self, handle: BackendImage);
     fn destroy_buffer(&mut self, handle: BackendBuffer);

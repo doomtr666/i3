@@ -86,13 +86,14 @@ impl RenderBackend for NullBackend {
 
     fn create_graphics_pipeline(
         &mut self,
-        desc: &i3_gfx::graph::backend::GraphicsPipelineDesc,
+        _desc: &i3_gfx::graph::pipeline::GraphicsPipelineCreateInfo,
     ) -> i3_gfx::graph::backend::BackendPipeline {
         let h = self.next_handle();
         self.allocated_pipelines.insert(h);
-        info!(handle = h, name = %desc.name, "Created Graphics Pipeline");
-        let _ = desc.depth_format; // Ignore
-        let _ = desc.color_formats; // Ignore
+        // info!(handle = h, name = %desc.name, "Created Graphics Pipeline"); // Name is not in CreateInfo anymore?
+        // CreateInfo doesn't have a name field. It's in the descriptor setup usually or debug info.
+        // For now, just log creation.
+        info!(handle = h, "Created Graphics Pipeline");
         i3_gfx::graph::backend::BackendPipeline(h)
     }
 

@@ -1,6 +1,4 @@
 use examples_common::{ExampleApp, init_tracing, main_loop};
-use i3_gfx::backend::*;
-use i3_gfx::graph::types::Format;
 use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
 use std::time::Duration;
@@ -119,11 +117,16 @@ fn main() -> Result<(), String> {
     )?;
 
     // 3. Create Pipeline
-    let pipeline_handle = backend.create_graphics_pipeline(&GraphicsPipelineDesc {
-        shader,
-        name: "Triangle Pipeline".to_string(),
-        color_formats: vec![Format::B8G8R8A8_SRGB], // Match srgb: true
-        depth_format: None,
+    let pipeline_handle = backend.create_graphics_pipeline(&GraphicsPipelineCreateInfo {
+        shader_module: shader,
+        render_targets: RenderTargetsInfo {
+            color_targets: vec![RenderTargetInfo {
+                format: Format::B8G8R8A8_SRGB,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
     });
     let pipeline_id = SymbolId(pipeline_handle.0);
 

@@ -3,18 +3,20 @@
 // This crate provides a clean, ergonomic wrapper around the Slang shader compiler
 // for use in the i3_gfx rendering framework.
 
+use i3_gfx::graph::pipeline::ShaderStageFlags;
 use shader_slang as slang;
 
 // Re-export types from i3_gfx for convenience
-pub use i3_gfx::backend::{
+// Re-export types from i3_gfx for convenience
+pub use i3_gfx::graph::pipeline::{
     Binding, BindingType, EntryPointInfo, PushConstantRange, ShaderModule, ShaderReflection,
-    ShaderStageFlags, ShaderStageInfo,
+    ShaderStageInfo,
 };
 
 pub mod prelude {
     pub use crate::{
         Binding, BindingType, EntryPointInfo, PushConstantRange, ShaderModule, ShaderReflection,
-        ShaderStageFlags, ShaderStageInfo, ShaderTarget, SlangCompiler,
+        ShaderStageInfo, ShaderTarget, SlangCompiler,
     };
 }
 

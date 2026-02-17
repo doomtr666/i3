@@ -195,6 +195,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                     format: Format::B8G8R8A8_SRGB, // Force SRGB logic match
                     mip_levels: 1,
                     array_layers: 1,
+                    usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::TRANSFER_DST,
                 }),
                 lifetime: SymbolLifetime::External,
                 data: None,
