@@ -323,7 +323,7 @@ impl SlangCompiler {
         // Configure compiler options
         let session_options = slang::CompilerOptions::default()
             .optimization(slang::OptimizationLevel::High)
-            .matrix_layout_row(true);
+            .matrix_layout_column(true);
 
         // Configure target
         let target_desc = slang::TargetDesc::default()
@@ -441,7 +441,7 @@ impl SlangCompiler {
         // Configure compiler options
         let session_options = slang::CompilerOptions::default()
             .optimization(slang::OptimizationLevel::High)
-            .matrix_layout_row(true);
+            .matrix_layout_column(true);
 
         // Configure target
         let target_desc = slang::TargetDesc::default()

@@ -118,8 +118,8 @@ impl ExampleApp for SynthwaveApp {
 
         // GLM matrices are Column-Major.
         // Proj * View is correct order for Column-Major P * V * v
-        // Force Transpose to see if Shader expects Row-Major or if nalgebra layout differs
-        let view_proj = (proj * view).transpose();
+        // Shader now explicitly expects column_major, so no transpose needed.
+        let view_proj = proj * view;
 
         let uniforms = Uniforms {
             view_proj,
