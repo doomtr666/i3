@@ -167,8 +167,8 @@ impl RenderBackend for NullBackend {
     fn submit(
         &mut self,
         _batch: i3_gfx::graph::backend::CommandBatch,
-        _wait_sems: Vec<u64>,
-        _signal_sems: Vec<u64>,
+        _wait_sems: &[u64],
+        _signal_sems: &[u64],
     ) -> Result<u64, String> {
         Ok(0)
     }

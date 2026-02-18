@@ -78,26 +78,13 @@ pub struct CommandBatch {
 use crate::graph::types::{BufferHandle, ImageHandle, PipelineHandle};
 
 #[derive(Debug, Clone)]
-pub struct PassDescriptor {
-    pub name: String,
+pub struct PassDescriptor<'a> {
+    pub name: &'a str,
     pub pipeline: Option<PipelineHandle>,
-    pub image_reads: Vec<ImageHandle>,
-    pub image_writes: Vec<ImageHandle>,
-    pub buffer_reads: Vec<BufferHandle>,
-    pub buffer_writes: Vec<BufferHandle>,
-}
-
-impl Default for PassDescriptor {
-    fn default() -> Self {
-        Self {
-            name: "UnnamedPass".to_string(),
-            pipeline: None,
-            image_reads: Vec::new(),
-            image_writes: Vec::new(),
-            buffer_reads: Vec::new(),
-            buffer_writes: Vec::new(),
-        }
-    }
+    pub image_reads: &'a [(ImageHandle, ResourceUsage)],
+    pub image_writes: &'a [(ImageHandle, ResourceUsage)],
+    pub buffer_reads: &'a [(BufferHandle, ResourceUsage)],
+    pub buffer_writes: &'a [(BufferHandle, ResourceUsage)],
 }
 
 /// Hardware-specific context used to record commands during a pass.
@@ -198,8 +185,8 @@ pub trait RenderBackend {
     fn submit(
         &mut self,
         batch: CommandBatch,
-        wait_sems: Vec<u64>,
-        signal_sems: Vec<u64>,
+        wait_sems: &[u64],
+        signal_sems: &[u64],
     ) -> Result<u64, String>;
 
     fn begin_pass(

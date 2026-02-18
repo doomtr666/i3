@@ -128,6 +128,9 @@ pub struct VulkanBackend {
     // Loaders
     swapchain_loader: Option<ash::khr::swapchain::Device>,
 
+    // Scratch Buffers for hot path
+    target_id_scratch: Vec<u64>,
+
     // Global Frame Contexts
     frame_contexts: Vec<VulkanFrameContext>,
     frame_started: bool,
@@ -183,6 +186,7 @@ impl VulkanBackend {
             cpu_timeline: 0,
             frame_contexts: Vec::new(),
             swapchain_loader: None,
+            target_id_scratch: Vec::with_capacity(8),
             frame_started: false,
             global_frame_index: 0,
         })
@@ -1279,8 +1283,8 @@ impl RenderBackend for VulkanBackend {
     fn submit(
         &mut self,
         _batch: CommandBatch,
-        _wait_sems: Vec<u64>,
-        _signal_sems: Vec<u64>,
+        _wait_sems: &[u64],
+        _signal_sems: &[u64],
     ) -> Result<u64, String> {
         // Timeline advancement
         self.cpu_timeline += 1;
@@ -1374,38 +1378,36 @@ impl RenderBackend for VulkanBackend {
 
     fn begin_pass(
         &mut self,
-        desc: PassDescriptor,
+        desc: PassDescriptor<'_>,
         f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
     ) -> u64 {
         let device = self.get_device().clone();
 
-        // 1. Identify Target Window & Extent (for Viewport/Pool)
-        let mut viewport_extent = vk::Extent2D {
-            width: 800,
-            height: 600,
-        }; // Fallback
-
-        // Resolve target physical IDs from writes
-        let mut target_ids = Vec::new();
-        for handle in &desc.image_writes {
+        // Resolve target physical IDs from writes (Using scratch)
+        self.target_id_scratch.clear();
+        for (handle, _) in desc.image_writes {
             let pid = if let Some(&p) = self.external_to_physical.get(&handle.0.0) {
                 p
             } else {
                 handle.0.0
             };
-            target_ids.push(pid);
+            self.target_id_scratch.push(pid);
         }
 
-        // Try to find extent and window from first write
-        if let Some(&first_pid) = target_ids.first() {
+        // Identify Target Window & Extent (for Viewport/Pool)
+        let mut viewport_extent = vk::Extent2D {
+            width: 800,
+            height: 600,
+        }; // Fallback
+
+        if let Some(&first_pid) = self.target_id_scratch.first() {
             if let Some(d) = self.image_descs.get(&first_pid) {
                 viewport_extent = vk::Extent2D {
                     width: d.width,
                     height: d.height,
                 };
             }
-
-            // Check if this physical ID belongs to any swapchain
+            // Fast window lookup
             for ctx_win in self.windows.values() {
                 if let (Some(sc), Some(idx)) = (&ctx_win.swapchain, ctx_win.current_image_index) {
                     if sc.images[idx as usize].as_raw() == first_pid {
@@ -1485,10 +1487,11 @@ impl RenderBackend for VulkanBackend {
         // We can look them up in `self.image_handle_map`.
 
         // Resolve attachments and synchronization
-        let mut color_attachments = Vec::new();
+        let mut color_attachments = [vk::RenderingAttachmentInfo::default(); 8];
+        let mut color_count = 0;
         let mut depth_attachment_info = None;
 
-        for &handle in &desc.image_writes {
+        for (handle, _) in desc.image_writes {
             // 1. Resolve to Physical ID
             let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
                 phy
@@ -1521,7 +1524,7 @@ impl RenderBackend for VulkanBackend {
                 };
 
                 // 4. Setup Attachment Info
-                let attachment_info = vk::RenderingAttachmentInfo::default()
+                let attachment = vk::RenderingAttachmentInfo::default()
                     .image_view(view)
                     .image_layout(if format == vk::Format::D32_SFLOAT {
                         vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
@@ -1533,9 +1536,10 @@ impl RenderBackend for VulkanBackend {
                     .clear_value(clear_value);
 
                 if format == vk::Format::D32_SFLOAT {
-                    depth_attachment_info = Some(attachment_info);
-                } else {
-                    color_attachments.push(attachment_info);
+                    depth_attachment_info = Some(attachment);
+                } else if color_count < 8 {
+                    color_attachments[color_count] = attachment;
+                    color_count += 1;
                 }
 
                 // IMAGE BARRIER: Transition Undefined/Present -> Attachment
@@ -1592,7 +1596,7 @@ impl RenderBackend for VulkanBackend {
         }
 
         // Layout Transitions for Reads
-        for handle in &desc.image_reads {
+        for (handle, _) in desc.image_reads {
             let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
                 phy
             } else {
@@ -1634,7 +1638,7 @@ impl RenderBackend for VulkanBackend {
                 extent: viewport_extent,
             })
             .layer_count(1)
-            .color_attachments(&color_attachments);
+            .color_attachments(&color_attachments[..color_count]);
 
         if let Some(depth) = &depth_attachment_info {
             rendering_info = rendering_info.depth_attachment(depth);

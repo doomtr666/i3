@@ -323,11 +323,9 @@ impl CompiledGraph {
         let result = Self::execute_node_recursive(self._root, backend, &mut inactive_images);
 
         // Final Submission (Phase 0: pure submission of recorded commands)
-        let _ = backend.submit(
-            crate::graph::backend::CommandBatch::default(),
-            vec![],
-            vec![],
-        );
+        let _ = backend
+            .submit(crate::graph::backend::CommandBatch::default(), &[], &[])
+            .map_err(|e| e.to_string())?;
 
         backend.end_frame();
 
@@ -425,12 +423,12 @@ impl CompiledGraph {
 
             if !is_inactive {
                 let desc = PassDescriptor {
-                    name: node.name,
+                    name: &node.name,
                     pipeline: node.pipeline,
-                    image_reads: node.image_reads.iter().map(|(h, _)| *h).collect(),
-                    image_writes: node.image_writes.iter().map(|(h, _)| *h).collect(),
-                    buffer_reads: node.buffer_reads.iter().map(|(h, _)| *h).collect(),
-                    buffer_writes: node.buffer_writes.iter().map(|(h, _)| *h).collect(),
+                    image_reads: &node.image_reads,
+                    image_writes: &node.image_writes,
+                    buffer_reads: &node.buffer_reads,
+                    buffer_writes: &node.buffer_writes,
                 };
                 tracing::debug!(pass = %desc.name, writes = ?desc.image_writes.len(), "Executing pass");
                 last_sem = Some(backend.begin_pass(desc, execute));
