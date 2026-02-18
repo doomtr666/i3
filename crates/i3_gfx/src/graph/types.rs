@@ -250,6 +250,29 @@ pub enum MipmapMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SamplerDesc {
+    pub mag_filter: Filter,
+    pub min_filter: Filter,
+    pub mipmap_mode: MipmapMode,
+    pub address_mode_u: AddressMode,
+    pub address_mode_v: AddressMode,
+    pub address_mode_w: AddressMode,
+}
+
+impl Default for SamplerDesc {
+    fn default() -> Self {
+        Self {
+            mag_filter: Filter::Linear,
+            min_filter: Filter::Linear,
+            mipmap_mode: MipmapMode::Linear,
+            address_mode_u: AddressMode::Repeat,
+            address_mode_v: AddressMode::Repeat,
+            address_mode_w: AddressMode::Repeat,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BorderColor {
     FloatTransparentBlack,
     IntTransparentBlack,

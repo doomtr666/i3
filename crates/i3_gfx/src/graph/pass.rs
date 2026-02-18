@@ -62,6 +62,7 @@ impl<'a> PassBuilder<'a> {
     ) {
         self.inner.register_external_image(handle, physical);
     }
+
     // --- Tree Construction ---
     /// Adds a sub-node to the current node.
     pub fn add_node<F, E>(&mut self, name: &str, setup: F)

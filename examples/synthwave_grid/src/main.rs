@@ -24,6 +24,14 @@ struct Uniforms {
     padding: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct PostUniforms {
+    time: f32,
+    resolution: [f32; 2],
+    padding: f32,
+}
+
 struct SynthwaveApp {
     backend: VulkanBackend,
     window: WindowHandle,
@@ -32,74 +40,21 @@ struct SynthwaveApp {
     index_buffer: BackendBuffer,
     uniform_buffer: BackendBuffer,
     set_handle: DescriptorSetHandle,
+
+    // PostFX Resources
+    post_pipeline: PipelineHandle,
+    post_set: DescriptorSetHandle,
+    scene_color: ImageHandle,
+    #[allow(dead_code)]
+    scene_sampler: SamplerHandle,
+    post_uniform_buffer: BackendBuffer,
+
     start_time: std::time::Instant,
 }
 
 impl ExampleApp for SynthwaveApp {
     fn update(&mut self, _delta: Duration) {
         let time = self.start_time.elapsed().as_secs_f32();
-
-        // View Matrix (Camera at 0, 10, 50 looking at 0, 0, 0)
-        // Simple LookAt for static camera
-        // Right: (1, 0, 0)
-        // Up: (0, 1, 0)
-        // Forward: (0, 0, -1) (Looking down -Z)
-        // Eye: (0, 10, 50)
-        // View = Translate(-Eye) * Rotate(Identity for now, maybe title it down?)
-
-        // Let's use a Orbit Camera logic or just fixed for now.
-        // To see the grid from above/angle:
-        // Position: (0, 20, 20)
-        // Target: (0, 0, -20)
-        // Up: (0, 1, 0)
-
-        // Manual LookAt:
-        // zaxis = normalize(eye - target)
-        // xaxis = normalize(cross(up, zaxis))
-        // yaxis = cross(zaxis, xaxis)
-        // [ xaxis.x  xaxis.y  xaxis.z  -dot(xaxis, eye) ]
-        // [ yaxis.x  yaxis.y  yaxis.z  -dot(yaxis, eye) ]
-        // [ zaxis.x  zaxis.y  zaxis.z  -dot(zaxis, eye) ]
-        // [ 0        0        0        1                ]
-
-        // Hardcoding a simple camera for now:
-        // Eye: (0, 10, 40)
-        // Target: (0, 0, 0)
-        // Up: (0, 1, 0)
-
-        // Z (Forward) = (0, 10, 40) - (0,0,0) = (0, 10, 40) -> Normalized: (0, 0.24, 0.97)
-        // X (Right) = (0, 1, 0) x Z = (1, 0, 0) NO wait. Cross up z.
-        // Z is pointing TOWARDS viewer.
-        // eye - target = vector from target to eye. Correct.
-        // Z = (0, 10, 40). Length = sqrt(100 + 1600) = sqrt(1700) = 41.23
-        // Z = (0, 0.242, 0.970)
-
-        // X = Up x Z = (0, 1, 0) x (0, 0.242, 0.970) = (1*0.970 - 0*0.242, 0, 0) = (0.97? NO).
-        // (0, 1, 0) x (0, y, z) = (z, 0, 0).
-        // X = (0.970, 0, 0). Normalized -> (1, 0, 0).
-
-        // Y = Z x X = (0, 0.242, 0.970) x (1, 0, 0) = (0, 0.970, -0.242).
-
-        // Matrix:
-        // 1 0 0 -Px
-        // 0 0.970 0.242 -Py
-        // 0 -0.242 0.970 -Pz
-        // 0 0 0 1
-
-        // Let's just use a fixed view matrix that looks slightly down.
-        // Eye (0, 20, 40), looking at (0, 0, -10).
-
-        // Projection (Perspective):
-        // FovY = 45 deg = 0.785 rad.
-        // Aspect = 1280/720 = 1.777.
-        // Near = 0.1, Far = 1000.0.
-        // f = 1.0 / tan(fov/2) = 1.0 / 0.414 = 2.414.
-        // matrix:
-        // f/aspect, 0, 0, 0
-        // 0, -f, 0, 0  (Flip Y for Vulkan)
-        // 0, 0, far/(near-far), -1
-        // 0, 0, near*far/(near-far), 0
-
         let aspect = 1280.0 / 720.0;
         let near = 0.1f32;
         let far = 1000.0f32;
@@ -133,6 +88,20 @@ impl ExampleApp for SynthwaveApp {
         self.backend
             .upload_buffer(self.uniform_buffer, data_slice, 0)
             .unwrap();
+
+        // Update Post Uniforms
+        let post_uniforms = PostUniforms {
+            time,
+            resolution: [1280.0, 720.0],
+            padding: 0.0,
+        };
+        let post_data_ptr = &post_uniforms as *const PostUniforms as *const u8;
+        let post_data_slice = unsafe {
+            std::slice::from_raw_parts(post_data_ptr, std::mem::size_of::<PostUniforms>())
+        };
+        self.backend
+            .upload_buffer(self.post_uniform_buffer, post_data_slice, 0)
+            .unwrap();
     }
 
     fn render(&mut self) {
@@ -143,10 +112,23 @@ impl ExampleApp for SynthwaveApp {
         let ib = self.index_buffer;
         let set = self.set_handle;
 
+        // PostFX captures
+        let post_pipeline = self.post_pipeline;
+        let post_set = self.post_set;
+        let scene_color = self.scene_color;
+        // scene_sampler implicitly used in set
+        // Actually we need to declare usage of scene_color in the second pass for Barriers!
+
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
 
-            // Create Depth Buffer (Transient)
+            // We use our registered external image logic for scene_color
+            // But builder.import_image would be nice.
+            // Since we used register_external_image, the backend knows it.
+            // But the graph needs to know it to schedule barriers.
+            // We can just use the handle we created "scene_color".
+
+            // Create Depth Buffer (Transient) - Still needed for Grid
             let depth_desc = ImageDesc {
                 width: 1280,
                 height: 720,
@@ -158,9 +140,10 @@ impl ExampleApp for SynthwaveApp {
             };
             let depth_img = builder.declare_image("DepthBuffer", depth_desc);
 
-            builder.add_node("MainPass", move |sub| {
+            // Pass 1: Grid -> Scene Color
+            builder.add_node("GridPass", move |sub| {
                 sub.bind_pipeline(pipeline);
-                sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+                sub.write_image(scene_color, ResourceUsage::COLOR_ATTACHMENT);
                 sub.write_image(depth_img, ResourceUsage::DEPTH_STENCIL);
 
                 move |ctx| {
@@ -169,7 +152,19 @@ impl ExampleApp for SynthwaveApp {
                     ctx.bind_descriptor_set(0, set);
 
                     ctx.draw_indexed(6, 0, 0);
-                    ctx.present(backbuffer);
+                }
+            });
+
+            // Pass 2: PostFX (Scene -> Backbuffer)
+            builder.add_node("PostPass", move |sub| {
+                sub.bind_pipeline(post_pipeline);
+                sub.read_image(scene_color, ResourceUsage::SHADER_READ);
+                sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+
+                move |ctx| {
+                    ctx.bind_descriptor_set(0, post_set);
+                    ctx.draw(3, 0); // Fullscreen triangle (3 vertices)
+                    ctx.present(backbuffer); // Present happens after this pass
                 }
             });
         });
@@ -179,7 +174,6 @@ impl ExampleApp for SynthwaveApp {
             warn!("Graph execution failed: {}", e);
         }
     }
-
     fn poll_events(&mut self) -> Vec<Event> {
         self.backend.poll_events()
     }
@@ -254,15 +248,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let uniform_buffer = backend.create_buffer(&ub_desc);
 
-    // 4. Compile Shader
+    // Post Uniform Buffer
+    let pub_desc = BufferDesc {
+        size: std::mem::size_of::<PostUniforms>() as u64,
+        usage: BufferUsageFlags::UNIFORM_BUFFER | BufferUsageFlags::TRANSFER_DST,
+        memory: MemoryType::CpuToGpu,
+    };
+    let post_uniform_buffer = backend.create_buffer(&pub_desc);
+
+    // Scene Color & Sampler
+    let scene_desc = ImageDesc {
+        width: 1280,
+        height: 720,
+        depth: 1,
+        format: Format::B8G8R8A8_SRGB,
+        mip_levels: 1,
+        array_layers: 1,
+        usage: ImageUsageFlags::COLOR_ATTACHMENT
+            | ImageUsageFlags::SAMPLED
+            | ImageUsageFlags::TRANSFER_SRC,
+    };
+    let scene_physical = backend.create_image(&scene_desc);
+    let scene_color = ImageHandle(SymbolId(10000)); // Persistent Handle
+    backend.register_external_image(scene_color, scene_physical);
+
+    let sampler_desc = SamplerDesc::default();
+    let scene_sampler = backend.create_sampler(&sampler_desc);
+
+    // 4. Compile Shaders
     let slang = SlangCompiler::new()?;
     let shader_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
-    let shader =
+    let grid_shader =
         slang.compile_file("grid", ShaderTarget::Spirv, &[shader_dir.to_str().unwrap()])?;
+    let crt_shader =
+        slang.compile_file("crt", ShaderTarget::Spirv, &[shader_dir.to_str().unwrap()])?;
 
-    // 5. Create Pipeline
-    let pipeline_info = GraphicsPipelineCreateInfo {
-        shader_module: shader,
+    // 5. Create Pipelines
+    // Grid Pipeline
+    let grid_pipeline_info = GraphicsPipelineCreateInfo {
+        shader_module: grid_shader,
         vertex_input: VertexInputState {
             bindings: vec![VertexInputBinding {
                 binding: 0,
@@ -280,13 +304,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     location: 1,
                     binding: 0,
                     format: VertexFormat::Float2,
-                    offset: 12, // size of float3
+                    offset: 12,
                 },
             ],
         },
         render_targets: RenderTargetsInfo {
             color_targets: vec![RenderTargetInfo {
-                format: Format::B8G8R8A8_SRGB,
+                format: Format::B8G8R8A8_SRGB, // SceneColor
                 ..Default::default()
             }],
             depth_stencil_format: Some(Format::D32_FLOAT),
@@ -301,10 +325,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         ..Default::default()
     };
-    let backend_pipeline = backend.create_graphics_pipeline(&pipeline_info);
-    let pipeline = PipelineHandle(SymbolId(backend_pipeline.0));
+    let backend_grid = backend.create_graphics_pipeline(&grid_pipeline_info);
+    let pipeline = PipelineHandle(SymbolId(backend_grid.0));
 
-    // 6. Descriptor Set
+    // CRT Pipeline
+    let crt_pipeline_info = GraphicsPipelineCreateInfo {
+        shader_module: crt_shader,
+        vertex_input: VertexInputState::default(),
+        render_targets: RenderTargetsInfo {
+            color_targets: vec![RenderTargetInfo {
+                format: Format::B8G8R8A8_SRGB, // Backbuffer
+                ..Default::default()
+            }],
+            depth_stencil_format: None,
+        },
+        rasterization_state: RasterizationState {
+            cull_mode: CullMode::None,
+            front_face: FrontFace::CounterClockwise,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let backend_crt = backend.create_graphics_pipeline(&crt_pipeline_info);
+    let post_pipeline = PipelineHandle(SymbolId(backend_crt.0));
+
+    // 6. Descriptor Sets
     let set_handle = backend.allocate_descriptor_set(pipeline, 0)?;
     backend.update_descriptor_set(
         set_handle,
@@ -321,6 +366,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }],
     );
 
+    let post_set = backend.allocate_descriptor_set(post_pipeline, 0)?;
+    backend.update_descriptor_set(
+        post_set,
+        &[
+            DescriptorWrite {
+                binding: 0,
+                array_element: 0,
+                descriptor_type: BindingType::UniformBuffer,
+                buffer_info: Some(DescriptorBufferInfo {
+                    buffer: BufferHandle(SymbolId(post_uniform_buffer.0)),
+                    offset: 0,
+                    range: std::mem::size_of::<PostUniforms>() as u64,
+                }),
+                image_info: None,
+            },
+            DescriptorWrite {
+                binding: 1,
+                array_element: 0,
+                descriptor_type: BindingType::CombinedImageSampler,
+                buffer_info: None,
+                image_info: Some(DescriptorImageInfo {
+                    image: scene_color,
+                    image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
+                    sampler: Some(scene_sampler),
+                }),
+            },
+        ],
+    );
+
     // 7. Run
     let app = SynthwaveApp {
         backend,
@@ -330,6 +404,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         index_buffer,
         uniform_buffer,
         set_handle,
+
+        post_pipeline,
+        post_set,
+        scene_color,
+        scene_sampler,
+        post_uniform_buffer,
+
         start_time: std::time::Instant::now(),
     };
     main_loop(app);

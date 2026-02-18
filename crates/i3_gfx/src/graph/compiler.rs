@@ -317,7 +317,17 @@ impl CompiledGraph {
         );
 
         // 2. Execution
+        backend.begin_frame();
         let result = Self::execute_node_recursive(self._root, backend);
+
+        // Final Submission (Phase 0: pure submission of recorded commands)
+        let _ = backend.submit(
+            crate::graph::backend::CommandBatch::default(),
+            vec![],
+            vec![],
+        );
+
+        backend.end_frame();
 
         // 3. Cleanup Transient Resources
         for image in transient_images {

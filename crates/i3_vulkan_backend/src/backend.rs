@@ -29,6 +29,14 @@ struct PooledBuffer {
 
 // ...
 
+struct VulkanFrameContext {
+    command_pool: vk::CommandPool,
+    allocated_command_buffers: Vec<vk::CommandBuffer>,
+    cursor: usize,
+    submitted_cursor: usize,
+    last_completion_value: u64,
+}
+
 struct WindowContext {
     // Order matters for drop: swapchain must be dropped BEFORE raw (surface)
     swapchain: Option<crate::swapchain::VulkanSwapchain>,
@@ -39,18 +47,6 @@ struct WindowContext {
     // Track the current frame's acquire semaphore to pair it with the image
     current_acquire_sem: Option<vk::Semaphore>,
     current_image_index: Option<u32>,
-    // Frame Synchronization
-    // Frame Synchronization (Timeline Values)
-    // We track the last submitted timeline value for each frame slot.
-    // When acquiring frame i, we wait for timeline to reach submitted_values[i].
-    submitted_values: Vec<u64>,
-    frame_index: usize, // 0..min_image
-    // Command Pools for recycling
-    command_pools: Vec<vk::CommandPool>,
-    // Command Buffers (One list per frame-in-flight)
-    allocated_command_buffers: Vec<Vec<vk::CommandBuffer>>,
-    // Cursor for next available buffer in current frame
-    command_buffer_cursors: Vec<usize>,
 }
 
 pub struct VulkanBackend {
@@ -88,6 +84,7 @@ pub struct VulkanBackend {
     pub recycled_semaphores: Vec<vk::Semaphore>,
     pub image_allocations: HashMap<u64, vk_mem::Allocation>,
     pub external_to_physical: HashMap<u64, u64>, // Virtual ID -> Physical ID
+    pub image_formats: HashMap<u64, vk::Format>,
 
     // Transient Pools
     transient_image_pool: HashMap<ImageDesc, Vec<PooledImage>>,
@@ -100,6 +97,8 @@ pub struct VulkanBackend {
     pub buffer_map: HashMap<u64, vk::Buffer>,
     pub buffer_allocations: HashMap<u64, vk_mem::Allocation>,
 
+    pub image_descs: HashMap<u64, ImageDesc>,
+
     pipeline_map: HashMap<u64, vk::Pipeline>,
 
     // Reverse map for swapchain images
@@ -108,6 +107,11 @@ pub struct VulkanBackend {
     // Or just search. Searching is fine for small number of windows.
 
     // Semaphore management (Timeline & Binary)
+    // ...
+
+    // Samplers
+    pub samplers: HashMap<u64, vk::Sampler>,
+    pub dead_samplers: Vec<(u64, vk::Sampler)>, // Frame, Handle
     pub semaphores: HashMap<u64, vk::Semaphore>,
     pub timeline_sem: vk::Semaphore, // Global timeline for graphics queue
     pub cpu_timeline: u64,           // Current CPU submission value
@@ -118,6 +122,11 @@ pub struct VulkanBackend {
     pub descriptor_sets: HashMap<u64, vk::DescriptorSet>,
     pub pipeline_layout_map: HashMap<u64, vk::PipelineLayout>,
     pub next_resource_id: u64,
+
+    // Global Frame Contexts
+    frame_contexts: Vec<VulkanFrameContext>,
+    frame_started: bool,
+    global_frame_index: usize,
 }
 
 impl VulkanBackend {
@@ -140,16 +149,20 @@ impl VulkanBackend {
             image_map: HashMap::new(),
             image_views: HashMap::new(),
             image_allocations: HashMap::new(),
+            image_formats: HashMap::new(),
+            image_descs: HashMap::new(),
             external_to_physical: HashMap::new(),
             buffer_map: HashMap::new(),
             buffer_allocations: HashMap::new(),
             pipeline_map: HashMap::new(),
             semaphores: HashMap::new(),
+            samplers: HashMap::new(),
             next_semaphore_id: 1,
             frame_count: 0,
             dead_images: Vec::new(),
             dead_buffers: Vec::new(),
             dead_semaphores: Vec::new(),
+            dead_samplers: Vec::new(),
             recycled_semaphores: Vec::new(),
             transient_image_pool: HashMap::new(),
             transient_buffer_pool: HashMap::new(),
@@ -163,6 +176,9 @@ impl VulkanBackend {
             pipeline_layout_map: HashMap::new(),
             timeline_sem: vk::Semaphore::null(), // Initialized in `initialize`
             cpu_timeline: 0,
+            frame_contexts: Vec::new(),
+            frame_started: false,
+            global_frame_index: 0,
         })
     }
 
@@ -170,25 +186,28 @@ impl VulkanBackend {
         self.device.as_ref().expect("Backend not initialized")
     }
 
-    fn create_semaphore(&mut self) -> u64 {
-        let sem = if let Some(recycled) = self.recycled_semaphores.pop() {
+    #[allow(dead_code)]
+    pub fn create_semaphore(&mut self) -> u64 {
+        let id = self.next_id();
+        let sem = self.create_semaphore_raw();
+        self.semaphores.insert(id, sem);
+        id
+    }
+
+    pub fn next_id(&mut self) -> u64 {
+        let id = self.next_resource_id;
+        self.next_resource_id += 1;
+        id
+    }
+
+    fn create_semaphore_raw(&mut self) -> vk::Semaphore {
+        if let Some(recycled) = self.recycled_semaphores.pop() {
             recycled
         } else {
             let device = self.get_device();
             let create_info = vk::SemaphoreCreateInfo::default();
             unsafe { device.handle.create_semaphore(&create_info, None) }.unwrap()
-        };
-
-        let id = self.next_semaphore_id;
-        self.next_semaphore_id += 1;
-        self.semaphores.insert(id, sem);
-        id
-    }
-
-    fn next_id(&mut self) -> u64 {
-        let id = self.next_resource_id;
-        self.next_resource_id += 1;
-        id
+        }
     }
 }
 
@@ -278,8 +297,73 @@ impl RenderBackend for VulkanBackend {
                 .map_err(|e| format!("Failed to create descriptor pool: {}", e))?
         };
 
+        // Create Global Frame Contexts
+        let mut frame_contexts = Vec::new();
+        let device = self.get_device().clone();
+        for _ in 0..3 {
+            unsafe {
+                let pool_info = vk::CommandPoolCreateInfo::default()
+                    .queue_family_index(device.graphics_family)
+                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+                let pool = device.handle.create_command_pool(&pool_info, None).unwrap();
+                frame_contexts.push(VulkanFrameContext {
+                    command_pool: pool,
+                    allocated_command_buffers: Vec::new(),
+                    cursor: 0,
+                    submitted_cursor: 0,
+                    last_completion_value: 0,
+                });
+            }
+        }
+        self.frame_contexts = frame_contexts;
+
         info!("Vulkan Backend Initialized");
         Ok(())
+    }
+
+    fn begin_frame(&mut self) {
+        if self.frame_started {
+            return;
+        }
+
+        let device = self.get_device().clone();
+        self.global_frame_index = (self.global_frame_index + 1) % self.frame_contexts.len();
+        self.frame_count += 1;
+        self.cpu_timeline += 1;
+
+        let ctx = &mut self.frame_contexts[self.global_frame_index];
+
+        // Wait for this frame slot to be ready
+        if ctx.last_completion_value > 0 {
+            let semaphores = [self.timeline_sem];
+            let values = [ctx.last_completion_value];
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&semaphores)
+                .values(&values);
+            unsafe {
+                device
+                    .handle
+                    .wait_semaphores(&wait_info, u64::MAX)
+                    .expect("Failed to wait for frame timeline");
+            }
+        }
+
+        // Reset the pool for this frame
+        unsafe {
+            device
+                .handle
+                .reset_command_pool(ctx.command_pool, vk::CommandPoolResetFlags::empty())
+                .expect("Failed to reset command pool");
+        }
+
+        ctx.cursor = 0;
+        ctx.submitted_cursor = 0;
+        self.frame_started = true;
+    }
+
+    fn end_frame(&mut self) {
+        self.garbage_collect();
+        self.frame_started = false;
     }
 
     fn create_window(&mut self, desc: WindowDesc) -> Result<WindowHandle, String> {
@@ -297,36 +381,17 @@ impl RenderBackend for VulkanBackend {
         let id = self.next_window_id;
         self.next_window_id += 1;
 
-        // Initialize submitted values to 0 (completed)
-        let submitted_values = vec![0; 2];
-
-        // Create Semaphores per frame
+        // Create Semaphores per frame for this window (typically 3 for triple buffering)
         let mut acquire_sems = Vec::new();
-        let device = self.get_device();
-        for _ in 0..2 {
+        let device_handle = self.get_device().handle.clone();
+        for _ in 0..3 {
             let create_info = vk::SemaphoreCreateInfo::default();
             let sem = unsafe {
-                device
-                    .handle
+                device_handle
                     .create_semaphore(&create_info, None)
                     .map_err(|e| e.to_string())?
             };
             acquire_sems.push(sem);
-        }
-
-        // Create Command Pools per frame
-        let mut cmd_pools = Vec::new();
-        for _ in 0..2 {
-            let pool_info = vk::CommandPoolCreateInfo::default()
-                .queue_family_index(0) // Default graphics family (usually 0)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT); // We reset whole pool
-            let pool = unsafe {
-                device
-                    .handle
-                    .create_command_pool(&pool_info, None)
-                    .map_err(|e| e.to_string())?
-            };
-            cmd_pools.push(pool);
         }
 
         let ctx = WindowContext {
@@ -340,11 +405,6 @@ impl RenderBackend for VulkanBackend {
             acquire_semaphores: acquire_sems,
             current_acquire_sem: None,
             current_image_index: None,
-            submitted_values,
-            frame_index: 0,
-            command_pools: cmd_pools,
-            allocated_command_buffers: vec![Vec::new(); 3], // Should match min_image or fences.len()
-            command_buffer_cursors: vec![0; 3],             // Default min_image=3
         };
 
         self.windows.insert(id, ctx);
@@ -352,7 +412,11 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn destroy_window(&mut self, window: WindowHandle) {
-        self.windows.remove(&window.0);
+        if let Some(mut ctx) = self.windows.remove(&window.0) {
+            if let Some(sc) = ctx.swapchain.take() {
+                self.unregister_swapchain_images(&sc);
+            }
+        }
     }
 
     fn configure_window(
@@ -360,18 +424,23 @@ impl RenderBackend for VulkanBackend {
         window: WindowHandle,
         config: SwapchainConfig,
     ) -> Result<(), String> {
-        if let Some(ctx) = self.windows.get_mut(&window.0) {
+        let sc_opt = if let Some(ctx) = self.windows.get_mut(&window.0) {
             ctx.config = config;
             // Invalidate swapchain so it recreates on next acquire
-            ctx.swapchain = None;
-            Ok(())
+            ctx.swapchain.take()
         } else {
-            Err("Invalid window handle".to_string())
+            return Err("Invalid window handle".to_string());
+        };
+
+        if let Some(sc) = sc_opt {
+            self.unregister_swapchain_images(&sc);
         }
+        Ok(())
     }
 
     fn poll_events(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
+        let mut resize_happened = false;
         if let Some(pump) = &mut self.event_pump {
             for event in pump.poll_iter() {
                 match event {
@@ -390,14 +459,26 @@ impl RenderBackend for VulkanBackend {
                             width: w as u32,
                             height: h as u32,
                         });
-                        // Invalidate all swapchains logic could go here if we tracked reverse map
-                        // For now we rely on the specific window update cycle or we just mark all
-                        for ctx in self.windows.values_mut() {
-                            ctx.swapchain = None; // Recreate all swapchains on any resize (simplification)
-                        }
+                        resize_happened = true;
                     }
                     _ => {}
                 }
+            }
+        }
+
+        if resize_happened {
+            let mut to_unregister = if self.windows.len() > 0 {
+                Vec::with_capacity(self.windows.len())
+            } else {
+                Vec::new()
+            };
+            for ctx in self.windows.values_mut() {
+                if let Some(sc) = ctx.swapchain.take() {
+                    to_unregister.push(sc);
+                }
+            }
+            for sc in to_unregister {
+                self.unregister_swapchain_images(&sc);
             }
         }
         events
@@ -406,6 +487,7 @@ impl RenderBackend for VulkanBackend {
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage {
         let device = self.get_device().clone();
         let id = self.next_id();
+        info!("Creating Image: {:?} (ID: {})", desc, id);
 
         let extent = vk::Extent3D {
             width: desc.width,
@@ -416,30 +498,17 @@ impl RenderBackend for VulkanBackend {
         // Translate format
         let format = crate::convert::convert_format(desc.format);
 
-        // Translate usage
-        // We set lots of usage bits for flexibility for now
-        let mut usage = vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::TRANSFER_DST
-            | vk::ImageUsageFlags::SAMPLED;
-
-        // If it looks like a render target
-        // TODO: ResourceUsage in desc?
-        // Usage is inferred from desc or we should have it in desc.
-        // `ImageDesc` has `width`, `height`, `format`.
-        // We add attachment bits by default to allow rendering.
-        if format == vk::Format::D32_SFLOAT {
-            usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-        } else {
-            usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::STORAGE;
-        }
+        // Use provided usage flags, but add common bits for flexibility
+        let mut usage = crate::convert::convert_image_usage_flags(desc.usage);
+        usage |= vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
 
         let create_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(format)
             .extent(extent)
-            .mip_levels(desc.mip_levels)
-            .array_layers(desc.array_layers)
-            .samples(vk::SampleCountFlags::TYPE_1) // Multisampling support later
+            .mip_levels(desc.mip_levels.max(1))
+            .array_layers(desc.array_layers.max(1))
+            .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -471,16 +540,18 @@ impl RenderBackend for VulkanBackend {
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask,
                 base_mip_level: 0,
-                level_count: desc.mip_levels,
+                level_count: desc.mip_levels.max(1),
                 base_array_layer: 0,
-                layer_count: desc.array_layers,
+                layer_count: desc.array_layers.max(1),
             });
         let view = unsafe { device.handle.create_image_view(&view_info, None) }
             .expect("Failed to create view");
 
         self.image_map.insert(id, image);
         self.image_allocations.insert(id, allocation);
+        self.image_formats.insert(id, format);
         self.image_views.insert(id, view);
+        self.image_descs.insert(id, *desc);
 
         BackendImage(id)
     }
@@ -490,6 +561,7 @@ impl RenderBackend for VulkanBackend {
         let current_frame = self.frame_count;
 
         // remove from maps immediately to prevent reuse, but defer physical destruction
+        self.image_descs.remove(&id);
         if let Some(view) = self.image_views.remove(&id) {
             if let Some(image) = self.image_map.remove(&id) {
                 if let Some(allocation) = self.image_allocations.remove(&id) {
@@ -565,6 +637,57 @@ impl RenderBackend for VulkanBackend {
             if let Some(allocation) = self.buffer_allocations.remove(&id) {
                 self.dead_buffers.push((current_frame, buffer, allocation));
             }
+        }
+    }
+
+    fn create_sampler(&mut self, desc: &SamplerDesc) -> SamplerHandle {
+        let mag_filter = match desc.mag_filter {
+            Filter::Nearest => vk::Filter::NEAREST,
+            Filter::Linear => vk::Filter::LINEAR,
+        };
+        let min_filter = match desc.min_filter {
+            Filter::Nearest => vk::Filter::NEAREST,
+            Filter::Linear => vk::Filter::LINEAR,
+        };
+        let mipmap_mode = match desc.mipmap_mode {
+            i3_gfx::graph::types::MipmapMode::Nearest => vk::SamplerMipmapMode::NEAREST,
+            i3_gfx::graph::types::MipmapMode::Linear => vk::SamplerMipmapMode::LINEAR,
+        };
+
+        let convert_address = |mode: AddressMode| match mode {
+            AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
+            AddressMode::MirroredRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
+            AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            AddressMode::ClampToBorder => vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            AddressMode::MirrorClampToEdge => vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE,
+        };
+
+        let create_info = vk::SamplerCreateInfo::default()
+            .mag_filter(mag_filter)
+            .min_filter(min_filter)
+            .mipmap_mode(mipmap_mode)
+            .address_mode_u(convert_address(desc.address_mode_u))
+            .address_mode_v(convert_address(desc.address_mode_v))
+            .address_mode_w(convert_address(desc.address_mode_w))
+            .max_anisotropy(1.0)
+            .min_lod(0.0)
+            .max_lod(vk::LOD_CLAMP_NONE);
+
+        let sampler = unsafe {
+            self.get_device()
+                .handle
+                .create_sampler(&create_info, None)
+                .expect("Failed to create sampler")
+        };
+
+        let id = self.next_id();
+        self.samplers.insert(id, sampler);
+        SamplerHandle(id)
+    }
+
+    fn destroy_sampler(&mut self, handle: SamplerHandle) {
+        if let Some(sampler) = self.samplers.remove(&handle.0) {
+            self.dead_samplers.push((self.frame_count, sampler));
         }
     }
 
@@ -723,6 +846,17 @@ impl RenderBackend for VulkanBackend {
                 } else {
                     i += 1;
                 }
+            }
+        }
+
+        // GC Semaphores (Recycle)
+        let mut i = 0;
+        while i < self.dead_semaphores.len() {
+            if self.dead_semaphores[i].0 <= safe_threshold {
+                let (_, _, sem) = self.dead_semaphores.swap_remove(i);
+                self.recycled_semaphores.push(sem);
+            } else {
+                i += 1;
             }
         }
     }
@@ -1038,188 +1172,70 @@ impl RenderBackend for VulkanBackend {
         &mut self,
         window: WindowHandle,
     ) -> Result<(BackendImage, u64, u32), String> {
-        // 1. Advance Frame and Cleanup
-        self.frame_count += 1;
-        // CRITICAL: At 3000 FPS, 3 frames is 1ms. Present might take ~16ms (60Hz).
-        // We need a much larger safe threshold to avoid destroying semaphores still in use by Present.
-        // 100 frames at 3000 FPS = 33ms. Safe for 60Hz.
-        // Ideally we should verify with fences, but semaphores don't have fences.
-        let safe_threshold = self.frame_count.saturating_sub(100);
         let device = self.get_device().clone();
-
-        // Local copy to avoid borrow conflict
-        let timeline_sem = self.timeline_sem;
-        let expected_signal = self.cpu_timeline + 1;
-
-        // Process Dead Images
-        let mut i = 0;
-        while i < self.dead_images.len() {
-            if self.dead_images[i].0 <= safe_threshold {
-                let (_frame, image, view, mut allocation) = self.dead_images.swap_remove(i);
-                unsafe {
-                    device.handle.destroy_image_view(view, None);
-                    let allocator = device.allocator.lock().unwrap();
-                    allocator.destroy_image(image, &mut allocation);
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        // Process Dead Buffers
-        let mut i = 0;
-        while i < self.dead_buffers.len() {
-            if self.dead_buffers[i].0 <= safe_threshold {
-                let (_frame, buffer, mut allocation) = self.dead_buffers.swap_remove(i);
-                unsafe {
-                    let allocator = device.allocator.lock().unwrap();
-                    allocator.destroy_buffer(buffer, &mut allocation);
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        // Process Dead Semaphores (GC)
-        let mut i = 0;
-        while i < self.dead_semaphores.len() {
-            if self.dead_semaphores[i].0 <= safe_threshold {
-                let (_frame, id, sem) = self.dead_semaphores.swap_remove(i);
-                self.semaphores.remove(&id);
-                // Recycle instead of destroy!
-                self.recycled_semaphores.push(sem);
-            } else {
-                i += 1;
-            }
-        }
-
-        // We need to use explicit containment to satisfy borrow checker
-
-        let device = self
-            .device
-            .as_ref()
-            .ok_or("Device not initialized")?
-            .clone();
-
-        // 1. Get Window Context (outside loop to check existence, but inside to mutate?)
-        // We need to re-acquire mutable borrow if we loop?
-        // Actually, we can hold the borrow if we don't return.
-
-        let mut waited_for_fence = false;
+        let frame_slot = self.global_frame_index;
 
         loop {
-            let ctx = self
-                .windows
-                .get_mut(&window.0)
-                .ok_or("Invalid window handle")?;
-
-            // 0. Check for Minimization
-            let size = ctx.raw.handle.drawable_size();
-            if size.0 == 0 || size.1 == 0 {
-                return Err("WindowMinimized".to_string());
-            }
-
-            // Pre-calculate expected timeline value for this frame's submission
-            // let expected_signal = self.cpu_timeline + 1; // Moved up
-
-            // Process Dead Resources... (Keep existing logic, assume it's above or below)
-            // ...
-
-            // Wait for previous frame's timeline value
-            // Note: We need to do this *inside* the loop if we want to be safe,
-            // but typically we do it once per frame attempt.
-            // However, since we hold ctx borrow, we do it here.
-            if !waited_for_fence {
-                let wait_value = ctx.submitted_values[ctx.frame_index];
-                if wait_value > 0 {
-                    let semaphores = [timeline_sem];
-                    let values = [wait_value];
-                    let wait_info = vk::SemaphoreWaitInfo::default()
-                        .semaphores(&semaphores)
-                        .values(&values);
-                    unsafe {
-                        device
-                            .handle
-                            .wait_semaphores(&wait_info, u64::MAX)
-                            .map_err(|e| e.to_string())?;
-                    }
+            let (result, semaphore) = {
+                let ctx = self
+                    .windows
+                    .get_mut(&window.0)
+                    .ok_or("Invalid window handle")?;
+                let size = ctx.raw.handle.drawable_size();
+                if size.0 == 0 || size.1 == 0 {
+                    return Err("WindowMinimized".to_string());
                 }
 
-                unsafe {
-                    device
-                        .handle
-                        .reset_command_pool(
-                            ctx.command_pools[ctx.frame_index],
-                            vk::CommandPoolResetFlags::empty(),
-                        )
-                        .map_err(|e| e.to_string())?;
-
-                    // Reset cursor for this frame's command buffers
-                    ctx.command_buffer_cursors[ctx.frame_index] = 0;
+                if ctx.swapchain.is_none() {
+                    ctx.swapchain = Some(crate::swapchain::VulkanSwapchain::new(
+                        device.clone(),
+                        ctx.raw.surface,
+                        size.0,
+                        size.1,
+                        ctx.config,
+                    )?);
                 }
-                waited_for_fence = true;
-            }
 
-            // 2. Ensure Swapchain exists and matches config
-            if ctx.swapchain.is_none() {
-                // let size = ctx.raw.handle.drawable_size(); // Already got it
-                let sc = crate::swapchain::VulkanSwapchain::new(
-                    device.clone(),
-                    ctx.raw.surface,
-                    size.0,
-                    size.1,
-                    ctx.config,
-                )?;
-                ctx.swapchain = Some(sc);
-            }
+                let swapchain = ctx.swapchain.as_ref().unwrap();
+                let semaphore = ctx.acquire_semaphores[frame_slot % ctx.acquire_semaphores.len()];
 
-            let swapchain = ctx.swapchain.as_ref().unwrap();
-
-            // 3. Get semaphore for THIS frame slot
-            let semaphore = ctx.acquire_semaphores[ctx.frame_index];
-
-            // 4. Acquire
-            let result = unsafe {
-                let fp = ash::khr::swapchain::Device::new(&self.instance.handle, &device.handle);
-                fp.acquire_next_image(swapchain.handle, u64::MAX, semaphore, vk::Fence::null())
+                let res = unsafe {
+                    let fp =
+                        ash::khr::swapchain::Device::new(&self.instance.handle, &device.handle);
+                    fp.acquire_next_image(swapchain.handle, u64::MAX, semaphore, vk::Fence::null())
+                };
+                (res, semaphore)
             };
 
-            let (index, _) = match result {
-                Ok(v) => v,
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Err(vk::Result::SUBOPTIMAL_KHR) => {
-                    // Recreate needed
-                    ctx.swapchain = None;
-                    continue;
+            if result.is_err() {
+                let sc_opt = self
+                    .windows
+                    .get_mut(&window.0)
+                    .and_then(|c| c.swapchain.take());
+                if let Some(sc) = sc_opt {
+                    self.unregister_swapchain_images(&sc);
                 }
-                Err(e) => return Err(e.to_string()),
-            };
+                continue;
+            }
 
-            // 5. Store state
+            let (index, _) = result.unwrap();
+            let ctx = self.windows.get_mut(&window.0).unwrap();
+            let swapchain = ctx.swapchain.as_ref().unwrap(); // Re-borrow swapchain after ctx is available again
+
             ctx.current_acquire_sem = Some(semaphore);
             ctx.current_image_index = Some(index);
-
-            // Update expectation for next time we visit this slot
-            ctx.submitted_values[ctx.frame_index] = expected_signal;
-
-            // 6. Wrap result
-            let sem_handle_id = self.next_semaphore_id;
-            self.next_semaphore_id += 1;
-            // self.semaphores.insert(sem_handle_id, semaphore); // Don't track generic, it's per-frame
 
             let image_raw = swapchain.images[index as usize];
             let image_id = image_raw.as_raw();
 
-            // Critical: Register the view so `begin_pass` can find it
-            // FIX: Only create/insert if not already present to avoid leaking VkImageView handles
-            // (Swapchain images are stable until recreation)
             if !self.image_views.contains_key(&image_id) {
                 let view_raw = swapchain.image_views[index as usize];
                 self.image_views.insert(image_id, view_raw);
+                self.image_formats.insert(image_id, swapchain.format);
             }
-            // Image map can be overwritten safely (handle copy)
             self.image_map.insert(image_id, image_raw);
 
-            return Ok((BackendImage(image_id), sem_handle_id, index));
+            return Ok((BackendImage(image_id), 0, index));
         }
     }
 
@@ -1229,7 +1245,99 @@ impl RenderBackend for VulkanBackend {
         _wait_sems: Vec<u64>,
         _signal_sems: Vec<u64>,
     ) -> Result<u64, String> {
-        Ok(0)
+        // Timeline advancement
+        self.cpu_timeline += 1;
+        let signal_value = self.cpu_timeline;
+
+        // Collect all binary semaphores from windows that acquired images
+        let mut wait_binary = Vec::new();
+        let mut signal_binary = Vec::new();
+        let mut present_info = Vec::new();
+
+        // Collect windows needing presentation first to avoid borrow conflicts
+        let window_ids: Vec<u64> = self.windows.keys().cloned().collect();
+        for id in window_ids {
+            let (acquire_sem, image_index, sc_handle) = {
+                let ctx = self.windows.get_mut(&id).unwrap();
+                if let (Some(a), Some(i)) = (
+                    ctx.current_acquire_sem.take(),
+                    ctx.current_image_index.take(),
+                ) {
+                    (a, i, ctx.swapchain.as_ref().unwrap().handle)
+                } else {
+                    continue;
+                }
+            };
+
+            wait_binary.push(acquire_sem);
+            let release_sem = self.create_semaphore_raw();
+            signal_binary.push(release_sem);
+            present_info.push((sc_handle, image_index, release_sem));
+        }
+
+        let device = self.get_device().clone();
+
+        let wait_values = vec![0u64; wait_binary.len()];
+        let mut signal_values = vec![signal_value];
+        signal_values.extend(vec![0u64; signal_binary.len()]);
+
+        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+            .wait_semaphore_values(&wait_values)
+            .signal_semaphore_values(&signal_values);
+
+        let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; wait_binary.len()];
+
+        // Correctly handle multiple signal semaphores
+        let mut all_signals = vec![self.timeline_sem];
+        all_signals.extend(signal_binary.clone());
+
+        let submit_info = vk::SubmitInfo::default()
+            .push_next(&mut timeline_info)
+            .wait_semaphores(&wait_binary)
+            .wait_dst_stage_mask(&wait_stages)
+            .signal_semaphores(&all_signals);
+
+        // Collect all command buffers from current frame context (Only those not yet submitted)
+        let frame_ctx = &mut self.frame_contexts[self.global_frame_index];
+        let cmds =
+            &frame_ctx.allocated_command_buffers[frame_ctx.submitted_cursor..frame_ctx.cursor];
+        let submit_info = submit_info.command_buffers(cmds);
+
+        unsafe {
+            device
+                .handle
+                .queue_submit(device.graphics_queue, &[submit_info], vk::Fence::null())
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Update submitted_cursor to current cursor
+        frame_ctx.submitted_cursor = frame_ctx.cursor;
+
+        // Present all windows
+        for (swapchain, index, wait_sem) in present_info {
+            let swapchains = [swapchain];
+            let indices = [index];
+            let wait_sems = [wait_sem];
+            let present_info = vk::PresentInfoKHR::default()
+                .wait_semaphores(&wait_sems)
+                .swapchains(&swapchains)
+                .image_indices(&indices);
+
+            unsafe {
+                let fp = ash::khr::swapchain::Device::new(&self.instance.handle, &device.handle);
+                fp.queue_present(device.graphics_queue, &present_info).ok(); // Presentation errors handled on next acquire
+            }
+        }
+
+        // Advance slot's last completion value
+        frame_ctx.last_completion_value = signal_value;
+
+        // Queue signal_binary semaphores for recycling (Leak Fix)
+        for sem in signal_binary {
+            self.dead_semaphores.push((self.frame_count, 0, sem));
+        }
+
+        Ok(signal_value)
     }
 
     fn begin_pass(
@@ -1257,7 +1365,17 @@ impl RenderBackend for VulkanBackend {
             target_ids.push(pid);
         }
 
-        // Find window
+        // Try to find extent from first write
+        if let Some(&first_pid) = target_ids.first() {
+            if let Some(d) = self.image_descs.get(&first_pid) {
+                viewport_extent = vk::Extent2D {
+                    width: d.width,
+                    height: d.height,
+                };
+            }
+        }
+
+        // Override with window extent if it's a swapchain image
         'win_loop: for ctx_win in self.windows.values_mut() {
             if let Some(sc) = &ctx_win.swapchain {
                 if let Some(idx) = ctx_win.current_image_index {
@@ -1276,43 +1394,21 @@ impl RenderBackend for VulkanBackend {
             // Fallback logic
         }
 
-        // 2. Allocate Command Buffer
-        let cmd = if let Some(ctx_win) = target_window_ctx {
-            // Use Recycled Pool
-            let pool = ctx_win.command_pools[ctx_win.frame_index];
-            let cursor = ctx_win.command_buffer_cursors[ctx_win.frame_index];
-            let buffer_list = &mut ctx_win.allocated_command_buffers[ctx_win.frame_index];
-
-            if cursor < buffer_list.len() {
-                // Reuse existing buffer
-                ctx_win.command_buffer_cursors[ctx_win.frame_index] += 1;
-                buffer_list[cursor]
-            } else {
-                // Allocate new buffer and add to list
-                let alloc_info = vk::CommandBufferAllocateInfo::default()
-                    .command_pool(pool)
-                    .level(vk::CommandBufferLevel::PRIMARY)
-                    .command_buffer_count(1);
-                let cmd =
-                    unsafe { device.handle.allocate_command_buffers(&alloc_info).unwrap()[0] };
-                buffer_list.push(cmd);
-                ctx_win.command_buffer_cursors[ctx_win.frame_index] += 1;
-                cmd
-            }
+        // 2. Allocate Command Buffer from Global Pool
+        let frame_ctx = &mut self.frame_contexts[self.global_frame_index];
+        let cmd = if frame_ctx.cursor < frame_ctx.allocated_command_buffers.len() {
+            let cmd = frame_ctx.allocated_command_buffers[frame_ctx.cursor];
+            frame_ctx.cursor += 1;
+            cmd
         } else {
-            // Offscreen / Fallback (Leak for now or TODO: Global Pool)
-            println!("WARNING: begin_pass fallback! Creating leaking CommandPool");
-            unsafe {
-                let pool_info = vk::CommandPoolCreateInfo::default()
-                    .queue_family_index(device.graphics_family)
-                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-                let pool = device.handle.create_command_pool(&pool_info, None).unwrap();
-                let alloc_info = vk::CommandBufferAllocateInfo::default()
-                    .command_pool(pool)
-                    .level(vk::CommandBufferLevel::PRIMARY)
-                    .command_buffer_count(1);
-                device.handle.allocate_command_buffers(&alloc_info).unwrap()[0]
-            }
+            let alloc_info = vk::CommandBufferAllocateInfo::default()
+                .command_pool(frame_ctx.command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            let cmd = unsafe { device.handle.allocate_command_buffers(&alloc_info).unwrap()[0] };
+            frame_ctx.allocated_command_buffers.push(cmd);
+            frame_ctx.cursor += 1;
+            cmd
         };
 
         // 3. Begin Recording
@@ -1343,7 +1439,7 @@ impl RenderBackend for VulkanBackend {
         }
 
         // Dynamic Viewport/Scissor setup (Use resolved extent)
-        // Engine Convention: Negative Height Viewport for Y-Up
+        // Engine Convention: Negative Height Viewport for Y-Up (Enforced)
         let viewport = vk::Viewport::default()
             .x(0.0)
             .y(viewport_extent.height as f32)
@@ -1368,22 +1464,25 @@ impl RenderBackend for VulkanBackend {
 
         // Resolve attachments and synchronization
         let mut color_attachments = Vec::new();
+        let mut depth_attachment_info = None;
         let mut wait_semaphores = Vec::new();
         let mut wait_stages = Vec::new();
 
-        if !desc.image_writes.is_empty() {
-            let handle = desc.image_writes[0];
-
+        for &handle in &desc.image_writes {
             // 1. Resolve to Physical ID
             let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
-                phy // It's an external/registered image
+                phy
             } else {
-                handle.0.0 // It's an internal image (virtual == physical for now?)
+                handle.0.0
             };
 
             // 2. Find View
             if let Some(&view) = self.image_views.get(&physical_id) {
-                // Found View!
+                let format = *self
+                    .image_formats
+                    .get(&physical_id)
+                    .unwrap_or(&vk::Format::UNDEFINED);
+
                 // 3. Check if it matches any Swapchain Image to sync against
                 for win_ctx in self.windows.values() {
                     if let Some(current_idx) = win_ctx.current_image_index {
@@ -1407,34 +1506,68 @@ impl RenderBackend for VulkanBackend {
                     }
                 }
 
-                // 4. Setup Attachment Info
-                let attachment_info = vk::RenderingAttachmentInfo::default()
-                    .image_view(view)
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL) // We assume transition happened?
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .store_op(vk::AttachmentStoreOp::STORE)
-                    .clear_value(vk::ClearValue {
+                let clear_value = if format == vk::Format::D32_SFLOAT {
+                    vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
+                    }
+                } else {
+                    vk::ClearValue {
                         color: vk::ClearColorValue {
                             float32: [0.0, 0.0, 0.0, 1.0],
                         },
-                    });
+                    }
+                };
 
-                color_attachments.push(attachment_info);
+                // 4. Setup Attachment Info
+                let attachment_info = vk::RenderingAttachmentInfo::default()
+                    .image_view(view)
+                    .image_layout(if format == vk::Format::D32_SFLOAT {
+                        vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                    } else {
+                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+                    })
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(clear_value);
 
-                // IMAGE BARRIER: Transition Undefined/Present -> Color Attachment
-                // Needed because we just acquired it.
-                // We assume Undefined for now for simplicity, or we track state.
+                if format == vk::Format::D32_SFLOAT {
+                    depth_attachment_info = Some(attachment_info);
+                } else {
+                    color_attachments.push(attachment_info);
+                }
+
+                // IMAGE BARRIER: Transition Undefined/Present -> Attachment
                 let image = self.image_map.get(&physical_id).unwrap();
+                let (old_layout, new_layout, dst_access, aspect_mask) =
+                    if format == vk::Format::D32_SFLOAT {
+                        (
+                            vk::ImageLayout::UNDEFINED,
+                            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                            vk::ImageAspectFlags::DEPTH,
+                        )
+                    } else {
+                        (
+                            vk::ImageLayout::UNDEFINED,
+                            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                            vk::ImageAspectFlags::COLOR,
+                        )
+                    };
+
                 let barrier = vk::ImageMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::empty())
-                    .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                    .old_layout(vk::ImageLayout::UNDEFINED)
-                    .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .dst_access_mask(dst_access)
+                    .old_layout(old_layout)
+                    .new_layout(new_layout)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(*image)
                     .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        aspect_mask,
                         base_mip_level: 0,
                         level_count: 1,
                         base_array_layer: 0,
@@ -1445,7 +1578,11 @@ impl RenderBackend for VulkanBackend {
                     device.handle.cmd_pipeline_barrier(
                         cmd,
                         vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                        if format == vk::Format::D32_SFLOAT {
+                            vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                        } else {
+                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        },
                         vk::DependencyFlags::empty(),
                         &[],
                         &[],
@@ -1455,7 +1592,44 @@ impl RenderBackend for VulkanBackend {
             }
         }
 
-        let rendering_info = vk::RenderingInfo::default()
+        // Layout Transitions for Reads
+        for handle in &desc.image_reads {
+            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
+                phy
+            } else {
+                handle.0.0
+            };
+            if let Some(&image) = self.image_map.get(&physical_id) {
+                let barrier = vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::empty())
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .old_layout(vk::ImageLayout::UNDEFINED) // Simplified: force transition
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    });
+                unsafe {
+                    device.handle.cmd_pipeline_barrier(
+                        cmd,
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::PipelineStageFlags::FRAGMENT_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[barrier],
+                    );
+                }
+            }
+        }
+
+        let mut rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: viewport_extent,
@@ -1463,36 +1637,36 @@ impl RenderBackend for VulkanBackend {
             .layer_count(1)
             .color_attachments(&color_attachments);
 
-        if !color_attachments.is_empty() {
+        if let Some(depth) = &depth_attachment_info {
+            rendering_info = rendering_info.depth_attachment(depth);
+        }
+
+        if !color_attachments.is_empty() || depth_attachment_info.is_some() {
             unsafe {
                 device.handle.cmd_begin_rendering(cmd, &rendering_info);
             }
         }
 
-        // We execute the closure.
+        // RECORD COMMANDS
+        let mut ctx = VulkanPassContext::new(cmd, self);
+
+        // Auto-bind pipeline if specified in descriptor
+        if let Some(pipeline_handle) = desc.pipeline {
+            ctx.bind_pipeline(pipeline_handle);
+        }
+
         f(&mut ctx);
 
-        if !color_attachments.is_empty() {
+        let present_req = ctx.present_request;
+
+        if !color_attachments.is_empty() || depth_attachment_info.is_some() {
             unsafe {
                 device.handle.cmd_end_rendering(cmd);
-
-                // BARRIER: Color Attachment -> Present Src
-                // We need to transition back to present compatible layout if we are presenting.
-                // But `present` function is called LATER.
-                // However, the `present` logic needs the image in `PRESENT_SRC_KHR`.
-                // Actually `cmd_pipeline_barrier` inside `f` (via `ctx.present`) is too late if we ended rendering?
-                // No, barriers can happen outside rendering.
-                // But `ctx.present` sets a flag.
-                // We should do the transition HERE if requested.
             }
         }
 
-        let present_req = ctx.present_request;
-        drop(ctx); // Release borrows
-
-        // Handle explicit transition for Present
+        // Handle explicit transition for Present if requested
         if let Some(handle) = present_req {
-            // Resolve again (ugly duplication, fix later)
             let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
                 phy
             } else {
@@ -1501,7 +1675,7 @@ impl RenderBackend for VulkanBackend {
             if let Some(&image) = self.image_map.get(&physical_id) {
                 let barrier = vk::ImageMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                    .dst_access_mask(vk::AccessFlags::empty()) // access is usually 0 for presentation
+                    .dst_access_mask(vk::AccessFlags::empty())
                     .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1530,87 +1704,7 @@ impl RenderBackend for VulkanBackend {
 
         unsafe { device.handle.end_command_buffer(cmd).unwrap() };
 
-        let signal_sem = self.create_semaphore();
-        let vk_signal = self.semaphores[&signal_sem];
-
-        // Signal both:
-        // 1. Binary Semaphore (for Present consumptiopn)
-        // 2. Timeline Semaphore (for Host synchronization)
-        let mut signal_semaphores = vec![vk_signal];
-        let mut signal_values = vec![0]; // Binary ignores value
-
-        if self.timeline_sem != vk::Semaphore::null() {
-            self.cpu_timeline += 1;
-            signal_semaphores.push(self.timeline_sem);
-            signal_values.push(self.cpu_timeline);
-        }
-
-        let command_buffers = [cmd];
-
-        let mut timeline_info =
-            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
-
-        let submit_info = vk::SubmitInfo::default()
-            .push_next(&mut timeline_info)
-            .command_buffers(&command_buffers)
-            .wait_semaphores(&wait_semaphores)
-            .wait_dst_stage_mask(&wait_stages)
-            .signal_semaphores(&signal_semaphores);
-
-        // Perform GC
-        self.garbage_collect();
-
-        // No fence needed for queue submit anymore (we use Timeline)
-        unsafe {
-            device
-                .handle
-                .queue_submit(device.graphics_queue, &[submit_info], vk::Fence::null())
-                .unwrap();
-        }
-
-        // Perform GC
-        self.garbage_collect();
-
-        // Queue Signal Semaphore for destruction (Leak Fix)
-        // We assume it's used by next Acquire/Present or implicitly handled.
-        // For draw_triangle, it is waited on by Present.
-        // So we can destroy it after safe_threshold.
-        self.dead_semaphores
-            .push((self.frame_count, signal_sem, vk_signal));
-
-        // Handle Present
-        if let Some(_image_handle) = present_req {
-            // Search for window context with this current image
-            for ctx_win in self.windows.values_mut() {
-                if let Some(sc) = &ctx_win.swapchain {
-                    if let Some(idx) = ctx_win.current_image_index {
-                        // We blindly present the current index if pending
-                        let wait_sems = [vk_signal];
-                        let swapchains = [sc.handle];
-                        let indices = [idx];
-                        let present_info = vk::PresentInfoKHR::default()
-                            .wait_semaphores(&wait_sems)
-                            .swapchains(&swapchains)
-                            .image_indices(&indices);
-
-                        unsafe {
-                            let fp = ash::khr::swapchain::Device::new(
-                                &self.instance.handle,
-                                &device.handle,
-                            );
-                            let _ = fp.queue_present(device.graphics_queue, &present_info);
-                        }
-
-                        if let Some(_sem) = ctx_win.current_acquire_sem.take() {
-                            // No need to push back to pool, it's fixed in `acquire_semaphores`
-                        }
-                        ctx_win.current_image_index = None;
-                    }
-                }
-            }
-        }
-
-        signal_sem
+        self.cpu_timeline
     }
 
     fn resolve_image(&self, handle: ImageHandle) -> BackendImage {
@@ -1782,8 +1876,17 @@ impl RenderBackend for VulkanBackend {
                                   i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                               };
 
+                            let vk_sampler = if let Some(sampler_handle) = info.sampler {
+                                *self
+                                    .samplers
+                                    .get(&sampler_handle.0)
+                                    .unwrap_or(&vk::Sampler::null())
+                            } else {
+                                vk::Sampler::null()
+                            };
+
                             image_infos.push(vk::DescriptorImageInfo {
-                                sampler: vk::Sampler::null(), // TODO: Sampler Support
+                                sampler: vk_sampler,
                                 image_view: *view,
                                 image_layout: layout,
                             });
@@ -1855,23 +1958,30 @@ impl Drop for VulkanBackend {
     fn drop(&mut self) {
         if let Some(device) = &self.device {
             unsafe {
-                device
-                    .handle
-                    .device_wait_idle()
-                    .map_err(|e| error!("WaitIdle failed: {}", e))
-                    .ok();
-
-                // Wait a bit for Presentation Engine to release resources (Validation Layer race?)
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // EXTREMELY IMPORTANT: Wait for all GPU work to finish before destroying anything.
+                device.handle.device_wait_idle().ok();
 
                 // 1. Clean up Window Resources
+                // First, identify ALL current swapchain image views across all windows.
+                let mut current_swapchain_views = std::collections::HashSet::new();
                 for ctx in self.windows.values() {
-                    for &pool in &ctx.command_pools {
-                        device.handle.destroy_command_pool(pool, None);
+                    if let Some(sc) = &ctx.swapchain {
+                        for &view in &sc.image_views {
+                            current_swapchain_views.insert(view.as_raw());
+                        }
                     }
+                    // Also destroy acquire semaphores here, as they are not part of the swapchain struct
                     for &sem in &ctx.acquire_semaphores {
                         device.handle.destroy_semaphore(sem, None);
                     }
+                }
+
+                // Now destroy windows (this drops swapchains and their views)
+                self.windows.clear();
+
+                // 1a. Clean up Global Frame Contexts
+                for ctx in &self.frame_contexts {
+                    device.handle.destroy_command_pool(ctx.command_pool, None);
                 }
 
                 // 2. Clean up Pipelines & Shaders
@@ -1915,6 +2025,14 @@ impl Drop for VulkanBackend {
                         device.handle.destroy_image_view(*view, None);
                         allocator.destroy_image(*image, alloc);
                     }
+
+                    for (_, sampler) in &mut self.dead_samplers {
+                        device.handle.destroy_sampler(*sampler, None);
+                    }
+
+                    for (_, _, sem) in &self.dead_semaphores {
+                        device.handle.destroy_semaphore(*sem, None);
+                    }
                 }
 
                 // 6. Clean up Pools (Transient)
@@ -1944,34 +2062,24 @@ impl Drop for VulkanBackend {
                 }
 
                 // 8. Clean up Images and Views (Active)
-                // CAUTION: Filter out Swapchain Views!
-                // Swapchain images are owned by the swapchain, but we might have views in our map.
-                // We identify them by checking if the image handle belongs to a swapchain.
-                let mut swapchain_images = std::collections::HashSet::new();
-                for ctx in self.windows.values() {
-                    if let Some(sc) = &ctx.swapchain {
-                        for &img in &sc.images {
-                            swapchain_images.insert(img);
-                        }
+                // STALE swapchain views from previous recreations will be destroyed here (safely if they were unregistered,
+                // but the unregister logic should have handled it. This is a safety net).
+                for (&_id, &view) in &self.image_views {
+                    if !current_swapchain_views.contains(&view.as_raw()) {
+                        device.handle.destroy_image_view(view, None);
                     }
                 }
 
-                let mut swapchain_ids = std::collections::HashSet::new();
-                for (id, image) in &self.image_map {
-                    if swapchain_images.contains(image) {
-                        swapchain_ids.insert(*id);
-                    }
-                }
-
-                for (id, view) in &self.image_views {
-                    if !swapchain_ids.contains(id) {
-                        device.handle.destroy_image_view(*view, None);
-                    }
+                for (_, sampler) in &self.samplers {
+                    device.handle.destroy_sampler(*sampler, None);
                 }
 
                 {
                     let allocator = device.allocator.lock().unwrap();
                     for (id, image) in &self.image_map {
+                        // Only destroy if it was allocated by us (has an allocation)
+                        // and it's NOT a current swapchain image (windows.clear already handled it?)
+                        // Actually swapchain images don't have allocations in our map.
                         if let Some(mut alloc) = self.image_allocations.get(id).cloned() {
                             allocator.destroy_image(*image, &mut alloc);
                         }
@@ -2003,6 +2111,22 @@ pub struct VulkanPassContext<'a> {
     pipeline_layout_map: &'a HashMap<u64, vk::PipelineLayout>,
     descriptor_sets: &'a HashMap<u64, vk::DescriptorSet>,
     current_pipeline_layout: vk::PipelineLayout,
+}
+
+impl<'a> VulkanPassContext<'a> {
+    pub fn new(cmd: vk::CommandBuffer, backend: &'a VulkanBackend) -> Self {
+        Self {
+            cmd,
+            device: backend.get_device().clone(),
+            present_request: None,
+            image_handle_map: &backend.image_views,
+            buffer_map: &backend.buffer_map,
+            pipeline_map: &backend.pipeline_map,
+            pipeline_layout_map: &backend.pipeline_layout_map,
+            descriptor_sets: &backend.descriptor_sets,
+            current_pipeline_layout: vk::PipelineLayout::null(),
+        }
+    }
 }
 
 impl<'a> PassContext for VulkanPassContext<'a> {
@@ -2156,5 +2280,17 @@ impl<'a> PassContext for VulkanPassContext<'a> {
         // With semaphore, it might be fine on some drivers, but strict usage requires layout transition.
         // The `RenderPass` usually handles finalLayout=Present.
         // Dynamic Rendering requires manual transition.
+    }
+}
+
+impl VulkanBackend {
+    fn unregister_swapchain_images(&mut self, swapchain: &crate::swapchain::VulkanSwapchain) {
+        for &image in &swapchain.images {
+            let id = image.as_raw();
+            self.image_map.remove(&id);
+            self.image_views.remove(&id);
+            self.image_formats.remove(&id);
+            self.image_descs.remove(&id);
+        }
     }
 }

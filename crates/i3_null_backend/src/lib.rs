@@ -60,6 +60,19 @@ impl RenderBackend for NullBackend {
         // No-op for null backend
     }
 
+    fn create_sampler(
+        &mut self,
+        desc: &i3_gfx::graph::types::SamplerDesc,
+    ) -> i3_gfx::graph::backend::SamplerHandle {
+        let handle = self.next_handle();
+        info!(handle, ?desc, "Created Sampler");
+        i3_gfx::graph::backend::SamplerHandle(handle)
+    }
+
+    fn destroy_sampler(&mut self, handle: i3_gfx::graph::backend::SamplerHandle) {
+        info!(handle = handle.0, "Destroyed Sampler");
+    }
+
     fn create_transient_image(&mut self, desc: &i3_gfx::graph::backend::ImageDesc) -> BackendImage {
         self.create_image(desc)
     }
@@ -107,6 +120,14 @@ impl RenderBackend for NullBackend {
     fn initialize(&mut self, _device_id: u32) -> Result<(), String> {
         info!("Initialized Null Backend");
         Ok(())
+    }
+
+    fn begin_frame(&mut self) {
+        // No-op for null backend
+    }
+
+    fn end_frame(&mut self) {
+        self.garbage_collect();
     }
 
     fn create_window(

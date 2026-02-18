@@ -87,6 +87,19 @@ pub struct PassDescriptor {
     pub buffer_writes: Vec<BufferHandle>,
 }
 
+impl Default for PassDescriptor {
+    fn default() -> Self {
+        Self {
+            name: "UnnamedPass".to_string(),
+            pipeline: None,
+            image_reads: Vec::new(),
+            image_writes: Vec::new(),
+            buffer_reads: Vec::new(),
+            buffer_writes: Vec::new(),
+        }
+    }
+}
+
 /// Hardware-specific context used to record commands during a pass.
 pub trait PassContext {
     // Pipeline & Binding (Logical interfaces)
@@ -149,6 +162,8 @@ pub trait RenderBackend {
     // --- Resource Management ---
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage;
     fn create_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
+    fn create_sampler(&mut self, desc: &crate::graph::types::SamplerDesc) -> SamplerHandle; // New
+
     fn create_graphics_pipeline(
         &mut self,
         desc: &crate::graph::pipeline::GraphicsPipelineCreateInfo,
@@ -156,6 +171,7 @@ pub trait RenderBackend {
 
     fn destroy_image(&mut self, handle: BackendImage);
     fn destroy_buffer(&mut self, handle: BackendBuffer);
+    fn destroy_sampler(&mut self, handle: SamplerHandle); // New
 
     // --- Transient Resource Management (Pooling) ---
     fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage;
@@ -165,6 +181,8 @@ pub trait RenderBackend {
     fn garbage_collect(&mut self);
 
     // --- Frame Control (Internal) ---
+    fn begin_frame(&mut self);
+    fn end_frame(&mut self);
 
     /// Acquire the next available image from the swapchain associated with the window.
     /// Returns the image handle and a binary semaphore handle that will be signaled when the image is ready.

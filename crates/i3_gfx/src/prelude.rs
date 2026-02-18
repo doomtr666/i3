@@ -10,8 +10,9 @@
 pub use crate::graph::{
     backend::{
         BackendBuffer, BackendImage, BackendPipeline, DescriptorBufferInfo, DescriptorImageInfo,
-        DescriptorSetHandle, DescriptorWrite, DeviceInfo, DeviceType, Event, KeyCode, PassContext,
-        PassDescriptor, RenderBackend, SwapchainConfig, WindowDesc,
+        DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, DeviceInfo, DeviceType, Event,
+        KeyCode, PassContext, PassDescriptor, RenderBackend, SamplerHandle, SwapchainConfig,
+        WindowDesc,
     },
     compiler::{CompiledGraph, FrameGraph},
     pass::{Node, PassBuilder},
@@ -24,8 +25,8 @@ pub use crate::graph::{
         VertexInputBinding, VertexInputRate, VertexInputState,
     },
     types::{
-        BufferDesc, BufferHandle, BufferUsageFlags, Format, ImageDesc, ImageHandle,
-        ImageUsageFlags, MemoryType, PassDomain, PipelineHandle, ResourceUsage,
-        SwapChainImageHandle, SymbolId, WindowHandle,
+        AddressMode, BufferDesc, BufferHandle, BufferUsageFlags, Filter, Format, ImageDesc,
+        ImageHandle, ImageUsageFlags, MemoryType, MipmapMode, PassDomain, PipelineHandle,
+        ResourceUsage, SamplerDesc, SwapChainImageHandle, SymbolId, WindowHandle,
     },
 };
