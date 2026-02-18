@@ -1,7 +1,7 @@
 use ash::vk;
 use ash::vk::Handle;
 use std::sync::Arc;
-use tracing::info;
+use tracing::debug;
 
 pub struct VulkanWindow {
     pub instance: Arc<crate::instance::VulkanInstance>,
@@ -18,7 +18,7 @@ impl VulkanWindow {
             .vulkan_create_surface(instance.handle.handle().as_raw() as usize)
             .map_err(|e| e.to_string())?;
 
-        info!("Vulkan Surface created from existing SDL2 Window");
+        debug!("Vulkan Surface created from existing SDL2 Window");
 
         let surface = vk::SurfaceKHR::from_raw(surface_raw);
 
@@ -38,6 +38,6 @@ impl Drop for VulkanWindow {
                 surface::Instance::new(&self.instance.entry, &self.instance.handle);
             surface_loader.destroy_surface(self.surface, None);
         }
-        info!("Vulkan Surface and Window destroyed");
+        debug!("Vulkan Surface and Window destroyed");
     }
 }

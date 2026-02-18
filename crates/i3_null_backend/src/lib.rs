@@ -158,10 +158,10 @@ impl RenderBackend for NullBackend {
     fn acquire_swapchain_image(
         &mut self,
         _window: i3_gfx::graph::types::WindowHandle,
-    ) -> Result<(BackendImage, u64, u32), String> {
+    ) -> Result<Option<(BackendImage, u64, u32)>, String> {
         let handle = 1000;
         self.allocated_images.insert(handle);
-        Ok((BackendImage(handle), 1, 0))
+        Ok(Some((BackendImage(handle), 1, 0)))
     }
 
     fn submit(

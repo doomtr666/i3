@@ -21,6 +21,7 @@ foreach ($arg in $ExtraArgs) {
         $DiagArgs += "--werror"
     } elseif ($arg -eq "-v" -or $arg -eq "--verbose") {
         $DiagArgs += "--verbose"
+        $RunArgs += $arg
     } else {
         $RunArgs += $arg
     }

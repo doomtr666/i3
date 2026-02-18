@@ -318,7 +318,9 @@ impl CompiledGraph {
 
         // 2. Execution
         backend.begin_frame();
-        let result = Self::execute_node_recursive(self._root, backend);
+        // Use a simple Vec for inactive images - usually 0 or 1, much faster than HashSet
+        let mut inactive_images = Vec::with_capacity(2);
+        let result = Self::execute_node_recursive(self._root, backend, &mut inactive_images);
 
         // Final Submission (Phase 0: pure submission of recorded commands)
         let _ = backend.submit(
@@ -383,15 +385,24 @@ impl CompiledGraph {
     fn execute_node_recursive(
         mut node: NodeStorage,
         backend: &mut dyn RenderBackend,
+        inactive_images: &mut Vec<u64>,
     ) -> Result<Option<u64>, String> {
         // 0. Process Swapchain Requests (Automatic Acquire)
         for (handle, window) in node.swapchain_requests {
-            let (physical, _sem, _idx) = backend
+            match backend
                 .acquire_swapchain_image(window)
-                .map_err(|e| e.to_string())?; // Propagate error (e.g. "WindowMinimized")
-
-            // Register automatically
-            backend.register_external_image(handle, physical);
+                .map_err(|e| e.to_string())?
+            {
+                Some((physical, _sem, _idx)) => {
+                    // Register automatically
+                    backend.register_external_image(handle, physical);
+                }
+                None => {
+                    // Mark this handle as inactive (minimized)
+                    tracing::info!(window = ?window.0, "Window is minimized, skipping associated passes");
+                    inactive_images.push(handle.0.0);
+                }
+            }
         }
 
         // Register external resources first
@@ -403,21 +414,34 @@ impl CompiledGraph {
 
         // If this node has an execute closure, it's a pass
         if let Some(execute) = node.execute.take() {
-            let desc = PassDescriptor {
-                name: node.name.clone(),
-                pipeline: node.pipeline,
-                image_reads: node.image_reads.iter().map(|(h, _)| *h).collect(),
-                image_writes: node.image_writes.iter().map(|(h, _)| *h).collect(),
-                buffer_reads: node.buffer_reads.iter().map(|(h, _)| *h).collect(),
-                buffer_writes: node.buffer_writes.iter().map(|(h, _)| *h).collect(),
+            // Check if any write target is inactive first to avoid heavy descriptor allocation
+            let is_inactive = if inactive_images.is_empty() {
+                false
+            } else {
+                node.image_writes
+                    .iter()
+                    .any(|(h, _)| inactive_images.contains(&h.0.0))
             };
-            tracing::debug!(pass = %desc.name, writes = ?desc.image_writes.len(), "Executing pass");
-            last_sem = Some(backend.begin_pass(desc, execute));
+
+            if !is_inactive {
+                let desc = PassDescriptor {
+                    name: node.name,
+                    pipeline: node.pipeline,
+                    image_reads: node.image_reads.iter().map(|(h, _)| *h).collect(),
+                    image_writes: node.image_writes.iter().map(|(h, _)| *h).collect(),
+                    buffer_reads: node.buffer_reads.iter().map(|(h, _)| *h).collect(),
+                    buffer_writes: node.buffer_writes.iter().map(|(h, _)| *h).collect(),
+                };
+                tracing::debug!(pass = %desc.name, writes = ?desc.image_writes.len(), "Executing pass");
+                last_sem = Some(backend.begin_pass(desc, execute));
+            } else {
+                tracing::debug!(pass = %node.name, "Skipping pass (targets inactive image)");
+            }
         }
 
         // Execute children
         for child in node.children {
-            if let Some(sem) = Self::execute_node_recursive(child, backend)? {
+            if let Some(sem) = Self::execute_node_recursive(child, backend, inactive_images)? {
                 last_sem = Some(sem);
             }
         }

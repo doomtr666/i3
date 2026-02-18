@@ -5,7 +5,7 @@ use std::ffi::CString;
 use std::sync::Arc;
 use tracing::info;
 #[cfg(debug_assertions)]
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 #[cfg(debug_assertions)]
 unsafe extern "system" fn vulkan_debug_callback(
@@ -128,6 +128,7 @@ impl Drop for VulkanInstance {
                 .destroy_debug_utils_messenger(self.debug_messenger, None);
             self.handle.destroy_instance(None);
         }
-        info!("Vulkan Instance destroyed");
+        #[cfg(debug_assertions)]
+        debug!("Vulkan Instance destroyed");
     }
 }

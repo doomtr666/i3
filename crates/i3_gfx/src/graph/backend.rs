@@ -189,7 +189,7 @@ pub trait RenderBackend {
     fn acquire_swapchain_image(
         &mut self,
         window: crate::graph::types::WindowHandle,
-    ) -> Result<(BackendImage, u64, u32), String>;
+    ) -> Result<Option<(BackendImage, u64, u32)>, String>;
 
     // --- Execution & Sync ---
 

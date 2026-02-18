@@ -1,7 +1,7 @@
 use ash::vk;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tracing::info;
+use tracing::{debug, info};
 use vk_mem::{Allocator, AllocatorCreateInfo};
 
 use std::mem::ManuallyDrop;
@@ -143,6 +143,6 @@ impl Drop for VulkanDevice {
 
             self.handle.destroy_device(None);
         }
-        info!("Vulkan Device destroyed");
+        debug!("Vulkan Device destroyed");
     }
 }

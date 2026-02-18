@@ -5,7 +5,7 @@ use i3_gfx::graph::pipeline::*;
 use i3_gfx::graph::types::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use vk_mem::Alloc;
 
 struct PooledImage {
@@ -44,6 +44,8 @@ struct WindowContext {
     config: SwapchainConfig,
     // Semaphores for acquire (per frame in flight)
     acquire_semaphores: Vec<vk::Semaphore>,
+    // Semaphores for present (per frame in flight)
+    present_semaphores: Vec<vk::Semaphore>,
     // Track the current frame's acquire semaphore to pair it with the image
     current_acquire_sem: Option<vk::Semaphore>,
     current_image_index: Option<u32>,
@@ -123,6 +125,9 @@ pub struct VulkanBackend {
     pub pipeline_layout_map: HashMap<u64, vk::PipelineLayout>,
     pub next_resource_id: u64,
 
+    // Loaders
+    swapchain_loader: Option<ash::khr::swapchain::Device>,
+
     // Global Frame Contexts
     frame_contexts: Vec<VulkanFrameContext>,
     frame_started: bool,
@@ -177,6 +182,7 @@ impl VulkanBackend {
             timeline_sem: vk::Semaphore::null(), // Initialized in `initialize`
             cpu_timeline: 0,
             frame_contexts: Vec::new(),
+            swapchain_loader: None,
             frame_started: false,
             global_frame_index: 0,
         })
@@ -317,6 +323,12 @@ impl RenderBackend for VulkanBackend {
         }
         self.frame_contexts = frame_contexts;
 
+        // Initialize Loaders
+        self.swapchain_loader = Some(ash::khr::swapchain::Device::new(
+            &self.instance.handle,
+            &self.get_device().handle,
+        ));
+
         info!("Vulkan Backend Initialized");
         Ok(())
     }
@@ -383,15 +395,22 @@ impl RenderBackend for VulkanBackend {
 
         // Create Semaphores per frame for this window (typically 3 for triple buffering)
         let mut acquire_sems = Vec::new();
+        let mut present_sems = Vec::new();
         let device_handle = self.get_device().handle.clone();
         for _ in 0..3 {
             let create_info = vk::SemaphoreCreateInfo::default();
-            let sem = unsafe {
+            let a_sem = unsafe {
                 device_handle
                     .create_semaphore(&create_info, None)
                     .map_err(|e| e.to_string())?
             };
-            acquire_sems.push(sem);
+            let p_sem = unsafe {
+                device_handle
+                    .create_semaphore(&create_info, None)
+                    .map_err(|e| e.to_string())?
+            };
+            acquire_sems.push(a_sem);
+            present_sems.push(p_sem);
         }
 
         let ctx = WindowContext {
@@ -403,6 +422,7 @@ impl RenderBackend for VulkanBackend {
                 min_image: 3,
             }, // Default
             acquire_semaphores: acquire_sems,
+            present_semaphores: present_sems,
             current_acquire_sem: None,
             current_image_index: None,
         };
@@ -487,7 +507,7 @@ impl RenderBackend for VulkanBackend {
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage {
         let device = self.get_device().clone();
         let id = self.next_id();
-        info!("Creating Image: {:?} (ID: {})", desc, id);
+        debug!("Creating Image: {:?} (ID: {})", desc, id);
 
         let extent = vk::Extent3D {
             width: desc.width,
@@ -864,7 +884,7 @@ impl RenderBackend for VulkanBackend {
     fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineCreateInfo) -> BackendPipeline {
         let device = self.get_device().clone();
         let id = self.next_id();
-        info!("Creating Graphics Pipeline");
+        debug!("Creating Graphics Pipeline");
         use crate::convert::*;
 
         // 1. Create Shader Modules
@@ -1171,7 +1191,7 @@ impl RenderBackend for VulkanBackend {
     fn acquire_swapchain_image(
         &mut self,
         window: WindowHandle,
-    ) -> Result<(BackendImage, u64, u32), String> {
+    ) -> Result<Option<(BackendImage, u64, u32)>, String> {
         let device = self.get_device().clone();
         let frame_slot = self.global_frame_index;
 
@@ -1183,44 +1203,60 @@ impl RenderBackend for VulkanBackend {
                     .ok_or("Invalid window handle")?;
                 let size = ctx.raw.handle.drawable_size();
                 if size.0 == 0 || size.1 == 0 {
-                    return Err("WindowMinimized".to_string());
+                    return Ok(None);
                 }
 
                 if ctx.swapchain.is_none() {
-                    ctx.swapchain = Some(crate::swapchain::VulkanSwapchain::new(
+                    let sc_res = crate::swapchain::VulkanSwapchain::new(
                         device.clone(),
                         ctx.raw.surface,
                         size.0,
                         size.1,
                         ctx.config,
-                    )?);
+                    );
+
+                    match sc_res {
+                        Ok(sc) => ctx.swapchain = Some(sc),
+                        Err(e) if e == "ZeroExtent" => return Ok(None),
+                        Err(e) => return Err(e),
+                    }
                 }
 
                 let swapchain = ctx.swapchain.as_ref().unwrap();
                 let semaphore = ctx.acquire_semaphores[frame_slot % ctx.acquire_semaphores.len()];
 
                 let res = unsafe {
-                    let fp =
-                        ash::khr::swapchain::Device::new(&self.instance.handle, &device.handle);
-                    fp.acquire_next_image(swapchain.handle, u64::MAX, semaphore, vk::Fence::null())
+                    self.swapchain_loader.as_ref().unwrap().acquire_next_image(
+                        swapchain.handle,
+                        u64::MAX,
+                        semaphore,
+                        vk::Fence::null(),
+                    )
                 };
                 (res, semaphore)
             };
 
             if result.is_err() {
-                let sc_opt = self
-                    .windows
-                    .get_mut(&window.0)
-                    .and_then(|c| c.swapchain.take());
-                if let Some(sc) = sc_opt {
-                    self.unregister_swapchain_images(&sc);
+                let err = result.as_ref().err().unwrap();
+                if *err == vk::Result::ERROR_OUT_OF_DATE_KHR || *err == vk::Result::SUBOPTIMAL_KHR {
+                    let (sc_opt, size) = {
+                        let ctx = self.windows.get_mut(&window.0).unwrap();
+                        (ctx.swapchain.take(), ctx.raw.handle.drawable_size())
+                    };
+                    if let Some(sc) = sc_opt {
+                        self.unregister_swapchain_images(&sc);
+                    }
+                    if size.0 == 0 || size.1 == 0 {
+                        return Ok(None);
+                    }
+                    continue;
                 }
-                continue;
+                return Err(format!("Failed to acquire swapchain image: {}", err));
             }
 
             let (index, _) = result.unwrap();
             let ctx = self.windows.get_mut(&window.0).unwrap();
-            let swapchain = ctx.swapchain.as_ref().unwrap(); // Re-borrow swapchain after ctx is available again
+            let swapchain = ctx.swapchain.as_ref().unwrap();
 
             ctx.current_acquire_sem = Some(semaphore);
             ctx.current_image_index = Some(index);
@@ -1232,10 +1268,11 @@ impl RenderBackend for VulkanBackend {
                 let view_raw = swapchain.image_views[index as usize];
                 self.image_views.insert(image_id, view_raw);
                 self.image_formats.insert(image_id, swapchain.format);
+                self.external_to_physical.insert(image_id, image_id);
+                self.image_map.insert(image_id, image_raw);
             }
-            self.image_map.insert(image_id, image_raw);
 
-            return Ok((BackendImage(image_id), 0, index));
+            return Ok(Some((BackendImage(image_id), 0, index)));
         }
     }
 
@@ -1250,51 +1287,51 @@ impl RenderBackend for VulkanBackend {
         let signal_value = self.cpu_timeline;
 
         // Collect all binary semaphores from windows that acquired images
-        let mut wait_binary = Vec::new();
-        let mut signal_binary = Vec::new();
-        let mut present_info = Vec::new();
+        // 1. Collect Active Window Contexts (Borrow scope)
+        let mut active_windows = Vec::with_capacity(2);
+        let frame_slot = self.global_frame_index;
+        for ctx in self.windows.values_mut() {
+            if let (Some(a), Some(i)) = (
+                ctx.current_acquire_sem.take(),
+                ctx.current_image_index.take(),
+            ) {
+                let release_sem = ctx.present_semaphores[frame_slot % ctx.present_semaphores.len()];
+                active_windows.push((ctx.swapchain.as_ref().unwrap().handle, i, a, release_sem));
+            }
+        }
 
-        // Collect windows needing presentation first to avoid borrow conflicts
-        let window_ids: Vec<u64> = self.windows.keys().cloned().collect();
-        for id in window_ids {
-            let (acquire_sem, image_index, sc_handle) = {
-                let ctx = self.windows.get_mut(&id).unwrap();
-                if let (Some(a), Some(i)) = (
-                    ctx.current_acquire_sem.take(),
-                    ctx.current_image_index.take(),
-                ) {
-                    (a, i, ctx.swapchain.as_ref().unwrap().handle)
-                } else {
-                    continue;
-                }
-            };
+        // 2. Process Binary Semaphores (Outside borrow scope)
+        let mut wait_binary = Vec::with_capacity(active_windows.len());
+        let mut signal_binary = Vec::with_capacity(active_windows.len());
+        let mut present_info = Vec::with_capacity(active_windows.len());
 
+        for (sc_handle, image_index, acquire_sem, release_sem) in active_windows {
             wait_binary.push(acquire_sem);
-            let release_sem = self.create_semaphore_raw();
             signal_binary.push(release_sem);
             present_info.push((sc_handle, image_index, release_sem));
         }
 
         let device = self.get_device().clone();
 
-        let wait_values = vec![0u64; wait_binary.len()];
-        let mut signal_values = vec![signal_value];
-        signal_values.extend(vec![0u64; signal_binary.len()]);
+        let wait_values = [0u64; 8];
+        let mut signal_values = [0u64; 8];
+        signal_values[0] = signal_value;
+
+        let num_binary = signal_binary.len();
+        let mut all_signals = Vec::with_capacity(num_binary + 1);
+        all_signals.push(self.timeline_sem);
+        all_signals.extend(&signal_binary);
+
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; 8];
 
         let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(&wait_values)
-            .signal_semaphore_values(&signal_values);
-
-        let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; wait_binary.len()];
-
-        // Correctly handle multiple signal semaphores
-        let mut all_signals = vec![self.timeline_sem];
-        all_signals.extend(signal_binary.clone());
+            .wait_semaphore_values(&wait_values[..wait_binary.len()])
+            .signal_semaphore_values(&signal_values[..all_signals.len()]);
 
         let submit_info = vk::SubmitInfo::default()
             .push_next(&mut timeline_info)
             .wait_semaphores(&wait_binary)
-            .wait_dst_stage_mask(&wait_stages)
+            .wait_dst_stage_mask(&wait_stages[..wait_binary.len()])
             .signal_semaphores(&all_signals);
 
         // Collect all command buffers from current frame context (Only those not yet submitted)
@@ -1314,6 +1351,7 @@ impl RenderBackend for VulkanBackend {
         frame_ctx.submitted_cursor = frame_ctx.cursor;
 
         // Present all windows
+        let fp = self.swapchain_loader.as_ref().unwrap();
         for (swapchain, index, wait_sem) in present_info {
             let swapchains = [swapchain];
             let indices = [index];
@@ -1324,18 +1362,12 @@ impl RenderBackend for VulkanBackend {
                 .image_indices(&indices);
 
             unsafe {
-                let fp = ash::khr::swapchain::Device::new(&self.instance.handle, &device.handle);
                 fp.queue_present(device.graphics_queue, &present_info).ok(); // Presentation errors handled on next acquire
             }
         }
 
         // Advance slot's last completion value
         frame_ctx.last_completion_value = signal_value;
-
-        // Queue signal_binary semaphores for recycling (Leak Fix)
-        for sem in signal_binary {
-            self.dead_semaphores.push((self.frame_count, 0, sem));
-        }
 
         Ok(signal_value)
     }
@@ -1348,7 +1380,6 @@ impl RenderBackend for VulkanBackend {
         let device = self.get_device().clone();
 
         // 1. Identify Target Window & Extent (for Viewport/Pool)
-        let mut target_window_ctx = None;
         let mut viewport_extent = vk::Extent2D {
             width: 800,
             height: 600,
@@ -1365,7 +1396,7 @@ impl RenderBackend for VulkanBackend {
             target_ids.push(pid);
         }
 
-        // Try to find extent from first write
+        // Try to find extent and window from first write
         if let Some(&first_pid) = target_ids.first() {
             if let Some(d) = self.image_descs.get(&first_pid) {
                 viewport_extent = vk::Extent2D {
@@ -1373,25 +1404,16 @@ impl RenderBackend for VulkanBackend {
                     height: d.height,
                 };
             }
-        }
 
-        // Override with window extent if it's a swapchain image
-        'win_loop: for ctx_win in self.windows.values_mut() {
-            if let Some(sc) = &ctx_win.swapchain {
-                if let Some(idx) = ctx_win.current_image_index {
-                    let current_img = sc.images[idx as usize];
-                    let current_id = current_img.as_raw();
-                    if target_ids.contains(&current_id) {
+            // Check if this physical ID belongs to any swapchain
+            for ctx_win in self.windows.values() {
+                if let (Some(sc), Some(idx)) = (&ctx_win.swapchain, ctx_win.current_image_index) {
+                    if sc.images[idx as usize].as_raw() == first_pid {
                         viewport_extent = sc.extent;
-                        target_window_ctx = Some(ctx_win);
-                        break 'win_loop;
+                        break;
                     }
                 }
             }
-        }
-
-        if target_window_ctx.is_none() {
-            // Fallback logic
         }
 
         // 2. Allocate Command Buffer from Global Pool
@@ -1465,8 +1487,6 @@ impl RenderBackend for VulkanBackend {
         // Resolve attachments and synchronization
         let mut color_attachments = Vec::new();
         let mut depth_attachment_info = None;
-        let mut wait_semaphores = Vec::new();
-        let mut wait_stages = Vec::new();
 
         for &handle in &desc.image_writes {
             // 1. Resolve to Physical ID
@@ -1483,28 +1503,7 @@ impl RenderBackend for VulkanBackend {
                     .get(&physical_id)
                     .unwrap_or(&vk::Format::UNDEFINED);
 
-                // 3. Check if it matches any Swapchain Image to sync against
-                for win_ctx in self.windows.values() {
-                    if let Some(current_idx) = win_ctx.current_image_index {
-                        if let Some(sc) = &win_ctx.swapchain {
-                            let current_sc_image = sc.images[current_idx as usize];
-                            // We don't have the ID of the current swapchain image handy directly unless we map it?
-                            // wait, acquire_swapchain_image inserted:
-                            // self.image_map.insert(image_id, image_raw);
-                            // image_id = image_raw.as_raw();
-
-                            if physical_id == current_sc_image.as_raw() {
-                                // This is the swapchain image!
-                                // We must wait on the acquire semaphore.
-                                if let Some(sem) = win_ctx.current_acquire_sem {
-                                    wait_semaphores.push(sem);
-                                    wait_stages
-                                        .push(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
-                                }
-                            }
-                        }
-                    }
-                }
+                // 3. Skip redundant sync search (already handled in submit/barriers)
 
                 let clear_value = if format == vk::Format::D32_SFLOAT {
                     vk::ClearValue {
@@ -1970,8 +1969,11 @@ impl Drop for VulkanBackend {
                             current_swapchain_views.insert(view.as_raw());
                         }
                     }
-                    // Also destroy acquire semaphores here, as they are not part of the swapchain struct
+                    // Also destroy acquire and present semaphores here
                     for &sem in &ctx.acquire_semaphores {
+                        device.handle.destroy_semaphore(sem, None);
+                    }
+                    for &sem in &ctx.present_semaphores {
                         device.handle.destroy_semaphore(sem, None);
                     }
                 }

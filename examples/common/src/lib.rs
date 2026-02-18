@@ -3,8 +3,17 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 pub fn init_tracing(file_name: &str) -> tracing_appender::non_blocking::WorkerGuard {
+    let mut level = "info";
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "-v" || arg == "--verbose") {
+        level = "debug";
+    }
+
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("info,i3_vulkan_backend=info,i3_gfx=info,i3_null_backend=warn")
+        EnvFilter::new(format!(
+            "info,i3_vulkan_backend={},i3_gfx={},i3_null_backend=warn",
+            level, level
+        ))
     });
 
     // Ensure logs directory exists

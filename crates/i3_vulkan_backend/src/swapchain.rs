@@ -1,6 +1,6 @@
 use ash::vk;
 use std::sync::Arc;
-use tracing::info;
+use tracing::debug;
 
 pub struct VulkanSwapchain {
     pub loader: ash::khr::swapchain::Device,
@@ -52,6 +52,10 @@ impl VulkanSwapchain {
             );
         }
 
+        if extent.width == 0 || extent.height == 0 {
+            return Err("ZeroExtent".to_string());
+        }
+
         let color_space = vk::ColorSpaceKHR::SRGB_NONLINEAR;
 
         let present_modes = unsafe {
@@ -81,7 +85,7 @@ impl VulkanSwapchain {
             }
         };
 
-        info!("Selected Present Mode: {:?}", present_mode);
+        debug!("Selected Present Mode: {:?}", present_mode);
 
         // Also check composite alpha
         let composite_alpha = if capabilities
@@ -113,7 +117,7 @@ impl VulkanSwapchain {
         let images = unsafe { loader.get_swapchain_images(handle) }
             .map_err(|e| format!("Failed to get swapchain images: {}", e))?;
 
-        info!("Vulkan Swapchain created with {} images", images.len());
+        debug!("Vulkan Swapchain created with {} images", images.len());
 
         let image_views: Vec<vk::ImageView> = images
             .iter()
@@ -153,6 +157,6 @@ impl Drop for VulkanSwapchain {
             }
             self.loader.destroy_swapchain(self.handle, None);
         }
-        info!("Vulkan Swapchain and Views destroyed");
+        debug!("Vulkan Swapchain and Views destroyed");
     }
 }
