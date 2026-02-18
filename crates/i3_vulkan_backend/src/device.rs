@@ -4,13 +4,15 @@ use std::sync::Mutex;
 use tracing::info;
 use vk_mem::{Allocator, AllocatorCreateInfo};
 
+use std::mem::ManuallyDrop;
+
 pub struct VulkanDevice {
     pub instance: Arc<crate::instance::VulkanInstance>,
     pub physical_device: vk::PhysicalDevice,
     pub handle: ash::Device,
     pub graphics_queue: vk::Queue,
     pub graphics_family: u32,
-    pub allocator: Mutex<Allocator>,
+    pub allocator: ManuallyDrop<Mutex<Allocator>>,
 
     pub dynamic_rendering: ash::khr::dynamic_rendering::Device,
     pub sync2: ash::khr::synchronization2::Device,
@@ -126,7 +128,7 @@ impl VulkanDevice {
             handle,
             graphics_queue,
             graphics_family,
-            allocator: Mutex::new(allocator),
+            allocator: ManuallyDrop::new(Mutex::new(allocator)),
             dynamic_rendering,
             sync2,
         })
@@ -136,10 +138,9 @@ impl VulkanDevice {
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
         unsafe {
-            // Allocator must be dropped before device
-            // We can't easily drop the Mutex content here without taking it,
-            // but for simplicity in MVP we assume the process exits.
-            // In a real app we'd use ManuallyDrop or an Option.
+            // Drop allocator explicitly BEFORE destroying device
+            ManuallyDrop::drop(&mut self.allocator);
+
             self.handle.destroy_device(None);
         }
         info!("Vulkan Device destroyed");

@@ -1,14 +1,13 @@
 #![allow(unused_imports)]
 use ash::vk;
 use i3_gfx::graph::pipeline::{
-    BindingType, BlendFactor, BlendOp, BufferUsageFlags, ColorComponentFlags, CompareOp, CullMode,
-    FrontFace, IndexType, InputAssemblyState, MipmapMode, MultisampleState, PolygonMode,
-    PrimitiveTopology, RasterizationState, ShaderStageFlags, StencilOp, StencilOpState,
-    VertexFormat, VertexInputRate,
+    BindingType, BlendFactor, BlendOp, ColorComponentFlags, CompareOp, CullMode, FrontFace,
+    IndexType, InputAssemblyState, MipmapMode, MultisampleState, PolygonMode, PrimitiveTopology,
+    RasterizationState, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat, VertexInputRate,
 };
 use i3_gfx::graph::types::{
-    AddressMode, BorderColor, Filter, Format, ImageAspectFlags, ImageType, ImageUsageFlags,
-    ImageViewType, SampleCount,
+    AddressMode, BorderColor, BufferUsageFlags, Filter, Format, ImageAspectFlags, ImageType,
+    ImageUsageFlags, ImageViewType, SampleCount,
 };
 // Removed ComponentSwizzle as it wasn't in my port of pipeline.rs yet?
 // Wait, I might have missed ComponentSwizzle in pipeline.rs or types.rs?
@@ -84,38 +83,32 @@ pub fn convert_image_usage_flags(usage_flags: ImageUsageFlags) -> vk::ImageUsage
 pub fn convert_buffer_usage_flags(usage_flags: BufferUsageFlags) -> vk::BufferUsageFlags {
     let mut vk_usage_flags = vk::BufferUsageFlags::empty();
 
-    if usage_flags.contains(BufferUsageFlags::TransferSrc) {
+    if usage_flags.contains(BufferUsageFlags::TRANSFER_SRC) {
         vk_usage_flags |= vk::BufferUsageFlags::TRANSFER_SRC;
     }
-    if usage_flags.contains(BufferUsageFlags::TransferDst) {
+    if usage_flags.contains(BufferUsageFlags::TRANSFER_DST) {
         vk_usage_flags |= vk::BufferUsageFlags::TRANSFER_DST;
     }
-    if usage_flags.contains(BufferUsageFlags::UniformTexelBuffer) {
+    if usage_flags.contains(BufferUsageFlags::UNIFORM_TEXEL_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER;
     }
-    if usage_flags.contains(BufferUsageFlags::StorageTexelBuffer) {
+    if usage_flags.contains(BufferUsageFlags::STORAGE_TEXEL_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER;
     }
-    if usage_flags.contains(BufferUsageFlags::UniformBuffer) {
+    if usage_flags.contains(BufferUsageFlags::UNIFORM_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::UNIFORM_BUFFER;
     }
-    if usage_flags.contains(BufferUsageFlags::StorageBuffer) {
+    if usage_flags.contains(BufferUsageFlags::STORAGE_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::STORAGE_BUFFER;
     }
-    if usage_flags.contains(BufferUsageFlags::IndexBuffer) {
+    if usage_flags.contains(BufferUsageFlags::INDEX_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::INDEX_BUFFER;
     }
-    if usage_flags.contains(BufferUsageFlags::VertexBuffer) {
+    if usage_flags.contains(BufferUsageFlags::VERTEX_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::VERTEX_BUFFER;
     }
-    if usage_flags.contains(BufferUsageFlags::IndirectBuffer) {
+    if usage_flags.contains(BufferUsageFlags::INDIRECT_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::INDIRECT_BUFFER;
-    }
-    if usage_flags.contains(BufferUsageFlags::ShaderDeviceAddress) {
-        vk_usage_flags |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
-    }
-    if usage_flags.contains(BufferUsageFlags::AccelerationStructure) {
-        vk_usage_flags |= vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR;
     }
 
     vk_usage_flags
@@ -184,6 +177,13 @@ pub fn convert_cull_mode(mode: CullMode) -> vk::CullModeFlags {
     }
 }
 
+pub fn convert_front_face(face: FrontFace) -> vk::FrontFace {
+    match face {
+        FrontFace::CounterClockwise => vk::FrontFace::COUNTER_CLOCKWISE,
+        FrontFace::Clockwise => vk::FrontFace::CLOCKWISE,
+    }
+}
+
 pub fn convert_blend_factor(factor: BlendFactor) -> vk::BlendFactor {
     match factor {
         BlendFactor::Zero => vk::BlendFactor::ZERO,
@@ -230,6 +230,23 @@ pub fn convert_shader_stage_flags(flags: ShaderStageFlags) -> vk::ShaderStageFla
         result |= vk::ShaderStageFlags::TESSELLATION_EVALUATION;
     }
     result
+}
+
+pub fn convert_color_component_flags(flags: ColorComponentFlags) -> vk::ColorComponentFlags {
+    let mut vk_flags = vk::ColorComponentFlags::empty();
+    if flags.contains(ColorComponentFlags::R) {
+        vk_flags |= vk::ColorComponentFlags::R;
+    }
+    if flags.contains(ColorComponentFlags::G) {
+        vk_flags |= vk::ColorComponentFlags::G;
+    }
+    if flags.contains(ColorComponentFlags::B) {
+        vk_flags |= vk::ColorComponentFlags::B;
+    }
+    if flags.contains(ColorComponentFlags::A) {
+        vk_flags |= vk::ColorComponentFlags::A;
+    }
+    vk_flags
 }
 
 pub fn convert_stencil_op(op: StencilOp) -> vk::StencilOp {

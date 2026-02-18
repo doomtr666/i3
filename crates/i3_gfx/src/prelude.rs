@@ -9,20 +9,23 @@
 
 pub use crate::graph::{
     backend::{
-        DeviceInfo, DeviceType, Event, PassContext, RenderBackend, SwapchainConfig, WindowDesc,
+        BackendBuffer, BackendImage, BackendPipeline, DescriptorBufferInfo, DescriptorImageInfo,
+        DescriptorSetHandle, DescriptorWrite, DeviceInfo, DeviceType, Event, KeyCode, PassContext,
+        PassDescriptor, RenderBackend, SwapchainConfig, WindowDesc,
     },
     compiler::{CompiledGraph, FrameGraph},
     pass::{Node, PassBuilder},
     pipeline::{
-        Binding, BindingType, BlendFactor, BlendOp, BlendState, BufferUsageFlags,
-        ColorComponentFlags, CompareOp, CullMode, DepthStencilState, FrontFace,
-        GraphicsPipelineCreateInfo, MultisampleState, PolygonMode, PrimitiveTopology,
-        PushConstantRange, RasterizationState, RenderTargetInfo, RenderTargetsInfo, ShaderModule,
-        ShaderReflection, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat,
-        VertexInputRate,
+        Binding, BindingType, BlendFactor, BlendOp, BlendState, ColorComponentFlags, CompareOp,
+        CullMode, DepthStencilState, FrontFace, GraphicsPipelineCreateInfo, IndexType,
+        InputAssemblyState, MultisampleState, PolygonMode, PrimitiveTopology, PushConstantRange,
+        RasterizationState, RenderTargetInfo, RenderTargetsInfo, ShaderModule, ShaderReflection,
+        ShaderStageFlags, StencilOp, StencilOpState, VertexFormat, VertexInputAttribute,
+        VertexInputBinding, VertexInputRate, VertexInputState,
     },
     types::{
-        BufferDesc, BufferHandle, Format, ImageDesc, ImageHandle, PassDomain, PipelineHandle,
-        ResourceUsage, SwapChainImageHandle, SymbolId, WindowHandle,
+        BufferDesc, BufferHandle, BufferUsageFlags, Format, ImageDesc, ImageHandle,
+        ImageUsageFlags, MemoryType, PassDomain, PipelineHandle, ResourceUsage,
+        SwapChainImageHandle, SymbolId, WindowHandle,
     },
 };

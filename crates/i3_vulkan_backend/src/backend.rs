@@ -112,6 +112,11 @@ pub struct VulkanBackend {
     pub timeline_sem: vk::Semaphore, // Global timeline for graphics queue
     pub cpu_timeline: u64,           // Current CPU submission value
     pub next_semaphore_id: u64,
+    pub descriptor_pool: vk::DescriptorPool,
+    pub pipeline_layouts: HashMap<u64, Vec<vk::DescriptorSetLayout>>,
+    pub descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
+    pub descriptor_sets: HashMap<u64, vk::DescriptorSet>,
+    pub pipeline_layout_map: HashMap<u64, vk::PipelineLayout>,
     pub next_resource_id: u64,
 }
 
@@ -151,6 +156,11 @@ impl VulkanBackend {
             transient_image_descs: HashMap::new(),
             transient_buffer_descs: HashMap::new(),
             next_resource_id: 1000,
+            descriptor_pool: vk::DescriptorPool::null(),
+            pipeline_layouts: HashMap::new(),
+            descriptor_set_layouts: Vec::new(),
+            descriptor_sets: HashMap::new(),
+            pipeline_layout_map: HashMap::new(),
             timeline_sem: vk::Semaphore::null(), // Initialized in `initialize`
             cpu_timeline: 0,
         })
@@ -241,6 +251,31 @@ impl RenderBackend for VulkanBackend {
                 .handle
                 .create_semaphore(&create_info, None)
                 .map_err(|e| format!("Failed to create timeline semaphore: {}", e))?
+        };
+
+        // Create Descriptor Pool
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 1000,
+            },
+        ];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(1000);
+        self.descriptor_pool = unsafe {
+            self.get_device()
+                .handle
+                .create_descriptor_pool(&pool_info, None)
+                .map_err(|e| format!("Failed to create descriptor pool: {}", e))?
         };
 
         info!("Vulkan Backend Initialized");
@@ -480,22 +515,33 @@ impl RenderBackend for VulkanBackend {
         let device = self.get_device().clone();
         let id = self.next_id();
 
-        let usage = vk::BufferUsageFlags::TRANSFER_SRC
-            | vk::BufferUsageFlags::TRANSFER_DST
-            | vk::BufferUsageFlags::UNIFORM_BUFFER
-            | vk::BufferUsageFlags::STORAGE_BUFFER
-            | vk::BufferUsageFlags::INDEX_BUFFER
-            | vk::BufferUsageFlags::VERTEX_BUFFER
-            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+        let usage = crate::convert::convert_buffer_usage_flags(desc.usage);
 
         let create_info = vk::BufferCreateInfo::default()
             .size(desc.size.max(1)) // Vulkan doesn't like 0 size
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
+        let (mem_usage, alloc_flags) = match desc.memory {
+            MemoryType::GpuOnly => (
+                vk_mem::MemoryUsage::AutoPreferDevice,
+                vk_mem::AllocationCreateFlags::empty(),
+            ),
+            MemoryType::CpuToGpu => (
+                vk_mem::MemoryUsage::AutoPreferHost,
+                vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                    | vk_mem::AllocationCreateFlags::MAPPED,
+            ),
+            MemoryType::GpuToCpu => (
+                vk_mem::MemoryUsage::AutoPreferHost,
+                vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
+                    | vk_mem::AllocationCreateFlags::MAPPED,
+            ),
+        };
+
         let allocation_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::Auto,
-            flags: vk_mem::AllocationCreateFlags::MAPPED, // Map everything for now (simplification)
+            usage: mem_usage,
+            flags: alloc_flags,
             ..Default::default()
         };
 
@@ -744,14 +790,37 @@ impl RenderBackend for VulkanBackend {
             );
         }
 
-        // 2. Vertex Input (Empty, using bindless/pulling usually, or standard)
-        // For 'draw_triangle' example it might expect standard input?
-        // i3 engine design says "Buffer device address — bindless buffer access".
-        // So Vertex Input should be empty.
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+        // 2. Vertex Input
+        let vk_vertex_bindings: Vec<vk::VertexInputBindingDescription> = desc
+            .vertex_input
+            .bindings
+            .iter()
+            .map(|b| vk::VertexInputBindingDescription {
+                binding: b.binding,
+                stride: b.stride,
+                input_rate: convert_vertex_input_rate(b.input_rate),
+            })
+            .collect();
+
+        let vk_vertex_attributes: Vec<vk::VertexInputAttributeDescription> = desc
+            .vertex_input
+            .attributes
+            .iter()
+            .map(|a| vk::VertexInputAttributeDescription {
+                location: a.location,
+                binding: a.binding,
+                format: convert_vertex_format(a.format),
+                offset: a.offset,
+            })
+            .collect();
+
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&vk_vertex_bindings)
+            .vertex_attribute_descriptions(&vk_vertex_attributes);
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+            .topology(convert_primitive_topology(desc.input_assembly.topology))
+            .primitive_restart_enable(desc.input_assembly.primitive_restart_enable);
 
         // 3. Dynamic States
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
@@ -763,46 +832,123 @@ impl RenderBackend for VulkanBackend {
             .scissor_count(1);
 
         let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
-            .cull_mode(vk::CullModeFlags::NONE) // Draw both sides for safety in triage
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .line_width(1.0)
-            .polygon_mode(vk::PolygonMode::FILL);
+            .depth_clamp_enable(desc.rasterization_state.depth_clamp_enable)
+            .rasterizer_discard_enable(desc.rasterization_state.rasterizer_discard_enable)
+            .polygon_mode(convert_polygon_mode(desc.rasterization_state.polygon_mode))
+            .cull_mode(convert_cull_mode(desc.rasterization_state.cull_mode))
+            // Engine Convention: Vulkan uses Clockwise Front Face to compensate for Negative Viewport
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .depth_bias_enable(desc.rasterization_state.depth_bias_enable)
+            .depth_bias_constant_factor(desc.rasterization_state.depth_bias_constant_factor)
+            .depth_bias_clamp(desc.rasterization_state.depth_bias_clamp)
+            .depth_bias_slope_factor(desc.rasterization_state.depth_bias_slope_factor)
+            .line_width(desc.rasterization_state.line_width);
 
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+            .rasterization_samples(convert_sample_count(desc.multisample_state.sample_count))
+            .sample_shading_enable(desc.multisample_state.sample_shading_enable)
+            .alpha_to_coverage_enable(desc.multisample_state.alpha_to_coverage_enable);
+
         // 4. Depth Stencil
-        let depth_enable = desc.render_targets.depth_stencil_format.is_some();
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(depth_enable)
-            .depth_write_enable(depth_enable)
-            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL) // Standard
-            .depth_bounds_test_enable(false)
-            .stencil_test_enable(false);
+            .depth_test_enable(desc.depth_stencil_state.depth_test_enable)
+            .depth_write_enable(desc.depth_stencil_state.depth_write_enable)
+            .depth_compare_op(convert_compare_op(
+                desc.depth_stencil_state.depth_compare_op,
+            ))
+            .depth_bounds_test_enable(false) // Not in i3_gfx yet
+            .stencil_test_enable(desc.depth_stencil_state.stencil_test_enable)
+            .front(convert_stencil_op_state(&desc.depth_stencil_state.front))
+            .back(convert_stencil_op_state(&desc.depth_stencil_state.back))
+            .min_depth_bounds(0.0)
+            .max_depth_bounds(1.0);
 
-        // 4. Color Blend
-        let attachment = vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD)
-            .color_write_mask(
-                vk::ColorComponentFlags::R
-                    | vk::ColorComponentFlags::G
-                    | vk::ColorComponentFlags::B
-                    | vk::ColorComponentFlags::A,
-            );
+        // 5. Color Blend
+        let attachments: Vec<vk::PipelineColorBlendAttachmentState> = desc
+            .render_targets
+            .color_targets
+            .iter()
+            .map(|target| {
+                let mut attachment = vk::PipelineColorBlendAttachmentState::default()
+                    .color_write_mask(convert_color_component_flags(target.write_mask));
 
-        let attachments = [attachment];
+                if let Some(blend) = target.blend {
+                    attachment = attachment
+                        .blend_enable(true)
+                        .src_color_blend_factor(convert_blend_factor(blend.src_color_factor))
+                        .dst_color_blend_factor(convert_blend_factor(blend.dst_color_factor))
+                        .color_blend_op(convert_blend_op(blend.color_op))
+                        .src_alpha_blend_factor(convert_blend_factor(blend.src_alpha_factor))
+                        .dst_alpha_blend_factor(convert_blend_factor(blend.dst_alpha_factor))
+                        .alpha_blend_op(convert_blend_op(blend.alpha_op));
+                } else {
+                    attachment = attachment.blend_enable(false);
+                }
+                attachment
+            })
+            .collect();
+
         let color_blend =
             vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
 
         // 5. Layout (Push Constants + Descriptor Sets)
-        // We create a dummy layout for now.
-        // Need to implement reflection-based layout creation.
-        // For MVP triangle we might need empty layout.
+
+        // Group bindings by set index
+        let mut set_bindings: HashMap<u32, Vec<vk::DescriptorSetLayoutBinding>> = HashMap::new();
+        for binding in &desc.shader_module.reflection.bindings {
+            let descriptor_type = match binding.binding_type {
+                i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
+                    vk::DescriptorType::UNIFORM_BUFFER
+                }
+                i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
+                    vk::DescriptorType::STORAGE_BUFFER
+                }
+                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
+                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+                }
+                i3_gfx::graph::pipeline::BindingType::Sampler => vk::DescriptorType::SAMPLER,
+                i3_gfx::graph::pipeline::BindingType::Texture => vk::DescriptorType::SAMPLED_IMAGE,
+                _ => vk::DescriptorType::UNIFORM_BUFFER, // Fallback
+            };
+
+            let stage_flags =
+                convert_shader_stage_flags(i3_gfx::graph::pipeline::ShaderStageFlags::All); // Simplified for MVP
+
+            let vk_binding = vk::DescriptorSetLayoutBinding::default()
+                .binding(binding.binding)
+                .descriptor_type(descriptor_type)
+                .descriptor_count(binding.count)
+                .stage_flags(stage_flags);
+
+            set_bindings
+                .entry(binding.set)
+                .or_default()
+                .push(vk_binding);
+        }
+
+        // Create Descriptor Set Layouts (filling gaps)
+        let mut descriptor_set_layouts = Vec::new();
+        if !set_bindings.is_empty() {
+            let max_set = *set_bindings.keys().max().unwrap();
+            for i in 0..=max_set {
+                let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
+                let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
+
+                let layout = unsafe {
+                    device
+                        .handle
+                        .create_descriptor_set_layout(&layout_info, None)
+                        .expect("Failed to create descriptor set layout")
+                };
+
+                descriptor_set_layouts.push(layout);
+                self.descriptor_set_layouts.push(layout); // Track for cleanup
+            }
+        }
+
+        // Store layouts for this pipeline
+        self.pipeline_layouts
+            .insert(id, descriptor_set_layouts.clone());
 
         // Push Constants from reflection
         let pc_ranges: Vec<vk::PushConstantRange> = desc
@@ -819,7 +965,10 @@ impl RenderBackend for VulkanBackend {
             })
             .collect();
 
-        let layout_info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&pc_ranges);
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&descriptor_set_layouts)
+            .push_constant_ranges(&pc_ranges);
+
         let pipeline_layout =
             unsafe { device.handle.create_pipeline_layout(&layout_info, None) }.unwrap();
 
@@ -880,6 +1029,7 @@ impl RenderBackend for VulkanBackend {
         self.layouts.push(pipeline_layout);
 
         self.pipeline_map.insert(id, pipeline);
+        self.pipeline_layout_map.insert(id, pipeline_layout);
 
         BackendPipeline(id)
     }
@@ -1181,7 +1331,10 @@ impl RenderBackend for VulkanBackend {
             present_request: None,
             image_handle_map: &self.image_views,
             buffer_map: &self.buffer_map,
-            pipeline_map: &self.pipeline_map, // Fixed: accessing the map constructed earlier
+            pipeline_map: &self.pipeline_map,
+            pipeline_layout_map: &self.pipeline_layout_map,
+            descriptor_sets: &self.descriptor_sets,
+            current_pipeline_layout: vk::PipelineLayout::null(),
         };
 
         // If pipeline is set, bind it
@@ -1190,9 +1343,13 @@ impl RenderBackend for VulkanBackend {
         }
 
         // Dynamic Viewport/Scissor setup (Use resolved extent)
+        // Engine Convention: Negative Height Viewport for Y-Up
         let viewport = vk::Viewport::default()
+            .x(0.0)
+            .y(viewport_extent.height as f32)
             .width(viewport_extent.width as f32)
-            .height(viewport_extent.height as f32)
+            .height(-(viewport_extent.height as f32))
+            .min_depth(0.0)
             .max_depth(1.0);
         let scissor = vk::Rect2D::default().extent(viewport_extent);
 
@@ -1497,7 +1654,7 @@ impl RenderBackend for VulkanBackend {
 
     fn upload_buffer(
         &mut self,
-        handle: BufferHandle,
+        handle: BackendBuffer,
         data: &[u8],
         offset: u64,
     ) -> Result<(), String> {
@@ -1506,7 +1663,7 @@ impl RenderBackend for VulkanBackend {
         let allocator_lock = device.allocator.lock().unwrap();
 
         // Then get allocation
-        let id = handle.0.0;
+        let id = handle.0;
         if let Some(allocation) = self.buffer_allocations.get_mut(&id) {
             // Map memory
             let ptr = unsafe {
@@ -1533,26 +1690,169 @@ impl RenderBackend for VulkanBackend {
     }
     fn allocate_descriptor_set(
         &mut self,
-        _pipeline: PipelineHandle,
-        _set_index: u32,
+        pipeline: PipelineHandle,
+        set_index: u32,
     ) -> Result<DescriptorSetHandle, String> {
-        // TODO: Implement Descriptor Pool and Allocation using Pipeline Reflection
-        Ok(DescriptorSetHandle(0)) // Dummy
+        let pipeline_id = pipeline.0.0;
+        let layouts = self
+            .pipeline_layouts
+            .get(&pipeline_id)
+            .ok_or_else(|| format!("Pipeline layout not found for {:?}", pipeline))?;
+
+        if set_index as usize >= layouts.len() {
+            return Err(format!(
+                "Set index {} out of bounds for pipeline {:?}",
+                set_index, pipeline
+            ));
+        }
+
+        let layout = layouts[set_index as usize];
+        let layouts_to_alloc = [layout];
+
+        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(self.descriptor_pool)
+            .set_layouts(&layouts_to_alloc);
+
+        let sets = unsafe {
+            self.get_device()
+                .handle
+                .allocate_descriptor_sets(&alloc_info)
+                .map_err(|e| format!("Failed to allocate descriptor set: {}", e))?
+        };
+
+        let set = sets[0];
+        let handle_id = self.next_id();
+        self.descriptor_sets.insert(handle_id, set);
+
+        Ok(DescriptorSetHandle(handle_id))
     }
-    fn update_descriptor_set(&mut self, _set: DescriptorSetHandle, _writes: &[DescriptorWrite]) {
-        // TODO: Implement vkUpdateDescriptorSets
+
+    fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]) {
+        let vk_set = if let Some(s) = self.descriptor_sets.get(&set.0) {
+            *s
+        } else {
+            error!("Descriptor set not found: {:?}", set);
+            return;
+        };
+
+        // We need to keep the structures alive until the call to update_descriptor_sets
+        // But `vk::WriteDescriptorSet` holds references.
+        // We iterate and build vectors.
+
+        let mut descriptor_writes = Vec::new();
+        let mut buffer_infos = Vec::new(); // Store infos to keep alive
+        let mut image_infos = Vec::new();
+
+        // Pass 1: Create Info structures
+        for write in writes {
+            match write.descriptor_type {
+                i3_gfx::graph::pipeline::BindingType::UniformBuffer
+                | i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
+                    if let Some(info) = &write.buffer_info {
+                        if let Some(buf) = self.buffer_map.get(&info.buffer.0.0) {
+                            buffer_infos.push(vk::DescriptorBufferInfo {
+                                buffer: *buf,
+                                offset: info.offset,
+                                range: if info.range == 0 {
+                                    vk::WHOLE_SIZE
+                                } else {
+                                    info.range
+                                },
+                            });
+                        }
+                    }
+                }
+                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler
+                | i3_gfx::graph::pipeline::BindingType::Texture => {
+                    if let Some(info) = &write.image_info {
+                        // Resolve Image View
+                        // We need `image_views` map, but it's keyed by physical ID.
+                        // `info.image` is a logical handle.
+                        // We first convert logical -> physical
+                        let physical_id =
+                            if let Some(&phy) = self.external_to_physical.get(&info.image.0.0) {
+                                phy
+                            } else {
+                                info.image.0.0
+                            };
+
+                        if let Some(view) = self.image_views.get(&physical_id) {
+                            let layout = match info.image_layout {
+                                  i3_gfx::graph::backend::DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
+                                  i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                              };
+
+                            image_infos.push(vk::DescriptorImageInfo {
+                                sampler: vk::Sampler::null(), // TODO: Sampler Support
+                                image_view: *view,
+                                image_layout: layout,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Pass 2: Create WriteDescriptorSet
+        let mut buf_idx = 0;
+        let mut img_idx = 0;
+
+        for write in writes {
+            let mut vk_write = vk::WriteDescriptorSet::default()
+                .dst_set(vk_set)
+                .dst_binding(write.binding)
+                .dst_array_element(write.array_element);
+
+            match write.descriptor_type {
+                i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
+                    vk_write = vk_write.descriptor_type(vk::DescriptorType::UNIFORM_BUFFER);
+                    if buf_idx < buffer_infos.len() {
+                        vk_write = vk_write.buffer_info(&buffer_infos[buf_idx..=buf_idx]);
+                        buf_idx += 1;
+                        descriptor_writes.push(vk_write);
+                    }
+                }
+                i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
+                    vk_write = vk_write.descriptor_type(vk::DescriptorType::STORAGE_BUFFER);
+                    if buf_idx < buffer_infos.len() {
+                        vk_write = vk_write.buffer_info(&buffer_infos[buf_idx..=buf_idx]);
+                        buf_idx += 1;
+                        descriptor_writes.push(vk_write);
+                    }
+                }
+                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
+                    vk_write = vk_write.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER);
+                    if img_idx < image_infos.len() {
+                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
+                        img_idx += 1;
+                        descriptor_writes.push(vk_write);
+                    }
+                }
+                i3_gfx::graph::pipeline::BindingType::Texture => {
+                    // Sampled Image
+                    vk_write = vk_write.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE);
+                    if img_idx < image_infos.len() {
+                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
+                        img_idx += 1;
+                        descriptor_writes.push(vk_write);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .handle
+                .update_descriptor_sets(&descriptor_writes, &[]);
+        }
     }
 }
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
-        if self.timeline_sem != vk::Semaphore::null() {
-            unsafe {
-                if let Some(device) = &self.device {
-                    device.handle.destroy_semaphore(self.timeline_sem, None);
-                }
-            }
-        }
-
         if let Some(device) = &self.device {
             unsafe {
                 device
@@ -1584,6 +1884,9 @@ impl Drop for VulkanBackend {
                 for &s in &self.shader_modules {
                     device.handle.destroy_shader_module(s, None);
                 }
+                for &dsl in &self.descriptor_set_layouts {
+                    device.handle.destroy_descriptor_set_layout(dsl, None);
+                }
 
                 // 3. Clean up generic Semaphores
                 for (_, sem) in &self.semaphores {
@@ -1594,6 +1897,97 @@ impl Drop for VulkanBackend {
                 for &sem in &self.recycled_semaphores {
                     device.handle.destroy_semaphore(sem, None);
                 }
+
+                if self.timeline_sem != vk::Semaphore::null() {
+                    device.handle.destroy_semaphore(self.timeline_sem, None);
+                }
+
+                // 5. Clean up Dead Resources (Pending)
+                {
+                    let allocator = device.allocator.lock().unwrap();
+
+                    for (_, buffer, alloc) in &mut self.dead_buffers {
+                        allocator.destroy_buffer(*buffer, alloc);
+                    }
+
+                    // Dead images:
+                    for (_, image, view, alloc) in &mut self.dead_images {
+                        device.handle.destroy_image_view(*view, None);
+                        allocator.destroy_image(*image, alloc);
+                    }
+                }
+
+                // 6. Clean up Pools (Transient)
+                {
+                    let allocator = device.allocator.lock().unwrap();
+                    for pool in self.transient_buffer_pool.values_mut() {
+                        for pooled in pool {
+                            allocator.destroy_buffer(pooled.buffer, &mut pooled.allocation);
+                        }
+                    }
+                    for pool in self.transient_image_pool.values_mut() {
+                        for pooled in pool {
+                            device.handle.destroy_image_view(pooled.view, None);
+                            allocator.destroy_image(pooled.image, &mut pooled.allocation);
+                        }
+                    }
+                }
+
+                // 7. Clean up Buffers (Active)
+                {
+                    let allocator = device.allocator.lock().unwrap();
+                    for (id, buffer) in &self.buffer_map {
+                        if let Some(mut alloc) = self.buffer_allocations.get(id).cloned() {
+                            allocator.destroy_buffer(*buffer, &mut alloc);
+                        }
+                    }
+                }
+
+                // 8. Clean up Images and Views (Active)
+                // CAUTION: Filter out Swapchain Views!
+                // Swapchain images are owned by the swapchain, but we might have views in our map.
+                // We identify them by checking if the image handle belongs to a swapchain.
+                let mut swapchain_images = std::collections::HashSet::new();
+                for ctx in self.windows.values() {
+                    if let Some(sc) = &ctx.swapchain {
+                        for &img in &sc.images {
+                            swapchain_images.insert(img);
+                        }
+                    }
+                }
+
+                let mut swapchain_ids = std::collections::HashSet::new();
+                for (id, image) in &self.image_map {
+                    if swapchain_images.contains(image) {
+                        swapchain_ids.insert(*id);
+                    }
+                }
+
+                for (id, view) in &self.image_views {
+                    if !swapchain_ids.contains(id) {
+                        device.handle.destroy_image_view(*view, None);
+                    }
+                }
+
+                {
+                    let allocator = device.allocator.lock().unwrap();
+                    for (id, image) in &self.image_map {
+                        if let Some(mut alloc) = self.image_allocations.get(id).cloned() {
+                            allocator.destroy_image(*image, &mut alloc);
+                        }
+                    }
+                }
+
+                // 9. Clean up Descriptor Pool
+                if self.descriptor_pool != vk::DescriptorPool::null() {
+                    device
+                        .handle
+                        .destroy_descriptor_pool(self.descriptor_pool, None);
+                }
+
+                // Descriptor Set Layouts (Self-managed or per pipeline?)
+                // We destroyed pipelines/layouts above.
+                // Descriptor Sets are freed with the pool.
             }
         }
     }
@@ -1606,6 +2000,9 @@ pub struct VulkanPassContext<'a> {
     image_handle_map: &'a HashMap<u64, vk::ImageView>,
     buffer_map: &'a HashMap<u64, vk::Buffer>,
     pipeline_map: &'a HashMap<u64, vk::Pipeline>,
+    pipeline_layout_map: &'a HashMap<u64, vk::PipelineLayout>,
+    descriptor_sets: &'a HashMap<u64, vk::DescriptorSet>,
+    current_pipeline_layout: vk::PipelineLayout,
 }
 
 impl<'a> PassContext for VulkanPassContext<'a> {
@@ -1618,6 +2015,9 @@ impl<'a> PassContext for VulkanPassContext<'a> {
                     *pipe,
                 );
             }
+        }
+        if let Some(layout) = self.pipeline_layout_map.get(&pipeline.0.0) {
+            self.current_pipeline_layout = *layout;
         }
     }
 
@@ -1646,9 +2046,19 @@ impl<'a> PassContext for VulkanPassContext<'a> {
         }
     }
 
-    fn bind_descriptor_set(&mut self, _set_index: u32, _handle: DescriptorSetHandle) {
-        // TODO: Bind actual descriptor set
-        // For now, no-op or log
+    fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle) {
+        if let Some(set) = self.descriptor_sets.get(&handle.0) {
+            unsafe {
+                self.device.handle.cmd_bind_descriptor_sets(
+                    self.cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.current_pipeline_layout,
+                    set_index,
+                    &[*set],
+                    &[],
+                );
+            }
+        }
     }
 
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
@@ -1695,6 +2105,19 @@ impl<'a> PassContext for VulkanPassContext<'a> {
             self.device
                 .handle
                 .cmd_draw(self.cmd, vertex_count, 1, first_vertex, 0);
+        }
+    }
+
+    fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32) {
+        unsafe {
+            self.device.handle.cmd_draw_indexed(
+                self.cmd,
+                index_count,
+                1,
+                first_index,
+                vertex_offset,
+                0,
+            );
         }
     }
 

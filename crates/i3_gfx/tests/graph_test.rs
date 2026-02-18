@@ -138,7 +138,7 @@ fn test_modular_resource_lifecycle() {
         builder.add_node("FinalBlit", move |sub| {
             sub.read_image(scene_texture, ResourceUsage::SHADER_READ);
             sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
-            move |ctx| {
+            move |_ctx| {
                 // ctx.bind_image(0, scene_texture);
             }
         });

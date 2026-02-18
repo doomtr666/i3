@@ -6,6 +6,7 @@ members = [
     "crates/i3_slang",
     "examples/draw_triangle",
     "examples/common",
+    "examples/synthwave_grid",
     "tools/rust_diagnostics",
     "tools/vulkan_diagnostics",
 ]
@@ -28,6 +29,8 @@ thiserror = "1.0"
 ash = { version = "0.38", features = ["linked"] }
 sdl2 = { version = "0.37", default-features = false }
 vk-mem = "0.5.0"
+nalgebra = "0.33"
+nalgebra-glm = "0.19"
 
 # Internal
 i3_gfx = { path = "crates/i3_gfx" }

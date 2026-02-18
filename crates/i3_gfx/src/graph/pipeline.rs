@@ -87,23 +87,6 @@ impl Default for ShaderModule {
     }
 }
 
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct BufferUsageFlags: u32 {
-        const TransferSrc = 0x0001;
-        const TransferDst = 0x0002;
-        const UniformTexelBuffer = 0x0004;
-        const StorageTexelBuffer = 0x0008;
-        const UniformBuffer = 0x0010;
-        const StorageBuffer = 0x0020;
-        const IndexBuffer = 0x0040;
-        const VertexBuffer = 0x0080;
-        const IndirectBuffer = 0x0100;
-        const ShaderDeviceAddress = 0x00020000;
-        const AccelerationStructure = 0x00100000;
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IndexType {
     Uint16 = 0,

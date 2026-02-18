@@ -107,6 +107,7 @@ pub trait PassContext {
 
     // Commands
     fn draw(&mut self, vertex_count: u32, first_vertex: u32);
+    fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32);
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
 }
@@ -209,7 +210,7 @@ pub trait RenderBackend {
     /// For this simplified backend, we might map memory directly.
     fn upload_buffer(
         &mut self,
-        handle: crate::graph::types::BufferHandle,
+        handle: BackendBuffer,
         data: &[u8],
         offset: u64,
     ) -> Result<(), String>;

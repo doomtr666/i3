@@ -164,9 +164,17 @@ impl ImageDesc {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MemoryType {
+    GpuOnly,
+    CpuToGpu, // Host visible, coherent
+    GpuToCpu, // Host visible, coherent
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferDesc {
     pub size: u64,
     pub usage: BufferUsageFlags,
+    pub memory: MemoryType,
 }
 
 impl ImageHandle {

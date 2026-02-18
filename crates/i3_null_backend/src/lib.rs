@@ -45,11 +45,10 @@ impl RenderBackend for NullBackend {
         BackendImage(h)
     }
 
-    fn create_buffer(&mut self, desc: &i3_gfx::graph::backend::BufferDesc) -> BackendBuffer {
-        let h = self.next_handle();
-        self.allocated_buffers.insert(h);
-        info!(handle = h, ?desc, "Created Buffer");
-        BackendBuffer(h)
+    fn create_buffer(&mut self, _desc: &i3_gfx::graph::backend::BufferDesc) -> BackendBuffer {
+        let handle = self.next_handle();
+        self.allocated_buffers.insert(handle);
+        BackendBuffer(handle)
     }
 
     fn destroy_image(&mut self, handle: BackendImage) {
@@ -212,7 +211,7 @@ impl RenderBackend for NullBackend {
 
     fn upload_buffer(
         &mut self,
-        handle: i3_gfx::graph::types::BufferHandle,
+        handle: BackendBuffer,
         data: &[u8],
         offset: u64,
     ) -> Result<(), String> {
@@ -324,6 +323,16 @@ impl<'a> PassContext for NullPassContext<'a> {
             vertices = vertex_count,
             first = first_vertex,
             "DRAW"
+        );
+    }
+
+    fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32) {
+        info!(
+            pass = %self.pass_name,
+            indices = index_count,
+            first = first_index,
+            offset = vertex_offset,
+            "DRAW_INDEXED"
         );
     }
 
