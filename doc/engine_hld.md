@@ -64,6 +64,16 @@ To avoid "import hell" and provide a frictionless experience for users of the en
 - **Reflection**: Extracts pipeline layouts, resource bindings, and vertex layouts from shader source.
 - **Hot Reload**: Monitors and re-compiles shaders at runtime.
 
+### `i3_io` (Asset Intelligence)
+- **Virtual File System (VFS)**: Unified access to raw files and `.i3b` asset bundles.
+- **Zero-Copy Loading**: Optimized binary layouts designed for `mmap` and direct CPU/GPU access.
+- **Future-Proof**: Architecture considerations for DirectStorage and hardware decompression.
+
+### `i3_baker` (Asset Factory)
+- **Incremental Builds**: Dependency tracking to only re-bake what has changed.
+- **Parallel Processing**: Multi-threaded baking of assets.
+- **Plugin-System**: Extensible architecture for processing different asset types (Mesh, Texture, Slang).
+
 ## 3. Hardware Rendering Interface (HRI)
 
 The boundary between `i3_gfx` and the backends is a set of Rust traits.

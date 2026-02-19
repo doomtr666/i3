@@ -97,6 +97,31 @@ pub enum ImageViewType {
     TypeCubeArray,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ComponentSwizzle {
+    Identity,
+    Zero,
+    One,
+    R,
+    G,
+    B,
+    A,
+}
+
+impl Default for ComponentSwizzle {
+    fn default() -> Self {
+        Self::Identity
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct ComponentMapping {
+    pub r: ComponentSwizzle,
+    pub g: ComponentSwizzle,
+    pub b: ComponentSwizzle,
+    pub a: ComponentSwizzle,
+}
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ImageUsageFlags: u32 {
@@ -145,6 +170,8 @@ pub struct ImageDesc {
     pub mip_levels: u32,
     pub array_layers: u32,
     pub usage: ImageUsageFlags,
+    pub view_type: ImageViewType,
+    pub swizzle: ComponentMapping,
 }
 
 impl ImageDesc {
@@ -159,6 +186,8 @@ impl ImageDesc {
             usage: ImageUsageFlags::SAMPLED
                 | ImageUsageFlags::TRANSFER_DST
                 | ImageUsageFlags::COLOR_ATTACHMENT, // Default usage
+            view_type: ImageViewType::Type2D,
+            swizzle: ComponentMapping::default(),
         }
     }
 }

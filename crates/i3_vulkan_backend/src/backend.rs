@@ -52,9 +52,6 @@ struct WindowContext {
 }
 
 pub struct VulkanBackend {
-    pub instance: Arc<crate::instance::VulkanInstance>,
-    pub device: Option<Arc<crate::device::VulkanDevice>>,
-
     // Window Management
     windows: HashMap<u64, WindowContext>,
     next_window_id: u64,
@@ -135,6 +132,10 @@ pub struct VulkanBackend {
     frame_contexts: Vec<VulkanFrameContext>,
     frame_started: bool,
     global_frame_index: usize,
+
+    // Dependencies (Dropped Last)
+    pub device: Option<Arc<crate::device::VulkanDevice>>,
+    pub instance: Arc<crate::instance::VulkanInstance>,
 }
 
 impl VulkanBackend {
@@ -559,8 +560,9 @@ impl RenderBackend for VulkanBackend {
 
         let view_info = vk::ImageViewCreateInfo::default()
             .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
+            .view_type(crate::convert::convert_image_view_type(desc.view_type))
             .format(format)
+            .components(crate::convert::convert_component_mapping(desc.swizzle))
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask,
                 base_mip_level: 0,
@@ -980,6 +982,9 @@ impl RenderBackend for VulkanBackend {
             .topology(convert_primitive_topology(desc.input_assembly.topology))
             .primitive_restart_enable(desc.input_assembly.primitive_restart_enable);
 
+        let tessellation = vk::PipelineTessellationStateCreateInfo::default()
+            .patch_control_points(desc.tessellation_state.patch_control_points);
+
         // 3. Dynamic States
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic_state =
@@ -1014,12 +1019,12 @@ impl RenderBackend for VulkanBackend {
             .depth_compare_op(convert_compare_op(
                 desc.depth_stencil_state.depth_compare_op,
             ))
-            .depth_bounds_test_enable(false) // Not in i3_gfx yet
+            .depth_bounds_test_enable(desc.depth_stencil_state.depth_bounds_test_enable)
             .stencil_test_enable(desc.depth_stencil_state.stencil_test_enable)
             .front(convert_stencil_op_state(&desc.depth_stencil_state.front))
             .back(convert_stencil_op_state(&desc.depth_stencil_state.back))
-            .min_depth_bounds(0.0)
-            .max_depth_bounds(1.0);
+            .min_depth_bounds(desc.depth_stencil_state.min_depth_bounds)
+            .max_depth_bounds(desc.depth_stencil_state.max_depth_bounds);
 
         // 5. Color Blend
         let attachments: Vec<vk::PipelineColorBlendAttachmentState> = desc
@@ -1046,8 +1051,12 @@ impl RenderBackend for VulkanBackend {
             })
             .collect();
 
-        let color_blend =
-            vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+        let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
+            .attachments(&attachments)
+            .logic_op_enable(desc.render_targets.logic_op.is_some())
+            .logic_op(convert_logic_op(
+                desc.render_targets.logic_op.unwrap_or(LogicOp::NoOp),
+            ));
 
         // 5. Layout (Push Constants + Descriptor Sets)
 
@@ -1166,6 +1175,7 @@ impl RenderBackend for VulkanBackend {
             .multisample_state(&multisample)
             .depth_stencil_state(&depth_stencil)
             .color_blend_state(&color_blend)
+            .tessellation_state(&tessellation)
             .dynamic_state(&dynamic_state)
             .layout(pipeline_layout)
             .push_next(&mut rendering_info);
@@ -1959,10 +1969,12 @@ impl RenderBackend for VulkanBackend {
 }
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
+        info!("Shutting down Vulkan Backend...");
         if let Some(device) = &self.device {
             unsafe {
-                // EXTREMELY IMPORTANT: Wait for all GPU work to finish before destroying anything.
+                debug!("Waiting for GPU idle...");
                 device.handle.device_wait_idle().ok();
+                debug!("GPU idle. Starting resource cleanup...");
 
                 // 1. Clean up Window Resources
                 // First, identify ALL current swapchain image views across all windows.
@@ -1980,36 +1992,62 @@ impl Drop for VulkanBackend {
                     for &sem in &ctx.present_semaphores {
                         device.handle.destroy_semaphore(sem, None);
                     }
+                    if let Some(sem) = ctx.current_acquire_sem {
+                        device.handle.destroy_semaphore(sem, None);
+                    }
                 }
 
-                // Now destroy windows (this drops swapchains and their views)
+                debug!("Destroying windows and swapchains...");
                 self.windows.clear();
 
-                // 1a. Clean up Global Frame Contexts
+                debug!("Destroying frame contexts...");
                 for ctx in &self.frame_contexts {
                     device.handle.destroy_command_pool(ctx.command_pool, None);
                 }
 
-                // 2. Clean up Pipelines & Shaders
-                for &p in &self.pipelines {
-                    device.handle.destroy_pipeline(p, None);
+                debug!("Destroying pipelines and shaders...");
+                {
+                    let mut destroyed_pipelines = std::collections::HashSet::new();
+                    for &p in &self.pipelines {
+                        if !destroyed_pipelines.contains(&p.as_raw()) {
+                            device.handle.destroy_pipeline(p, None);
+                            destroyed_pipelines.insert(p.as_raw());
+                        }
+                    }
                 }
-                for &l in &self.layouts {
-                    device.handle.destroy_pipeline_layout(l, None);
+                {
+                    let mut destroyed_layouts = std::collections::HashSet::new();
+                    for &l in &self.layouts {
+                        if !destroyed_layouts.contains(&l.as_raw()) {
+                            device.handle.destroy_pipeline_layout(l, None);
+                            destroyed_layouts.insert(l.as_raw());
+                        }
+                    }
                 }
-                for &s in &self.shader_modules {
-                    device.handle.destroy_shader_module(s, None);
+                {
+                    let mut destroyed_shaders = std::collections::HashSet::new();
+                    for &s in &self.shader_modules {
+                        if !destroyed_shaders.contains(&s.as_raw()) {
+                            device.handle.destroy_shader_module(s, None);
+                            destroyed_shaders.insert(s.as_raw());
+                        }
+                    }
                 }
-                for &dsl in &self.descriptor_set_layouts {
-                    device.handle.destroy_descriptor_set_layout(dsl, None);
+                {
+                    let mut destroyed_dsls = std::collections::HashSet::new();
+                    for &dsl in &self.descriptor_set_layouts {
+                        if !destroyed_dsls.contains(&dsl.as_raw()) {
+                            device.handle.destroy_descriptor_set_layout(dsl, None);
+                            destroyed_dsls.insert(dsl.as_raw());
+                        }
+                    }
                 }
 
-                // 3. Clean up generic Semaphores
+                debug!("Destroying semaphores...");
                 for (_, sem) in &self.semaphores {
                     device.handle.destroy_semaphore(*sem, None);
                 }
 
-                // 4. Clean up Recycled Semaphores
                 for &sem in &self.recycled_semaphores {
                     device.handle.destroy_semaphore(sem, None);
                 }
@@ -2018,7 +2056,7 @@ impl Drop for VulkanBackend {
                     device.handle.destroy_semaphore(self.timeline_sem, None);
                 }
 
-                // 5. Clean up Dead Resources (Pending)
+                debug!("Destroying dead resources...");
                 {
                     let allocator = device.allocator.lock().unwrap();
 
@@ -2041,7 +2079,7 @@ impl Drop for VulkanBackend {
                     }
                 }
 
-                // 6. Clean up Pools (Transient)
+                debug!("Destroying transient resource pools...");
                 {
                     let allocator = device.allocator.lock().unwrap();
                     for pool in self.transient_buffer_pool.values_mut() {
@@ -2057,7 +2095,7 @@ impl Drop for VulkanBackend {
                     }
                 }
 
-                // 7. Clean up Buffers (Active)
+                debug!("Destroying active buffers...");
                 {
                     let allocator = device.allocator.lock().unwrap();
                     for (id, buffer) in &self.buffer_map {
@@ -2067,43 +2105,51 @@ impl Drop for VulkanBackend {
                     }
                 }
 
-                // 8. Clean up Images and Views (Active)
-                // STALE swapchain views from previous recreations will be destroyed here (safely if they were unregistered,
-                // but the unregister logic should have handled it. This is a safety net).
-                for (&_id, &view) in &self.image_views {
-                    if !current_swapchain_views.contains(&view.as_raw()) {
-                        device.handle.destroy_image_view(view, None);
+                debug!("Destroying active images and samplers...");
+                {
+                    let mut destroyed_views = std::collections::HashSet::new();
+                    for (&_id, &view) in &self.image_views {
+                        if !current_swapchain_views.contains(&view.as_raw())
+                            && !destroyed_views.contains(&view.as_raw())
+                        {
+                            device.handle.destroy_image_view(view, None);
+                            destroyed_views.insert(view.as_raw());
+                        }
                     }
                 }
 
-                for (_, sampler) in &self.samplers {
-                    device.handle.destroy_sampler(*sampler, None);
+                {
+                    let mut destroyed_samplers = std::collections::HashSet::new();
+                    for (_, sampler) in &self.samplers {
+                        if !destroyed_samplers.contains(&sampler.as_raw()) {
+                            device.handle.destroy_sampler(*sampler, None);
+                            destroyed_samplers.insert(sampler.as_raw());
+                        }
+                    }
                 }
 
                 {
                     let allocator = device.allocator.lock().unwrap();
                     for (id, image) in &self.image_map {
-                        // Only destroy if it was allocated by us (has an allocation)
-                        // and it's NOT a current swapchain image (windows.clear already handled it?)
-                        // Actually swapchain images don't have allocations in our map.
                         if let Some(mut alloc) = self.image_allocations.get(id).cloned() {
                             allocator.destroy_image(*image, &mut alloc);
                         }
                     }
                 }
 
-                // 9. Clean up Descriptor Pool
+                debug!("Destroying descriptor pool...");
                 if self.descriptor_pool != vk::DescriptorPool::null() {
                     device
                         .handle
                         .destroy_descriptor_pool(self.descriptor_pool, None);
                 }
 
-                // Descriptor Set Layouts (Self-managed or per pipeline?)
-                // We destroyed pipelines/layouts above.
-                // Descriptor Sets are freed with the pool.
+                info!("Vulkan Backend shutdown complete.");
             }
         }
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        std::io::stderr().flush().ok();
     }
 }
 

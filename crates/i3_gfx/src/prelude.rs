@@ -19,14 +19,15 @@ pub use crate::graph::{
     pipeline::{
         Binding, BindingType, BlendFactor, BlendOp, BlendState, ColorComponentFlags, CompareOp,
         CullMode, DepthStencilState, FrontFace, GraphicsPipelineCreateInfo, IndexType,
-        InputAssemblyState, MultisampleState, PolygonMode, PrimitiveTopology, PushConstantRange,
-        RasterizationState, RenderTargetInfo, RenderTargetsInfo, ShaderModule, ShaderReflection,
-        ShaderStageFlags, StencilOp, StencilOpState, VertexFormat, VertexInputAttribute,
-        VertexInputBinding, VertexInputRate, VertexInputState,
+        InputAssemblyState, LogicOp, MultisampleState, PolygonMode, PrimitiveTopology,
+        PushConstantRange, RasterizationState, RenderTargetInfo, RenderTargetsInfo, ShaderModule,
+        ShaderReflection, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat,
+        VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState,
     },
     types::{
-        AddressMode, BufferDesc, BufferHandle, BufferUsageFlags, Filter, Format, ImageDesc,
-        ImageHandle, ImageUsageFlags, MemoryType, MipmapMode, PassDomain, PipelineHandle,
-        ResourceUsage, SamplerDesc, SwapChainImageHandle, SymbolId, WindowHandle,
+        AddressMode, BufferDesc, BufferHandle, BufferUsageFlags, ComponentMapping,
+        ComponentSwizzle, Filter, Format, ImageDesc, ImageHandle, ImageUsageFlags, ImageViewType,
+        MemoryType, MipmapMode, PassDomain, PipelineHandle, ResourceUsage, SamplerDesc,
+        SwapChainImageHandle, SymbolId, WindowHandle,
     },
 };

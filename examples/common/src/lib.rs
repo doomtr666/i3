@@ -100,4 +100,5 @@ pub fn main_loop<T: ExampleApp>(mut app: T) {
         app.update(delta);
         app.render();
     }
+    info!("Main loop finished. Shutting down...");
 }

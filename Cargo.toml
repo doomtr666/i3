@@ -8,7 +8,7 @@ members = [
     "examples/common",
     "examples/synthwave_grid",
     "tools/rust_diagnostics",
-    "tools/vulkan_diagnostics",
+    "tools/vulkan_diagnostics", "crates/i3_baker", "crates/i3_io",
 ]
 resolver = "2"
 

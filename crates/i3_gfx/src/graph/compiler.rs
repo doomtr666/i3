@@ -196,6 +196,8 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                     mip_levels: 1,
                     array_layers: 1,
                     usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::TRANSFER_DST,
+                    view_type: crate::graph::types::ImageViewType::Type2D,
+                    swizzle: crate::graph::types::ComponentMapping::default(),
                 }),
                 lifetime: SymbolLifetime::External,
                 data: None,

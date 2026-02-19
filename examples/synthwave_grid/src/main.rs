@@ -137,6 +137,8 @@ impl ExampleApp for SynthwaveApp {
                 mip_levels: 1,
                 array_layers: 1,
                 usage: ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                view_type: ImageViewType::Type2D,
+                swizzle: ComponentMapping::default(),
             };
             let depth_img = builder.declare_image("DepthBuffer", depth_desc);
 
@@ -267,6 +269,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         usage: ImageUsageFlags::COLOR_ATTACHMENT
             | ImageUsageFlags::SAMPLED
             | ImageUsageFlags::TRANSFER_SRC,
+        view_type: ImageViewType::Type2D,
+        swizzle: ComponentMapping::default(),
     };
     let scene_physical = backend.create_image(&scene_desc);
     let scene_color = ImageHandle(SymbolId(10000)); // Persistent Handle
@@ -314,6 +318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ..Default::default()
             }],
             depth_stencil_format: Some(Format::D32_FLOAT),
+            logic_op: None,
         },
         input_assembly: InputAssemblyState {
             topology: PrimitiveTopology::TriangleList,
@@ -338,6 +343,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ..Default::default()
             }],
             depth_stencil_format: None,
+            logic_op: None,
         },
         rasterization_state: RasterizationState {
             cull_mode: CullMode::None,

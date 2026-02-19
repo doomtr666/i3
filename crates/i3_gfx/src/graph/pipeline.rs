@@ -209,6 +209,26 @@ pub enum BlendOp {
     Max,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LogicOp {
+    Clear,
+    And,
+    AndReverse,
+    Copy,
+    AndInverted,
+    NoOp,
+    Xor,
+    Or,
+    Nor,
+    Equivalent,
+    Invert,
+    OrReverse,
+    CopyInverted,
+    OrInverted,
+    Nand,
+    Set,
+}
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ColorComponentFlags: u8 {
@@ -398,7 +418,7 @@ impl Default for StencilOpState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DepthStencilState {
     pub depth_test_enable: bool,
     pub depth_write_enable: bool,
@@ -406,6 +426,9 @@ pub struct DepthStencilState {
     pub stencil_test_enable: bool,
     pub front: StencilOpState,
     pub back: StencilOpState,
+    pub depth_bounds_test_enable: bool,
+    pub min_depth_bounds: f32, // Note: PartialEq on f32
+    pub max_depth_bounds: f32,
 }
 
 impl Default for DepthStencilState {
@@ -417,6 +440,9 @@ impl Default for DepthStencilState {
             stencil_test_enable: false,
             front: StencilOpState::default(),
             back: StencilOpState::default(),
+            depth_bounds_test_enable: false,
+            min_depth_bounds: 0.0,
+            max_depth_bounds: 1.0,
         }
     }
 }
@@ -486,6 +512,7 @@ impl Default for RenderTargetInfo {
 pub struct RenderTargetsInfo {
     pub color_targets: Vec<RenderTargetInfo>,
     pub depth_stencil_format: Option<crate::graph::types::Format>,
+    pub logic_op: Option<LogicOp>,
 }
 
 // --- Main Pipeline Create Info ---
@@ -512,7 +539,11 @@ impl Default for GraphicsPipelineCreateInfo {
             rasterization_state: RasterizationState::default(),
             multisample_state: MultisampleState::default(),
             depth_stencil_state: DepthStencilState::default(),
-            render_targets: RenderTargetsInfo::default(),
+            render_targets: RenderTargetsInfo {
+                color_targets: Vec::new(),
+                depth_stencil_format: None,
+                logic_op: None,
+            },
         }
     }
 }

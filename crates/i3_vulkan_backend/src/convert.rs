@@ -2,12 +2,13 @@
 use ash::vk;
 use i3_gfx::graph::pipeline::{
     BindingType, BlendFactor, BlendOp, ColorComponentFlags, CompareOp, CullMode, FrontFace,
-    IndexType, InputAssemblyState, MipmapMode, MultisampleState, PolygonMode, PrimitiveTopology,
-    RasterizationState, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat, VertexInputRate,
+    IndexType, InputAssemblyState, LogicOp, MipmapMode, MultisampleState, PolygonMode,
+    PrimitiveTopology, RasterizationState, ShaderStageFlags, StencilOp, StencilOpState,
+    VertexFormat, VertexInputRate,
 };
 use i3_gfx::graph::types::{
-    AddressMode, BorderColor, BufferUsageFlags, Filter, Format, ImageAspectFlags, ImageType,
-    ImageUsageFlags, ImageViewType, SampleCount,
+    AddressMode, BorderColor, BufferUsageFlags, ComponentMapping, ComponentSwizzle, Filter, Format,
+    ImageAspectFlags, ImageType, ImageUsageFlags, ImageViewType, SampleCount,
 };
 // Removed ComponentSwizzle as it wasn't in my port of pipeline.rs yet?
 // Wait, I might have missed ComponentSwizzle in pipeline.rs or types.rs?
@@ -296,5 +297,59 @@ pub fn convert_binding_type_to_descriptor(binding_type: BindingType) -> vk::Desc
         BindingType::Sampler => vk::DescriptorType::SAMPLER,
         BindingType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         BindingType::Unknown => vk::DescriptorType::UNIFORM_BUFFER, // fallback
+    }
+}
+
+pub fn convert_image_view_type(view_type: ImageViewType) -> vk::ImageViewType {
+    match view_type {
+        ImageViewType::Type1D => vk::ImageViewType::TYPE_1D,
+        ImageViewType::Type2D => vk::ImageViewType::TYPE_2D,
+        ImageViewType::Type3D => vk::ImageViewType::TYPE_3D,
+        ImageViewType::TypeCube => vk::ImageViewType::CUBE,
+        ImageViewType::Type1DArray => vk::ImageViewType::TYPE_1D_ARRAY,
+        ImageViewType::Type2DArray => vk::ImageViewType::TYPE_2D_ARRAY,
+        ImageViewType::TypeCubeArray => vk::ImageViewType::CUBE_ARRAY,
+    }
+}
+
+pub fn convert_component_swizzle(swizzle: ComponentSwizzle) -> vk::ComponentSwizzle {
+    match swizzle {
+        ComponentSwizzle::Identity => vk::ComponentSwizzle::IDENTITY,
+        ComponentSwizzle::Zero => vk::ComponentSwizzle::ZERO,
+        ComponentSwizzle::One => vk::ComponentSwizzle::ONE,
+        ComponentSwizzle::R => vk::ComponentSwizzle::R,
+        ComponentSwizzle::G => vk::ComponentSwizzle::G,
+        ComponentSwizzle::B => vk::ComponentSwizzle::B,
+        ComponentSwizzle::A => vk::ComponentSwizzle::A,
+    }
+}
+
+pub fn convert_component_mapping(mapping: ComponentMapping) -> vk::ComponentMapping {
+    vk::ComponentMapping {
+        r: convert_component_swizzle(mapping.r),
+        g: convert_component_swizzle(mapping.g),
+        b: convert_component_swizzle(mapping.b),
+        a: convert_component_swizzle(mapping.a),
+    }
+}
+
+pub fn convert_logic_op(op: LogicOp) -> vk::LogicOp {
+    match op {
+        LogicOp::Clear => vk::LogicOp::CLEAR,
+        LogicOp::And => vk::LogicOp::AND,
+        LogicOp::AndReverse => vk::LogicOp::AND_REVERSE,
+        LogicOp::Copy => vk::LogicOp::COPY,
+        LogicOp::AndInverted => vk::LogicOp::AND_INVERTED,
+        LogicOp::NoOp => vk::LogicOp::NO_OP,
+        LogicOp::Xor => vk::LogicOp::XOR,
+        LogicOp::Or => vk::LogicOp::OR,
+        LogicOp::Nor => vk::LogicOp::NOR,
+        LogicOp::Equivalent => vk::LogicOp::EQUIVALENT,
+        LogicOp::Invert => vk::LogicOp::INVERT,
+        LogicOp::OrReverse => vk::LogicOp::OR_REVERSE,
+        LogicOp::CopyInverted => vk::LogicOp::COPY_INVERTED,
+        LogicOp::OrInverted => vk::LogicOp::OR_INVERTED,
+        LogicOp::Nand => vk::LogicOp::NAND,
+        LogicOp::Set => vk::LogicOp::SET,
     }
 }
