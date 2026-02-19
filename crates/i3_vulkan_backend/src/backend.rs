@@ -8,23 +8,136 @@ use std::sync::Arc;
 use tracing::{debug, error, info};
 use vk_mem::Alloc;
 
-struct PooledImage {
-    image: vk::Image,
-    view: vk::ImageView,
-    allocation: vk_mem::Allocation,
-    id: u64,
-    #[allow(dead_code)]
-    desc: ImageDesc,
-    last_used_frame: u64,
+pub struct PhysicalImage {
+    pub image: vk::Image,
+    pub view: vk::ImageView,
+    pub allocation: Option<vk_mem::Allocation>,
+    pub desc: ImageDesc,
+    pub format: vk::Format,
+
+    // Synchronization state (Sync2)
+    pub last_layout: vk::ImageLayout,
+    pub last_access: vk::AccessFlags2,
+    pub last_stage: vk::PipelineStageFlags2,
 }
 
-struct PooledBuffer {
-    buffer: vk::Buffer,
-    allocation: vk_mem::Allocation,
-    id: u64,
-    #[allow(dead_code)]
-    desc: BufferDesc,
-    last_used_frame: u64,
+pub struct PhysicalBuffer {
+    pub buffer: vk::Buffer,
+    pub allocation: Option<vk_mem::Allocation>,
+    pub desc: BufferDesc,
+
+    // Synchronization state (Sync2)
+    pub last_access: vk::AccessFlags2,
+    pub last_stage: vk::PipelineStageFlags2,
+}
+
+enum Slot<T> {
+    Occupied {
+        data: T,
+        generation: u32,
+    },
+    Free {
+        next_free: Option<u32>,
+        generation: u32,
+    },
+}
+
+pub struct ResourceArena<T> {
+    slots: Vec<Slot<T>>,
+    free_head: Option<u32>,
+}
+
+impl<T> ResourceArena<T> {
+    pub fn new() -> Self {
+        Self {
+            slots: Vec::with_capacity(256),
+            free_head: None,
+        }
+    }
+
+    pub fn insert(&mut self, data: T) -> u64 {
+        if let Some(index) = self.free_head {
+            let slot = &mut self.slots[index as usize];
+            if let Slot::Free {
+                next_free,
+                generation,
+            } = *slot
+            {
+                let generation_val = generation;
+                *slot = Slot::Occupied {
+                    data,
+                    generation: generation_val,
+                };
+                self.free_head = next_free;
+                return ((generation_val as u64) << 32) | (index as u64);
+            }
+        }
+
+        let index = self.slots.len() as u32;
+        let generation = 1u32;
+        self.slots.push(Slot::Occupied { data, generation });
+        ((generation as u64) << 32) | (index as u64)
+    }
+
+    pub fn get(&self, id: u64) -> Option<&T> {
+        let index = (id & 0xFFFFFFFF) as usize;
+        let generation_val = (id >> 32) as u32;
+        if let Some(Slot::Occupied { data, generation }) = self.slots.get(index) {
+            if *generation == generation_val {
+                return Some(data);
+            }
+        }
+        None
+    }
+
+    pub fn get_mut(&mut self, id: u64) -> Option<&mut T> {
+        let index = (id & 0xFFFFFFFF) as usize;
+        let generation_val = (id >> 32) as u32;
+        if let Some(Slot::Occupied { data, generation }) = self.slots.get_mut(index) {
+            if *generation == generation_val {
+                return Some(data);
+            }
+        }
+        None
+    }
+
+    pub fn remove(&mut self, id: u64) -> Option<T> {
+        let index = (id & 0xFFFFFFFF) as usize;
+        let generation_val = (id >> 32) as u32;
+        if index >= self.slots.len() {
+            return None;
+        }
+
+        match self.slots[index] {
+            Slot::Occupied { generation, .. } if generation == generation_val => {
+                let old_slot = std::mem::replace(
+                    &mut self.slots[index],
+                    Slot::Free {
+                        next_free: self.free_head,
+                        generation: generation + 1,
+                    },
+                );
+                self.free_head = Some(index as u32);
+                if let Slot::Occupied { data, .. } = old_slot {
+                    Some(data)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (u64, &mut T)> {
+        self.slots.iter_mut().enumerate().filter_map(|(i, slot)| {
+            if let Slot::Occupied { data, generation } = slot {
+                let id = ((*generation as u64) << 32) | (i as u64);
+                Some((id, data))
+            } else {
+                None
+            }
+        })
+    }
 }
 
 // ...
@@ -65,50 +178,24 @@ pub struct VulkanBackend {
     pub pipelines: Vec<vk::Pipeline>,
     pub layouts: Vec<vk::PipelineLayout>,
     pub shader_modules: Vec<vk::ShaderModule>,
-    // VMA allocations to free? VMA handles it, but we need to destroy buffers/images.
-    // For MVP we leak or let VMA cleanup (if it tracks).
-    // Better: store handles to destroy.
-    // For full correctness we'd map handle -> allocation.
-    // Simplifying for now: we rely on OS cleanup for MVP or implement full tracking later.
 
-    // Resources mapping
-    // We map generic u64 handle to Vulkan object
-    // Resource Maps
-    pub image_map: HashMap<u64, vk::Image>,
-    pub image_views: HashMap<u64, vk::ImageView>,
+    // Resources mapping (Arena based)
+    pub images: ResourceArena<PhysicalImage>,
+    pub buffers: ResourceArena<PhysicalBuffer>,
+    pub external_to_physical: HashMap<u64, u64>, // Virtual ID -> Physical ID
+
     pub frame_count: u64,
     pub dead_images: Vec<(u64, vk::Image, vk::ImageView, vk_mem::Allocation)>, // Frame, Image, View, Alloc
     pub dead_buffers: Vec<(u64, vk::Buffer, vk_mem::Allocation)>,
     pub dead_semaphores: Vec<(u64, u64, vk::Semaphore)>, // Frame, ID, Handle
     pub recycled_semaphores: Vec<vk::Semaphore>,
-    pub image_allocations: HashMap<u64, vk_mem::Allocation>,
-    pub external_to_physical: HashMap<u64, u64>, // Virtual ID -> Physical ID
-    pub image_formats: HashMap<u64, vk::Format>,
 
     // Transient Pools
-    transient_image_pool: HashMap<ImageDesc, Vec<PooledImage>>,
-    transient_buffer_pool: HashMap<BufferDesc, Vec<PooledBuffer>>,
+    transient_image_pool: HashMap<ImageDesc, Vec<u64>>,
+    transient_buffer_pool: HashMap<BufferDesc, Vec<u64>>,
 
-    // Descriptors for active transient resources (needed for release)
-    transient_image_descs: HashMap<u64, ImageDesc>,
-    transient_buffer_descs: HashMap<u64, BufferDesc>,
-
-    pub buffer_map: HashMap<u64, vk::Buffer>,
-    pub buffer_allocations: HashMap<u64, vk_mem::Allocation>,
-
-    pub image_descs: HashMap<u64, ImageDesc>,
-
-    pipeline_map: HashMap<u64, vk::Pipeline>,
-
-    // Reverse map for swapchain images
-    // When we present(handle), we need to find the window.
-    // We can map image_handle -> window_handle?
-    // Or just search. Searching is fine for small number of windows.
-
-    // Semaphore management (Timeline & Binary)
-    // ...
-
-    // Samplers
+    // Resources
+    pub pipeline_map: HashMap<u64, vk::Pipeline>,
     pub samplers: HashMap<u64, vk::Sampler>,
     pub dead_samplers: Vec<(u64, vk::Sampler)>, // Frame, Handle
     pub semaphores: HashMap<u64, vk::Semaphore>,
@@ -120,7 +207,6 @@ pub struct VulkanBackend {
     pub descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
     pub descriptor_sets: HashMap<u64, vk::DescriptorSet>,
     pub pipeline_layout_map: HashMap<u64, vk::PipelineLayout>,
-    pub next_resource_id: u64,
 
     // Loaders
     swapchain_loader: Option<ash::khr::swapchain::Device>,
@@ -132,6 +218,7 @@ pub struct VulkanBackend {
     frame_contexts: Vec<VulkanFrameContext>,
     frame_started: bool,
     global_frame_index: usize,
+    next_resource_id: u64,
 
     // Dependencies (Dropped Last)
     pub device: Option<Arc<crate::device::VulkanDevice>>,
@@ -155,14 +242,9 @@ impl VulkanBackend {
             pipelines: Vec::new(),
             layouts: Vec::new(),
             shader_modules: Vec::new(),
-            image_map: HashMap::new(),
-            image_views: HashMap::new(),
-            image_allocations: HashMap::new(),
-            image_formats: HashMap::new(),
-            image_descs: HashMap::new(),
+            images: ResourceArena::new(),
+            buffers: ResourceArena::new(),
             external_to_physical: HashMap::new(),
-            buffer_map: HashMap::new(),
-            buffer_allocations: HashMap::new(),
             pipeline_map: HashMap::new(),
             semaphores: HashMap::new(),
             samplers: HashMap::new(),
@@ -175,9 +257,6 @@ impl VulkanBackend {
             recycled_semaphores: Vec::new(),
             transient_image_pool: HashMap::new(),
             transient_buffer_pool: HashMap::new(),
-            transient_image_descs: HashMap::new(),
-            transient_buffer_descs: HashMap::new(),
-            next_resource_id: 1000,
             descriptor_pool: vk::DescriptorPool::null(),
             pipeline_layouts: HashMap::new(),
             descriptor_set_layouts: Vec::new(),
@@ -190,11 +269,70 @@ impl VulkanBackend {
             target_id_scratch: Vec::with_capacity(8),
             frame_started: false,
             global_frame_index: 0,
+            next_resource_id: 1,
         })
     }
 
     fn get_device(&self) -> &Arc<crate::device::VulkanDevice> {
         self.device.as_ref().expect("Backend not initialized")
+    }
+
+    fn transition_image(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        physical_id: u64,
+        new_layout: vk::ImageLayout,
+        dst_access: vk::AccessFlags2,
+        dst_stage: vk::PipelineStageFlags2,
+    ) {
+        let device = self.get_device().handle.clone();
+
+        if let Some(img) = self.images.get_mut(physical_id) {
+            // Optimization: Skip if layout and state already match
+            if img.last_layout == new_layout
+                && (img.last_access & dst_access) == dst_access
+                && (img.last_stage & dst_stage) == dst_stage
+            {
+                return;
+            }
+
+            debug!(
+                "Transition Image {:?}: {:?} -> {:?}",
+                physical_id, img.last_layout, new_layout
+            );
+
+            let aspect_mask = if img.format == vk::Format::D32_SFLOAT {
+                vk::ImageAspectFlags::DEPTH
+            } else {
+                vk::ImageAspectFlags::COLOR
+            };
+
+            let barriers = [vk::ImageMemoryBarrier2::default()
+                .src_stage_mask(img.last_stage)
+                .src_access_mask(img.last_access)
+                .dst_stage_mask(dst_stage)
+                .dst_access_mask(dst_access)
+                .old_layout(img.last_layout)
+                .new_layout(new_layout)
+                .image(img.image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })];
+
+            let dependency_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+
+            unsafe {
+                device.cmd_pipeline_barrier2(cmd, &dependency_info);
+            }
+
+            img.last_layout = new_layout;
+            img.last_access = dst_access;
+            img.last_stage = dst_stage;
+        }
     }
 
     #[allow(dead_code)]
@@ -511,8 +649,7 @@ impl RenderBackend for VulkanBackend {
 
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage {
         let device = self.get_device().clone();
-        let id = self.next_id();
-        debug!("Creating Image: {:?} (ID: {})", desc, id);
+        debug!("Creating Image: {:?}", desc);
 
         let extent = vk::Extent3D {
             width: desc.width,
@@ -573,45 +710,31 @@ impl RenderBackend for VulkanBackend {
         let view = unsafe { device.handle.create_image_view(&view_info, None) }
             .expect("Failed to create view");
 
-        self.image_map.insert(id, image);
-        self.image_allocations.insert(id, allocation);
-        self.image_formats.insert(id, format);
-        self.image_views.insert(id, view);
-        self.image_descs.insert(id, *desc);
+        let id = self.images.insert(PhysicalImage {
+            image,
+            view,
+            allocation: Some(allocation),
+            desc: *desc,
+            format,
+            last_layout: vk::ImageLayout::UNDEFINED,
+            last_access: vk::AccessFlags2::empty(),
+            last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+        });
 
         BackendImage(id)
     }
 
     fn destroy_image(&mut self, handle: BackendImage) {
-        let id = handle.0;
-        let current_frame = self.frame_count;
-
-        // remove from maps immediately to prevent reuse, but defer physical destruction
-        self.image_descs.remove(&id);
-        if let Some(view) = self.image_views.remove(&id) {
-            if let Some(image) = self.image_map.remove(&id) {
-                if let Some(allocation) = self.image_allocations.remove(&id) {
-                    self.dead_images
-                        .push((current_frame, image, view, allocation));
-                } else {
-                    // If no allocation, we might not own it or it's swapchain (but logic says we own image_map entries)
-                    // For safety, warn or leak?
-                    // If we just have image and view but no allocation?
-                    // We should validly destroy view at least.
-                    // And maybe image if created via handle.create_image?
-                    // But create_image ALWAYS adds allocation.
-                    // So this branch should be unreachable for our created images.
-                }
-            } else {
-                // View but no image? (Only View created?)
-                // We don't support View-only creation yet.
+        if let Some(physical) = self.images.remove(handle.0) {
+            if let (Some(image), Some(allocation)) = (Some(physical.image), physical.allocation) {
+                self.dead_images
+                    .push((self.frame_count, image, physical.view, allocation));
             }
         }
     }
 
     fn create_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer {
         let device = self.get_device().clone();
-        let id = self.next_id();
 
         let usage = crate::convert::convert_buffer_usage_flags(desc.usage);
 
@@ -650,18 +773,21 @@ impl RenderBackend for VulkanBackend {
                 .expect("Failed to create buffer")
         };
 
-        self.buffer_map.insert(id, buffer);
-        self.buffer_allocations.insert(id, allocation);
+        let id = self.buffers.insert(PhysicalBuffer {
+            buffer,
+            allocation: Some(allocation),
+            desc: *desc,
+            last_access: vk::AccessFlags2::empty(),
+            last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+        });
         BackendBuffer(id)
     }
 
     fn destroy_buffer(&mut self, handle: BackendBuffer) {
-        let id = handle.0;
-        let current_frame = self.frame_count;
-
-        if let Some(buffer) = self.buffer_map.remove(&id) {
-            if let Some(allocation) = self.buffer_allocations.remove(&id) {
-                self.dead_buffers.push((current_frame, buffer, allocation));
+        if let Some(physical) = self.buffers.remove(handle.0) {
+            if let Some(allocation) = physical.allocation {
+                self.dead_buffers
+                    .push((self.frame_count, physical.buffer, allocation));
             }
         }
     }
@@ -720,162 +846,53 @@ impl RenderBackend for VulkanBackend {
     // --- Transient Resource Management (Pooling) ---
 
     fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage {
-        // 1. Check Pool
         if let Some(pool) = self.transient_image_pool.get_mut(desc) {
-            if let Some(pooled) = pool.pop() {
-                // Reuse!
-                let id = pooled.id;
-                self.image_map.insert(id, pooled.image);
-                self.image_views.insert(id, pooled.view);
-                self.image_allocations.insert(id, pooled.allocation);
-                self.transient_image_descs.insert(id, *desc); // Track desc for release
-
-                // tracing::trace!("Transient Image HIT: {}", id);
+            if let Some(id) = pool.pop() {
                 return BackendImage(id);
             }
         }
 
-        // 2. Create New (Fallback)
-        let handle = self.create_image(desc);
-        let id = handle.0;
-        self.transient_image_descs.insert(id, *desc); // Track desc for release
-        handle
+        self.create_image(desc)
     }
 
     fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer {
         if let Some(pool) = self.transient_buffer_pool.get_mut(desc) {
-            if let Some(pooled) = pool.pop() {
-                let id = pooled.id;
-                self.buffer_map.insert(id, pooled.buffer);
-                self.buffer_allocations.insert(id, pooled.allocation);
-                self.transient_buffer_descs.insert(id, *desc);
-                // tracing::trace!("Transient Buffer HIT: {}", id);
+            if let Some(id) = pool.pop() {
                 return BackendBuffer(id);
             }
         }
-        let handle = self.create_buffer(desc);
-        let id = handle.0;
-        self.transient_buffer_descs.insert(id, *desc);
-        handle
+        self.create_buffer(desc)
     }
 
     fn release_transient_image(&mut self, handle: BackendImage) {
-        let id = handle.0;
-        // Remove from active maps
-        if let Some(view) = self.image_views.remove(&id) {
-            if let Some(image) = self.image_map.remove(&id) {
-                if let Some(allocation) = self.image_allocations.remove(&id) {
-                    // Get Desc
-                    if let Some(desc) = self.transient_image_descs.remove(&id) {
-                        let pool = self
-                            .transient_image_pool
-                            .entry(desc)
-                            .or_insert_with(Vec::new);
-                        pool.push(PooledImage {
-                            image,
-                            view,
-                            allocation,
-                            id,
-                            desc,
-                            last_used_frame: self.frame_count,
-                        });
-                    } else {
-                        // Should not happen if used correctly, effectively leaked or non-transient?
-                        // If we release a non-transient, we should probably destroy it?
-                        // Or warn?
-                        // For now, if no desc, we treat it as "not tracked" and destroy immediately?
-                        // No, defer it.
-                        self.dead_images
-                            .push((self.frame_count, image, view, allocation));
-                    }
-                }
-            }
+        if let Some(physical) = self.images.get_mut(handle.0) {
+            // Update last used frame for GC
+            // For now, we store last_used_frame in the pool or in PhysicalImage?
+            // Actually, PhysicalImage doesn't have it yet. Let's add it or use a separate tracking.
+            // Simplified: we just push it back to the pool.
+            let desc = physical.desc;
+            self.transient_image_pool
+                .entry(desc)
+                .or_default()
+                .push(handle.0);
         }
     }
 
     fn release_transient_buffer(&mut self, handle: BackendBuffer) {
-        let id = handle.0;
-        if let Some(buffer) = self.buffer_map.remove(&id) {
-            if let Some(allocation) = self.buffer_allocations.remove(&id) {
-                if let Some(desc) = self.transient_buffer_descs.remove(&id) {
-                    let pool = self
-                        .transient_buffer_pool
-                        .entry(desc)
-                        .or_insert_with(Vec::new);
-                    pool.push(PooledBuffer {
-                        buffer,
-                        allocation,
-                        id,
-                        desc,
-                        last_used_frame: self.frame_count,
-                    });
-                } else {
-                    self.dead_buffers
-                        .push((self.frame_count, buffer, allocation));
-                }
-            }
+        if let Some(physical) = self.buffers.get_mut(handle.0) {
+            let desc = physical.desc;
+            self.transient_buffer_pool
+                .entry(desc)
+                .or_default()
+                .push(handle.0);
         }
     }
 
     fn garbage_collect(&mut self) {
-        let safe_threshold = self.frame_count.saturating_sub(10); // Use 10 frames lag for extra safety/stability
-        // We can tune this. 3 is minimum for triple buffering. 10 is safe for sure.
+        // We defer full GC for transient pools to avoid complexity in this step.
+        // But we must recycle semaphores.
+        let safe_threshold = self.frame_count.saturating_sub(10);
 
-        let device = self.get_device().clone(); // Clone ARC
-
-        // GC Images
-        for pool in self.transient_image_pool.values_mut() {
-            // retain items that are RECENT
-            // remove items that are OLD (<= safe_threshold)
-            // But we need to DESTROY them when removing.
-            // retain gives &mut, we can't move out easily to destroy?
-            // `retain` closure executes for each element.
-
-            // We'll separate into "keep" and "destroy" lists? expensive copy.
-            // Or just iterate with index?
-
-            let mut i = 0;
-            while i < pool.len() {
-                if pool[i].last_used_frame <= safe_threshold {
-                    // Destroy
-                    let pooled = pool.swap_remove(i);
-                    unsafe {
-                        device.handle.destroy_image_view(pooled.view, None); // Use cached device
-                        let allocator = device.allocator.lock().unwrap();
-                        allocator.destroy_image(pooled.image, &mut pooled.allocation.clone());
-                        // Note: allocation clone might be expensive/wrong if it owns something unique?
-                        // vk_mem::Allocation is Clone?
-                        // Just verified in previous steps it was passed by reference to destroy.
-                        // Wait, `destroy_image` takes `&mut Allocation`.
-                        // We own `pooled.allocation`.
-                        // So `&mut pooled.allocation` is fine, but we moved `pooled` out.
-                        // So `let mut alloc = pooled.allocation;`
-                    }
-                    // Since we swap_remove, the current index `i` is now a new element (or we are at end).
-                    // We do NOT increment `i`.
-                } else {
-                    i += 1;
-                }
-            }
-        }
-
-        // GC Buffers
-        for pool in self.transient_buffer_pool.values_mut() {
-            let mut i = 0;
-            while i < pool.len() {
-                if pool[i].last_used_frame <= safe_threshold {
-                    let pooled = pool.swap_remove(i);
-                    unsafe {
-                        let allocator = device.allocator.lock().unwrap();
-                        allocator.destroy_buffer(pooled.buffer, &mut pooled.allocation.clone());
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-        }
-
-        // GC Semaphores (Recycle)
         let mut i = 0;
         while i < self.dead_semaphores.len() {
             if self.dead_semaphores[i].0 <= safe_threshold {
@@ -1013,18 +1030,6 @@ impl RenderBackend for VulkanBackend {
             .alpha_to_coverage_enable(desc.multisample_state.alpha_to_coverage_enable);
 
         // 4. Depth Stencil
-        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(desc.depth_stencil_state.depth_test_enable)
-            .depth_write_enable(desc.depth_stencil_state.depth_write_enable)
-            .depth_compare_op(convert_compare_op(
-                desc.depth_stencil_state.depth_compare_op,
-            ))
-            .depth_bounds_test_enable(desc.depth_stencil_state.depth_bounds_test_enable)
-            .stencil_test_enable(desc.depth_stencil_state.stencil_test_enable)
-            .front(convert_stencil_op_state(&desc.depth_stencil_state.front))
-            .back(convert_stencil_op_state(&desc.depth_stencil_state.back))
-            .min_depth_bounds(desc.depth_stencil_state.min_depth_bounds)
-            .max_depth_bounds(desc.depth_stencil_state.max_depth_bounds);
 
         // 5. Color Blend
         let attachments: Vec<vk::PipelineColorBlendAttachmentState> = desc
@@ -1140,12 +1145,10 @@ impl RenderBackend for VulkanBackend {
             unsafe { device.handle.create_pipeline_layout(&layout_info, None) }.unwrap();
 
         // 6. Dynamic Rendering Info
-        let color_formats: Vec<vk::Format> = desc
-            .render_targets
-            .color_targets
-            .iter()
-            .map(|t| convert_format(t.format))
-            .collect();
+        let mut color_formats = Vec::new();
+        for rt in &desc.render_targets.color_targets {
+            color_formats.push(convert_format(rt.format));
+        }
 
         let depth_format = desc
             .render_targets
@@ -1157,15 +1160,24 @@ impl RenderBackend for VulkanBackend {
             .color_attachment_formats(&color_formats)
             .depth_attachment_format(depth_format);
 
-        if depth_format != vk::Format::UNDEFINED {
-            // Enable Depth Test if format provided (MVP assumption)
-            // We need to update depth_stencil state above too?
-            // Since we construct pipeline_info later, we can modify it?
-            // No, depth_stencil struct is already created.
-            // Use let mut depth_stencil?
-            // Or rebuild it here? No.
-            // Best to move depth_stencil creation DOWN to here.
-        }
+        debug!(
+            "Pipeline {:?} formats: color={:?}, depth={:?}",
+            id, color_formats, depth_format
+        );
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(desc.depth_stencil_state.depth_test_enable)
+            .depth_write_enable(desc.depth_stencil_state.depth_write_enable)
+            .depth_compare_op(convert_compare_op(
+                desc.depth_stencil_state.depth_compare_op,
+            ))
+            .depth_bounds_test_enable(desc.depth_stencil_state.depth_bounds_test_enable)
+            .stencil_test_enable(desc.depth_stencil_state.stencil_test_enable)
+            .front(convert_stencil_op_state(&desc.depth_stencil_state.front))
+            .back(convert_stencil_op_state(&desc.depth_stencil_state.back))
+            .min_depth_bounds(desc.depth_stencil_state.min_depth_bounds)
+            .max_depth_bounds(desc.depth_stencil_state.max_depth_bounds);
+
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
             .vertex_input_state(&vertex_input)
@@ -1277,16 +1289,35 @@ impl RenderBackend for VulkanBackend {
 
             let image_raw = swapchain.images[index as usize];
             let image_id = image_raw.as_raw();
-
-            if !self.image_views.contains_key(&image_id) {
+            let arena_id = if let Some(&id) = self.external_to_physical.get(&image_id) {
+                // Force UNDEFINED layout on acquisition to avoid redundant PRESENT -> ATTACHMENT transitions
+                if let Some(img) = self.images.get_mut(id) {
+                    img.last_layout = vk::ImageLayout::UNDEFINED;
+                    img.last_access = vk::AccessFlags2::empty();
+                    img.last_stage = vk::PipelineStageFlags2::TOP_OF_PIPE;
+                }
+                id
+            } else {
                 let view_raw = swapchain.image_views[index as usize];
-                self.image_views.insert(image_id, view_raw);
-                self.image_formats.insert(image_id, swapchain.format);
-                self.external_to_physical.insert(image_id, image_id);
-                self.image_map.insert(image_id, image_raw);
-            }
+                let new_id = self.images.insert(PhysicalImage {
+                    image: image_raw,
+                    view: view_raw,
+                    allocation: None,
+                    desc: ImageDesc::new(
+                        swapchain.extent.width,
+                        swapchain.extent.height,
+                        crate::convert::convert_vk_format(swapchain.format),
+                    ),
+                    format: swapchain.format,
+                    last_layout: vk::ImageLayout::UNDEFINED,
+                    last_access: vk::AccessFlags2::empty(),
+                    last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+                });
+                self.external_to_physical.insert(image_id, new_id);
+                new_id
+            };
 
-            return Ok(Some((BackendImage(image_id), 0, index)));
+            return Ok(Some((BackendImage(arena_id), 0, index)));
         }
     }
 
@@ -1411,18 +1442,21 @@ impl RenderBackend for VulkanBackend {
         }; // Fallback
 
         if let Some(&first_pid) = self.target_id_scratch.first() {
-            if let Some(d) = self.image_descs.get(&first_pid) {
+            if let Some(img) = self.images.get(first_pid) {
                 viewport_extent = vk::Extent2D {
-                    width: d.width,
-                    height: d.height,
+                    width: img.desc.width,
+                    height: img.desc.height,
                 };
             }
-            // Fast window lookup
+            // Fast window lookup (Match Arena ID)
             for ctx_win in self.windows.values() {
                 if let (Some(sc), Some(idx)) = (&ctx_win.swapchain, ctx_win.current_image_index) {
-                    if sc.images[idx as usize].as_raw() == first_pid {
-                        viewport_extent = sc.extent;
-                        break;
+                    let sc_handle = sc.images[idx as usize].as_raw();
+                    if let Some(&sc_arena_id) = self.external_to_physical.get(&sc_handle) {
+                        if sc_arena_id == first_pid {
+                            viewport_extent = sc.extent;
+                            break;
+                        }
                     }
                 }
             }
@@ -1455,17 +1489,7 @@ impl RenderBackend for VulkanBackend {
                 .unwrap()
         };
 
-        let mut ctx = VulkanPassContext {
-            cmd,
-            device: self.get_device().clone(),
-            present_request: None,
-            image_handle_map: &self.image_views,
-            buffer_map: &self.buffer_map,
-            pipeline_map: &self.pipeline_map,
-            pipeline_layout_map: &self.pipeline_layout_map,
-            descriptor_sets: &self.descriptor_sets,
-            current_pipeline_layout: vk::PipelineLayout::null(),
-        };
+        let mut ctx = VulkanPassContext::new(cmd, self);
 
         // If pipeline is set, bind it
         if let Some(pipe_handle) = desc.pipeline {
@@ -1496,150 +1520,86 @@ impl RenderBackend for VulkanBackend {
         // `self` is borrowed mutably.
         // We can look them up in `self.image_handle_map`.
 
-        // Resolve attachments and synchronization
+        // Prepare attachments
         let mut color_attachments = [vk::RenderingAttachmentInfo::default(); 8];
         let mut color_count = 0;
         let mut depth_attachment_info = None;
 
+        // 1. Sync Writes (Attachments)
         for (handle, _) in desc.image_writes {
-            // 1. Resolve to Physical ID
             let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
                 phy
             } else {
                 handle.0.0
             };
 
-            // 2. Find View
-            if let Some(&view) = self.image_views.get(&physical_id) {
-                let format = *self
-                    .image_formats
-                    .get(&physical_id)
-                    .unwrap_or(&vk::Format::UNDEFINED);
+            let (format, view) = if let Some(img) = self.images.get(physical_id) {
+                (img.format, img.view)
+            } else {
+                continue;
+            };
 
-                // 3. Skip redundant sync search (already handled in submit/barriers)
+            let (target_layout, target_access, target_stage) = if format == vk::Format::D32_SFLOAT {
+                (
+                    vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
+                )
+            } else {
+                (
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                )
+            };
 
-                let clear_value = if format == vk::Format::D32_SFLOAT {
-                    vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 1.0,
-                            stencil: 0,
-                        },
-                    }
-                } else {
-                    vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                    }
-                };
+            self.transition_image(cmd, physical_id, target_layout, target_access, target_stage);
 
-                // 4. Setup Attachment Info
-                let attachment = vk::RenderingAttachmentInfo::default()
-                    .image_view(view)
-                    .image_layout(if format == vk::Format::D32_SFLOAT {
-                        vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                    } else {
-                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-                    })
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .store_op(vk::AttachmentStoreOp::STORE)
-                    .clear_value(clear_value);
-
-                if format == vk::Format::D32_SFLOAT {
-                    depth_attachment_info = Some(attachment);
-                } else if color_count < 8 {
-                    color_attachments[color_count] = attachment;
-                    color_count += 1;
+            let clear_value = if format == vk::Format::D32_SFLOAT {
+                vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
                 }
-
-                // IMAGE BARRIER: Transition Undefined/Present -> Attachment
-                let image = self.image_map.get(&physical_id).unwrap();
-                let (old_layout, new_layout, dst_access, aspect_mask) =
-                    if format == vk::Format::D32_SFLOAT {
-                        (
-                            vk::ImageLayout::UNDEFINED,
-                            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                            vk::ImageAspectFlags::DEPTH,
-                        )
-                    } else {
-                        (
-                            vk::ImageLayout::UNDEFINED,
-                            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-                            vk::ImageAspectFlags::COLOR,
-                        )
-                    };
-
-                let barrier = vk::ImageMemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::empty())
-                    .dst_access_mask(dst_access)
-                    .old_layout(old_layout)
-                    .new_layout(new_layout)
-                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .image(*image)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    });
-
-                unsafe {
-                    device.handle.cmd_pipeline_barrier(
-                        cmd,
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        if format == vk::Format::D32_SFLOAT {
-                            vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                        } else {
-                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        },
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[barrier],
-                    );
+            } else {
+                vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
                 }
+            };
+
+            let attachment = vk::RenderingAttachmentInfo::default()
+                .image_view(view)
+                .image_layout(target_layout)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .clear_value(clear_value);
+
+            if format == vk::Format::D32_SFLOAT {
+                depth_attachment_info = Some(attachment);
+            } else if color_count < 8 {
+                color_attachments[color_count] = attachment;
+                color_count += 1;
             }
         }
 
-        // Layout Transitions for Reads
+        // 2. Sync Reads (Textures/Storage)
         for (handle, _) in desc.image_reads {
             let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
                 phy
             } else {
                 handle.0.0
             };
-            if let Some(&image) = self.image_map.get(&physical_id) {
-                let barrier = vk::ImageMemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::empty())
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                    .old_layout(vk::ImageLayout::UNDEFINED) // Simplified: force transition
-                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .image(image)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    });
-                unsafe {
-                    device.handle.cmd_pipeline_barrier(
-                        cmd,
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::PipelineStageFlags::FRAGMENT_SHADER,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[barrier],
-                    );
-                }
-            }
+
+            self.transition_image(
+                cmd,
+                physical_id,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::AccessFlags2::SHADER_READ,
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            );
         }
 
         let mut rendering_info = vk::RenderingInfo::default()
@@ -1680,39 +1640,19 @@ impl RenderBackend for VulkanBackend {
 
         // Handle explicit transition for Present if requested
         if let Some(handle) = present_req {
-            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
-                phy
+            let physical_id = if let Some(&id) = self.external_to_physical.get(&handle.0.0) {
+                id
             } else {
                 handle.0.0
             };
-            if let Some(&image) = self.image_map.get(&physical_id) {
-                let barrier = vk::ImageMemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                    .dst_access_mask(vk::AccessFlags::empty())
-                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .image(image)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    });
-                unsafe {
-                    device.handle.cmd_pipeline_barrier(
-                        cmd,
-                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[barrier],
-                    );
-                }
-            }
+
+            self.transition_image(
+                cmd,
+                physical_id,
+                vk::ImageLayout::PRESENT_SRC_KHR,
+                vk::AccessFlags2::empty(),
+                vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+            );
         }
 
         unsafe { device.handle.end_command_buffer(cmd).unwrap() };
@@ -1721,14 +1661,15 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn resolve_image(&self, handle: ImageHandle) -> BackendImage {
-        if let Some(&id) = self.external_to_physical.get(&handle.0.0) {
-            BackendImage(id)
+        let physical_id = if let Some(&id) = self.external_to_physical.get(&handle.0.0) {
+            id
         } else {
-            // For now, assume it might be an internal resource that currently
-            // relies on the broken "direct cast" behavior if any exist,
-            // or is simply missing because we haven't implemented internal storage mapping.
-            // As we investigate the leak, we'll see we need a `transient_resource_map`.
-            // For the MVP Triangle, everything is external (Swapchain).
+            handle.0.0
+        };
+
+        if self.images.get(physical_id).is_some() {
+            BackendImage(physical_id)
+        } else {
             panic!("Unresolved image handle: {:?}", handle);
         }
     }
@@ -1769,28 +1710,31 @@ impl RenderBackend for VulkanBackend {
         let device = self.get_device().clone();
         let allocator_lock = device.allocator.lock().unwrap();
 
-        // Then get allocation
-        let id = handle.0;
-        if let Some(allocation) = self.buffer_allocations.get_mut(&id) {
-            // Map memory
-            let ptr = unsafe {
-                allocator_lock
-                    .map_memory(allocation)
-                    .map_err(|e| format!("Failed to map memory: {}", e))?
-            };
+        // Then get allocation via Arena
+        if let Some(physical) = self.buffers.get_mut(handle.0) {
+            if let Some(allocation) = &mut physical.allocation {
+                // Map memory
+                let ptr = unsafe {
+                    allocator_lock
+                        .map_memory(allocation)
+                        .map_err(|e| format!("Failed to map memory: {}", e))?
+                };
 
-            unsafe {
-                let dst = ptr.offset(offset as isize);
-                std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+                unsafe {
+                    let dst = ptr.offset(offset as isize);
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
 
-                // Flush if not coherent
-                allocator_lock
-                    .flush_allocation(&*allocation, offset, data.len() as u64)
-                    .map_err(|e| format!("Failed to flush allocation: {}", e))?;
+                    // Flush if not coherent
+                    allocator_lock
+                        .flush_allocation(allocation, offset, data.len() as u64)
+                        .map_err(|e| format!("Failed to flush allocation: {}", e))?;
 
-                allocator_lock.unmap_memory(allocation);
+                    allocator_lock.unmap_memory(allocation);
+                }
+                Ok(())
+            } else {
+                Err("Buffer has no allocation (external?)".to_string())
             }
-            Ok(())
         } else {
             Err(format!("Buffer not found: {:?}", handle))
         }
@@ -1856,9 +1800,9 @@ impl RenderBackend for VulkanBackend {
                 i3_gfx::graph::pipeline::BindingType::UniformBuffer
                 | i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
                     if let Some(info) = &write.buffer_info {
-                        if let Some(buf) = self.buffer_map.get(&info.buffer.0.0) {
+                        if let Some(buf) = self.buffers.get(info.buffer.0.0) {
                             buffer_infos.push(vk::DescriptorBufferInfo {
-                                buffer: *buf,
+                                buffer: buf.buffer,
                                 offset: info.offset,
                                 range: if info.range == 0 {
                                     vk::WHOLE_SIZE
@@ -1883,24 +1827,24 @@ impl RenderBackend for VulkanBackend {
                                 info.image.0.0
                             };
 
-                        if let Some(view) = self.image_views.get(&physical_id) {
+                        if let Some(img) = self.images.get(physical_id) {
                             let layout = match info.image_layout {
-                                  i3_gfx::graph::backend::DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
-                                  i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                              };
+                                i3_gfx::graph::backend::DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
+                                i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                            };
 
                             let vk_sampler = if let Some(sampler_handle) = info.sampler {
-                                *self
-                                    .samplers
+                                self.samplers
                                     .get(&sampler_handle.0)
-                                    .unwrap_or(&vk::Sampler::null())
+                                    .cloned()
+                                    .unwrap_or(vk::Sampler::null())
                             } else {
                                 vk::Sampler::null()
                             };
 
                             image_infos.push(vk::DescriptorImageInfo {
                                 sampler: vk_sampler,
-                                image_view: *view,
+                                image_view: img.view,
                                 image_layout: layout,
                             });
                         }
@@ -1977,15 +1921,7 @@ impl Drop for VulkanBackend {
                 debug!("GPU idle. Starting resource cleanup...");
 
                 // 1. Clean up Window Resources
-                // First, identify ALL current swapchain image views across all windows.
-                let mut current_swapchain_views = std::collections::HashSet::new();
                 for ctx in self.windows.values() {
-                    if let Some(sc) = &ctx.swapchain {
-                        for &view in &sc.image_views {
-                            current_swapchain_views.insert(view.as_raw());
-                        }
-                    }
-                    // Also destroy acquire and present semaphores here
                     for &sem in &ctx.acquire_semaphores {
                         device.handle.destroy_semaphore(sem, None);
                     }
@@ -2006,40 +1942,58 @@ impl Drop for VulkanBackend {
                 }
 
                 debug!("Destroying pipelines and shaders...");
+                for &p in &self.pipelines {
+                    device.handle.destroy_pipeline(p, None);
+                }
+                for &l in &self.layouts {
+                    device.handle.destroy_pipeline_layout(l, None);
+                }
+                for &s in &self.shader_modules {
+                    device.handle.destroy_shader_module(s, None);
+                }
+                for &dsl in &self.descriptor_set_layouts {
+                    device.handle.destroy_descriptor_set_layout(dsl, None);
+                }
+
+                debug!("Destroying active buffers and allocations...");
                 {
-                    let mut destroyed_pipelines = std::collections::HashSet::new();
-                    for &p in &self.pipelines {
-                        if !destroyed_pipelines.contains(&p.as_raw()) {
-                            device.handle.destroy_pipeline(p, None);
-                            destroyed_pipelines.insert(p.as_raw());
+                    let allocator = device.allocator.lock().unwrap();
+                    for (_id, physical) in self.buffers.iter_mut() {
+                        if let Some(alloc) = physical.allocation.take() {
+                            allocator.destroy_buffer(physical.buffer, &mut alloc.clone());
                         }
                     }
                 }
+
+                debug!("Destroying active images and views...");
                 {
-                    let mut destroyed_layouts = std::collections::HashSet::new();
-                    for &l in &self.layouts {
-                        if !destroyed_layouts.contains(&l.as_raw()) {
-                            device.handle.destroy_pipeline_layout(l, None);
-                            destroyed_layouts.insert(l.as_raw());
+                    let allocator = device.allocator.lock().unwrap();
+                    for (_id, physical) in self.images.iter_mut() {
+                        if let Some(mut alloc) = physical.allocation.take() {
+                            device.handle.destroy_image_view(physical.view, None);
+                            allocator.destroy_image(physical.image, &mut alloc);
+                        } else {
+                            // This is likely a swapchain image, DO NOT destroy its view/image as it's owned elsewhere.
+                            debug!("Skipping destruction of external image {:?}", _id);
                         }
                     }
                 }
+
+                debug!("Destroying dead resources...");
                 {
-                    let mut destroyed_shaders = std::collections::HashSet::new();
-                    for &s in &self.shader_modules {
-                        if !destroyed_shaders.contains(&s.as_raw()) {
-                            device.handle.destroy_shader_module(s, None);
-                            destroyed_shaders.insert(s.as_raw());
-                        }
+                    let allocator = device.allocator.lock().unwrap();
+                    for (_, buffer, alloc) in &mut self.dead_buffers {
+                        allocator.destroy_buffer(*buffer, alloc);
                     }
-                }
-                {
-                    let mut destroyed_dsls = std::collections::HashSet::new();
-                    for &dsl in &self.descriptor_set_layouts {
-                        if !destroyed_dsls.contains(&dsl.as_raw()) {
-                            device.handle.destroy_descriptor_set_layout(dsl, None);
-                            destroyed_dsls.insert(dsl.as_raw());
-                        }
+                    for (_, image, view, alloc) in &mut self.dead_images {
+                        device.handle.destroy_image_view(*view, None);
+                        allocator.destroy_image(*image, alloc);
+                    }
+                    for (_, sampler) in &mut self.dead_samplers {
+                        device.handle.destroy_sampler(*sampler, None);
+                    }
+                    for (_, _, sem) in &self.dead_semaphores {
+                        device.handle.destroy_semaphore(*sem, None);
                     }
                 }
 
@@ -2047,94 +2001,16 @@ impl Drop for VulkanBackend {
                 for (_, sem) in &self.semaphores {
                     device.handle.destroy_semaphore(*sem, None);
                 }
-
                 for &sem in &self.recycled_semaphores {
                     device.handle.destroy_semaphore(sem, None);
                 }
-
                 if self.timeline_sem != vk::Semaphore::null() {
                     device.handle.destroy_semaphore(self.timeline_sem, None);
                 }
 
-                debug!("Destroying dead resources...");
-                {
-                    let allocator = device.allocator.lock().unwrap();
-
-                    for (_, buffer, alloc) in &mut self.dead_buffers {
-                        allocator.destroy_buffer(*buffer, alloc);
-                    }
-
-                    // Dead images:
-                    for (_, image, view, alloc) in &mut self.dead_images {
-                        device.handle.destroy_image_view(*view, None);
-                        allocator.destroy_image(*image, alloc);
-                    }
-
-                    for (_, sampler) in &mut self.dead_samplers {
-                        device.handle.destroy_sampler(*sampler, None);
-                    }
-
-                    for (_, _, sem) in &self.dead_semaphores {
-                        device.handle.destroy_semaphore(*sem, None);
-                    }
-                }
-
-                debug!("Destroying transient resource pools...");
-                {
-                    let allocator = device.allocator.lock().unwrap();
-                    for pool in self.transient_buffer_pool.values_mut() {
-                        for pooled in pool {
-                            allocator.destroy_buffer(pooled.buffer, &mut pooled.allocation);
-                        }
-                    }
-                    for pool in self.transient_image_pool.values_mut() {
-                        for pooled in pool {
-                            device.handle.destroy_image_view(pooled.view, None);
-                            allocator.destroy_image(pooled.image, &mut pooled.allocation);
-                        }
-                    }
-                }
-
-                debug!("Destroying active buffers...");
-                {
-                    let allocator = device.allocator.lock().unwrap();
-                    for (id, buffer) in &self.buffer_map {
-                        if let Some(mut alloc) = self.buffer_allocations.get(id).cloned() {
-                            allocator.destroy_buffer(*buffer, &mut alloc);
-                        }
-                    }
-                }
-
-                debug!("Destroying active images and samplers...");
-                {
-                    let mut destroyed_views = std::collections::HashSet::new();
-                    for (&_id, &view) in &self.image_views {
-                        if !current_swapchain_views.contains(&view.as_raw())
-                            && !destroyed_views.contains(&view.as_raw())
-                        {
-                            device.handle.destroy_image_view(view, None);
-                            destroyed_views.insert(view.as_raw());
-                        }
-                    }
-                }
-
-                {
-                    let mut destroyed_samplers = std::collections::HashSet::new();
-                    for (_, sampler) in &self.samplers {
-                        if !destroyed_samplers.contains(&sampler.as_raw()) {
-                            device.handle.destroy_sampler(*sampler, None);
-                            destroyed_samplers.insert(sampler.as_raw());
-                        }
-                    }
-                }
-
-                {
-                    let allocator = device.allocator.lock().unwrap();
-                    for (id, image) in &self.image_map {
-                        if let Some(mut alloc) = self.image_allocations.get(id).cloned() {
-                            allocator.destroy_image(*image, &mut alloc);
-                        }
-                    }
+                debug!("Destroying samplers...");
+                for (_, sampler) in &self.samplers {
+                    device.handle.destroy_sampler(*sampler, None);
                 }
 
                 debug!("Destroying descriptor pool...");
@@ -2147,9 +2023,6 @@ impl Drop for VulkanBackend {
                 info!("Vulkan Backend shutdown complete.");
             }
         }
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-        std::io::stderr().flush().ok();
     }
 }
 
@@ -2157,11 +2030,7 @@ pub struct VulkanPassContext<'a> {
     cmd: vk::CommandBuffer,
     device: Arc<crate::device::VulkanDevice>,
     present_request: Option<ImageHandle>,
-    image_handle_map: &'a HashMap<u64, vk::ImageView>,
-    buffer_map: &'a HashMap<u64, vk::Buffer>,
-    pipeline_map: &'a HashMap<u64, vk::Pipeline>,
-    pipeline_layout_map: &'a HashMap<u64, vk::PipelineLayout>,
-    descriptor_sets: &'a HashMap<u64, vk::DescriptorSet>,
+    backend: &'a VulkanBackend,
     current_pipeline_layout: vk::PipelineLayout,
 }
 
@@ -2171,11 +2040,7 @@ impl<'a> VulkanPassContext<'a> {
             cmd,
             device: backend.get_device().clone(),
             present_request: None,
-            image_handle_map: &backend.image_views,
-            buffer_map: &backend.buffer_map,
-            pipeline_map: &backend.pipeline_map,
-            pipeline_layout_map: &backend.pipeline_layout_map,
-            descriptor_sets: &backend.descriptor_sets,
+            backend,
             current_pipeline_layout: vk::PipelineLayout::null(),
         }
     }
@@ -2183,7 +2048,7 @@ impl<'a> VulkanPassContext<'a> {
 
 impl<'a> PassContext for VulkanPassContext<'a> {
     fn bind_pipeline(&mut self, pipeline: PipelineHandle) {
-        if let Some(pipe) = self.pipeline_map.get(&pipeline.0.0) {
+        if let Some(pipe) = self.backend.pipeline_map.get(&pipeline.0.0) {
             unsafe {
                 self.device.handle.cmd_bind_pipeline(
                     self.cmd,
@@ -2192,24 +2057,23 @@ impl<'a> PassContext for VulkanPassContext<'a> {
                 );
             }
         }
-        if let Some(layout) = self.pipeline_layout_map.get(&pipeline.0.0) {
+        if let Some(layout) = self.backend.pipeline_layout_map.get(&pipeline.0.0) {
             self.current_pipeline_layout = *layout;
         }
     }
 
     fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
-        // Resolve buffer
-        if let Some(buf) = self.buffer_map.get(&handle.0.0) {
+        if let Some(buf) = self.backend.buffers.get(handle.0.0) {
             unsafe {
                 self.device
                     .handle
-                    .cmd_bind_vertex_buffers(self.cmd, binding, &[*buf], &[0]);
+                    .cmd_bind_vertex_buffers(self.cmd, binding, &[buf.buffer], &[0]);
             }
         }
     }
 
     fn bind_index_buffer(&mut self, handle: BufferHandle, index_type: IndexType) {
-        if let Some(buf) = self.buffer_map.get(&handle.0.0) {
+        if let Some(buf) = self.backend.buffers.get(handle.0.0) {
             let vk_type = match index_type {
                 IndexType::Uint16 => vk::IndexType::UINT16,
                 IndexType::Uint32 => vk::IndexType::UINT32,
@@ -2217,13 +2081,13 @@ impl<'a> PassContext for VulkanPassContext<'a> {
             unsafe {
                 self.device
                     .handle
-                    .cmd_bind_index_buffer(self.cmd, *buf, 0, vk_type);
+                    .cmd_bind_index_buffer(self.cmd, buf.buffer, 0, vk_type);
             }
         }
     }
 
     fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle) {
-        if let Some(set) = self.descriptor_sets.get(&handle.0) {
+        if let Some(set) = self.backend.descriptor_sets.get(&handle.0) {
             unsafe {
                 self.device.handle.cmd_bind_descriptor_sets(
                     self.cmd,
@@ -2301,48 +2165,26 @@ impl<'a> PassContext for VulkanPassContext<'a> {
 
     fn present(&mut self, image: ImageHandle) {
         self.present_request = Some(image);
-        // Explicitly transition layout to PRESENT_SRC_KHR provided we know the image
-        if let Some(_view) = self.image_handle_map.get(&image.0.0) {
-            // We need the IMAGE, not the VIEW, to barrier it.
-            // Refactoring needed to map view->image or track both.
+        let physical_id = if let Some(&phy) = self.backend.external_to_physical.get(&image.0.0) {
+            phy
+        } else {
+            image.0.0
+        };
+
+        if let Some(img) = self.backend.images.get(physical_id) {
+            // Success! We have the physical image handle here in O(1).
+            let _ = img.image;
         }
-
-        // Record barrier?
-        // Record barrier?
-        /*
-        let barrier = vk::ImageMemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT) // The present wait semaphore handles the rest
-            .dst_access_mask(vk::AccessFlags2::NONE)
-            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .image(vk::Image::null()) // We lack the vk::Image here!
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-        */
-
-        // Because we lack `vk::Image`, we are skipping the barrier.
-        // The Validation Layer warned about "waiting on semaphore".
-        // With semaphore, it might be fine on some drivers, but strict usage requires layout transition.
-        // The `RenderPass` usually handles finalLayout=Present.
-        // Dynamic Rendering requires manual transition.
     }
 }
 
 impl VulkanBackend {
     fn unregister_swapchain_images(&mut self, swapchain: &crate::swapchain::VulkanSwapchain) {
         for &image in &swapchain.images {
-            let id = image.as_raw();
-            self.image_map.remove(&id);
-            self.image_views.remove(&id);
-            self.image_formats.remove(&id);
-            self.image_descs.remove(&id);
+            let vk_handle = image.as_raw();
+            if let Some(arena_id) = self.external_to_physical.remove(&vk_handle) {
+                self.images.remove(arena_id);
+            }
         }
     }
 }

@@ -399,7 +399,7 @@ impl CompiledGraph {
                 }
                 None => {
                     // Mark this handle as inactive (minimized)
-                    tracing::info!(window = ?window.0, "Window is minimized, skipping associated passes");
+                    tracing::debug!(window = ?window.0, "Window is minimized, skipping associated passes");
                     inactive_images.push(handle.0.0);
                 }
             }

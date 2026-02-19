@@ -353,3 +353,15 @@ pub fn convert_logic_op(op: LogicOp) -> vk::LogicOp {
         LogicOp::Set => vk::LogicOp::SET,
     }
 }
+
+pub fn convert_vk_format(format: vk::Format) -> Format {
+    match format {
+        vk::Format::B8G8R8A8_UNORM => Format::B8G8R8A8_UNORM,
+        vk::Format::B8G8R8A8_SRGB => Format::B8G8R8A8_SRGB,
+        vk::Format::R8G8B8A8_UNORM => Format::R8G8B8A8_UNORM,
+        vk::Format::R32_SFLOAT => Format::R32_FLOAT,
+        vk::Format::R32G32B32A32_SFLOAT => Format::R32G32B32A32_FLOAT,
+        vk::Format::D32_SFLOAT => Format::D32_FLOAT,
+        _ => Format::Undefined,
+    }
+}
