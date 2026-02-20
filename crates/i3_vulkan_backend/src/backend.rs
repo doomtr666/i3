@@ -138,12 +138,38 @@ impl<T> ResourceArena<T> {
             }
         })
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (u64, &T)> {
+        self.slots.iter().enumerate().filter_map(|(i, slot)| {
+            if let Slot::Occupied { data, generation } = slot {
+                let id = ((*generation as u64) << 32) | (i as u64);
+                Some((id, data))
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn ids(&self) -> Vec<u64> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| {
+                if let Slot::Occupied { generation, .. } = slot {
+                    Some(((*generation as u64) << 32) | (i as u64))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 // ...
 
 struct VulkanFrameContext {
     command_pool: vk::CommandPool,
+    descriptor_pool: vk::DescriptorPool,
     allocated_command_buffers: Vec<vk::CommandBuffer>,
     cursor: usize,
     submitted_cursor: usize,
@@ -157,11 +183,23 @@ struct WindowContext {
     config: SwapchainConfig,
     // Semaphores for acquire (per frame in flight)
     acquire_semaphores: Vec<vk::Semaphore>,
+    acquire_semaphore_ids: Vec<u64>,
     // Semaphores for present (per frame in flight)
     present_semaphores: Vec<vk::Semaphore>,
+    #[allow(dead_code)]
+    present_semaphore_ids: Vec<u64>,
     // Track the current frame's acquire semaphore to pair it with the image
-    current_acquire_sem: Option<vk::Semaphore>,
+    current_acquire_sem_id: Option<u64>,
     current_image_index: Option<u32>,
+}
+
+#[derive(Clone)]
+pub struct PhysicalPipeline {
+    pub handle: vk::Pipeline,
+    pub layout: vk::PipelineLayout,
+    pub bind_point: vk::PipelineBindPoint,
+    pub set_layouts: Vec<vk::DescriptorSetLayout>,
+    pub pushable_sets_mask: u32,
 }
 
 pub struct VulkanBackend {
@@ -175,8 +213,7 @@ pub struct VulkanBackend {
     pub event_pump: Option<sdl2::EventPump>,
 
     // Resource tracking for teardown
-    pub pipelines: Vec<vk::Pipeline>,
-    pub layouts: Vec<vk::PipelineLayout>,
+    pub pipeline_resources: ResourceArena<PhysicalPipeline>,
     pub shader_modules: Vec<vk::ShaderModule>,
 
     // Resources mapping (Arena based)
@@ -195,18 +232,16 @@ pub struct VulkanBackend {
     transient_buffer_pool: HashMap<BufferDesc, Vec<u64>>,
 
     // Resources
-    pub pipeline_map: HashMap<u64, vk::Pipeline>,
-    pub samplers: HashMap<u64, vk::Sampler>,
+    pub samplers: ResourceArena<vk::Sampler>,
     pub dead_samplers: Vec<(u64, vk::Sampler)>, // Frame, Handle
-    pub semaphores: HashMap<u64, vk::Semaphore>,
+    pub semaphores: ResourceArena<vk::Semaphore>,
     pub timeline_sem: vk::Semaphore, // Global timeline for graphics queue
     pub cpu_timeline: u64,           // Current CPU submission value
     pub next_semaphore_id: u64,
-    pub descriptor_pool: vk::DescriptorPool,
-    pub pipeline_layouts: HashMap<u64, Vec<vk::DescriptorSetLayout>>,
+    pub static_descriptor_pool: vk::DescriptorPool,
     pub descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
-    pub descriptor_sets: HashMap<u64, vk::DescriptorSet>,
-    pub pipeline_layout_map: HashMap<u64, vk::PipelineLayout>,
+    pub descriptor_sets: ResourceArena<vk::DescriptorSet>,
+    pub descriptor_pool_max_sets: u32,
 
     // Loaders
     swapchain_loader: Option<ash::khr::swapchain::Device>,
@@ -239,15 +274,13 @@ impl VulkanBackend {
             sdl,
             video,
             event_pump: None,
-            pipelines: Vec::new(),
-            layouts: Vec::new(),
+            pipeline_resources: ResourceArena::new(),
             shader_modules: Vec::new(),
             images: ResourceArena::new(),
             buffers: ResourceArena::new(),
             external_to_physical: HashMap::new(),
-            pipeline_map: HashMap::new(),
-            semaphores: HashMap::new(),
-            samplers: HashMap::new(),
+            semaphores: ResourceArena::new(),
+            samplers: ResourceArena::new(),
             next_semaphore_id: 1,
             frame_count: 0,
             dead_images: Vec::new(),
@@ -257,12 +290,11 @@ impl VulkanBackend {
             recycled_semaphores: Vec::new(),
             transient_image_pool: HashMap::new(),
             transient_buffer_pool: HashMap::new(),
-            descriptor_pool: vk::DescriptorPool::null(),
-            pipeline_layouts: HashMap::new(),
+            static_descriptor_pool: vk::DescriptorPool::null(),
             descriptor_set_layouts: Vec::new(),
-            descriptor_sets: HashMap::new(),
-            pipeline_layout_map: HashMap::new(),
-            timeline_sem: vk::Semaphore::null(), // Initialized in `initialize`
+            descriptor_sets: ResourceArena::new(),
+            descriptor_pool_max_sets: 1000,
+            timeline_sem: vk::Semaphore::null(), // Will be initialized below
             cpu_timeline: 0,
             frame_contexts: Vec::new(),
             swapchain_loader: None,
@@ -337,10 +369,8 @@ impl VulkanBackend {
 
     #[allow(dead_code)]
     pub fn create_semaphore(&mut self) -> u64 {
-        let id = self.next_id();
         let sem = self.create_semaphore_raw();
-        self.semaphores.insert(id, sem);
-        id
+        self.semaphores.insert(sem)
     }
 
     pub fn next_id(&mut self) -> u64 {
@@ -435,28 +465,83 @@ impl RenderBackend for VulkanBackend {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
                 descriptor_count: 1000,
             },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_count: 1000,
+            },
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(1000);
-        self.descriptor_pool = unsafe {
+        self.static_descriptor_pool = unsafe {
             self.get_device()
                 .handle
                 .create_descriptor_pool(&pool_info, None)
-                .map_err(|e| format!("Failed to create descriptor pool: {}", e))?
+                .map_err(|e| format!("Failed to create static descriptor pool: {}", e))?
         };
 
         // Create Global Frame Contexts
         let mut frame_contexts = Vec::new();
         let device = self.get_device().clone();
+
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_count: 1000,
+            },
+        ];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(1000);
+
         for _ in 0..3 {
             unsafe {
-                let pool_info = vk::CommandPoolCreateInfo::default()
-                    .queue_family_index(device.graphics_family)
-                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-                let pool = device.handle.create_command_pool(&pool_info, None).unwrap();
+                let pool = device
+                    .handle
+                    .create_command_pool(
+                        &vk::CommandPoolCreateInfo::default()
+                            .queue_family_index(device.graphics_family)
+                            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                        None,
+                    )
+                    .unwrap();
+
+                let d_pool = device
+                    .handle
+                    .create_descriptor_pool(&pool_info, None)
+                    .unwrap();
+
                 frame_contexts.push(VulkanFrameContext {
                     command_pool: pool,
+                    descriptor_pool: d_pool,
                     allocated_command_buffers: Vec::new(),
                     cursor: 0,
                     submitted_cursor: 0,
@@ -503,12 +588,16 @@ impl RenderBackend for VulkanBackend {
             }
         }
 
-        // Reset the pool for this frame
+        // Reset the pools for this frame
         unsafe {
             device
                 .handle
                 .reset_command_pool(ctx.command_pool, vk::CommandPoolResetFlags::empty())
                 .expect("Failed to reset command pool");
+            device
+                .handle
+                .reset_descriptor_pool(ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .expect("Failed to reset descriptor pool");
         }
 
         ctx.cursor = 0;
@@ -533,51 +622,61 @@ impl RenderBackend for VulkanBackend {
 
         let vulkan_window = crate::window::VulkanWindow::new(self.instance.clone(), window_handle)?;
 
-        let id = self.next_window_id;
+        let _id = self.next_window_id;
         self.next_window_id += 1;
 
         // Create Semaphores per frame for this window (typically 3 for triple buffering)
+        let win_id = self.next_window_id;
+        self.next_window_id += 1;
+
         let mut acquire_sems = Vec::new();
+        let mut acquire_sem_ids = Vec::new();
         let mut present_sems = Vec::new();
-        let device_handle = self.get_device().handle.clone();
+        let mut present_sem_ids = Vec::new();
+        let _device_handle = self.get_device().handle.clone();
+
         for _ in 0..3 {
-            let create_info = vk::SemaphoreCreateInfo::default();
-            let a_sem = unsafe {
-                device_handle
-                    .create_semaphore(&create_info, None)
-                    .map_err(|e| e.to_string())?
-            };
-            let p_sem = unsafe {
-                device_handle
-                    .create_semaphore(&create_info, None)
-                    .map_err(|e| e.to_string())?
-            };
+            let a_id = self.create_semaphore();
+            let p_id = self.create_semaphore();
+
+            let a_sem = self.semaphores.get(a_id).cloned().unwrap();
+            let p_sem = self.semaphores.get(p_id).cloned().unwrap();
+
             acquire_sems.push(a_sem);
+            acquire_sem_ids.push(a_id);
+
             present_sems.push(p_sem);
+            present_sem_ids.push(p_id);
         }
 
-        let ctx = WindowContext {
+        let context = WindowContext {
             raw: vulkan_window,
-            swapchain: None,
+            swapchain: None, // This will be created later
             config: SwapchainConfig {
                 vsync: false,
                 srgb: true,
                 min_image: 3,
             }, // Default
             acquire_semaphores: acquire_sems,
+            acquire_semaphore_ids: acquire_sem_ids,
             present_semaphores: present_sems,
-            current_acquire_sem: None,
+            present_semaphore_ids: present_sem_ids,
+            current_acquire_sem_id: None,
             current_image_index: None,
         };
 
-        self.windows.insert(id, ctx);
-        Ok(WindowHandle(id))
+        self.windows.insert(win_id, context);
+        Ok(WindowHandle(win_id))
     }
 
     fn destroy_window(&mut self, window: WindowHandle) {
         if let Some(mut ctx) = self.windows.remove(&window.0) {
             if let Some(sc) = ctx.swapchain.take() {
-                self.unregister_swapchain_images(&sc);
+                let device = self.get_device();
+                unsafe {
+                    device.handle.device_wait_idle().ok();
+                }
+                self.unregister_swapchain_images(&sc.images);
             }
         }
     }
@@ -596,7 +695,11 @@ impl RenderBackend for VulkanBackend {
         };
 
         if let Some(sc) = sc_opt {
-            self.unregister_swapchain_images(&sc);
+            let device = self.get_device();
+            unsafe {
+                device.handle.device_wait_idle().ok();
+            }
+            self.unregister_swapchain_images(&sc.images);
         }
         Ok(())
     }
@@ -624,6 +727,40 @@ impl RenderBackend for VulkanBackend {
                         });
                         resize_happened = true;
                     }
+                    sdl2::event::Event::MouseButtonDown {
+                        mouse_btn, x, y, ..
+                    } => {
+                        events.push(Event::MouseDown {
+                            button: match mouse_btn {
+                                sdl2::mouse::MouseButton::Left => 1,
+                                sdl2::mouse::MouseButton::Right => 2,
+                                sdl2::mouse::MouseButton::Middle => 3,
+                                _ => 0,
+                            },
+                            x,
+                            y,
+                        });
+                    }
+                    sdl2::event::Event::MouseButtonUp {
+                        mouse_btn, x, y, ..
+                    } => {
+                        events.push(Event::MouseUp {
+                            button: match mouse_btn {
+                                sdl2::mouse::MouseButton::Left => 1,
+                                sdl2::mouse::MouseButton::Right => 2,
+                                sdl2::mouse::MouseButton::Middle => 3,
+                                _ => 0,
+                            },
+                            x,
+                            y,
+                        });
+                    }
+                    sdl2::event::Event::MouseMotion { x, y, .. } => {
+                        events.push(Event::MouseMove { x, y });
+                    }
+                    sdl2::event::Event::MouseWheel { y, .. } => {
+                        events.push(Event::MouseWheel { x: 0, y });
+                    }
                     _ => {}
                 }
             }
@@ -640,8 +777,14 @@ impl RenderBackend for VulkanBackend {
                     to_unregister.push(sc);
                 }
             }
-            for sc in to_unregister {
-                self.unregister_swapchain_images(&sc);
+            if !to_unregister.is_empty() {
+                let device = self.get_device();
+                unsafe {
+                    device.handle.device_wait_idle().ok();
+                }
+                for sc in to_unregister {
+                    self.unregister_swapchain_images(&sc.images);
+                }
             }
         }
         events
@@ -832,13 +975,12 @@ impl RenderBackend for VulkanBackend {
                 .expect("Failed to create sampler")
         };
 
-        let id = self.next_id();
-        self.samplers.insert(id, sampler);
-        SamplerHandle(id)
+        let handle = self.samplers.insert(sampler);
+        SamplerHandle(handle)
     }
 
     fn destroy_sampler(&mut self, handle: SamplerHandle) {
-        if let Some(sampler) = self.samplers.remove(&handle.0) {
+        if let Some(sampler) = self.samplers.remove(handle.0) {
             self.dead_samplers.push((self.frame_count, sampler));
         }
     }
@@ -896,8 +1038,8 @@ impl RenderBackend for VulkanBackend {
         let mut i = 0;
         while i < self.dead_semaphores.len() {
             if self.dead_semaphores[i].0 <= safe_threshold {
-                let (_, _, sem) = self.dead_semaphores.swap_remove(i);
-                self.recycled_semaphores.push(sem);
+                let (_, _, sem_id) = self.dead_semaphores.swap_remove(i);
+                self.recycled_semaphores.push(sem_id);
             } else {
                 i += 1;
             }
@@ -910,9 +1052,19 @@ impl RenderBackend for VulkanBackend {
         debug!("Creating Graphics Pipeline");
         use crate::convert::*;
 
-        // 1. Create Shader Modules
+        // 1. Create Shader Module (once per pipeline setup)
+        let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
+            std::slice::from_raw_parts(
+                desc.shader_module.bytecode.as_ptr() as *const u32,
+                desc.shader_module.bytecode.len() / 4,
+            )
+        });
+
+        let module = unsafe { device.handle.create_shader_module(&create_info, None) }
+            .expect("Shader module creation failed");
+        self.shader_modules.push(module);
+
         let mut stages = Vec::new();
-        let mut specialized_modules = Vec::new(); // keep modules alive
 
         // Create CStrings first to ensure stable pointers
         let entry_points: Vec<std::ffi::CString> = desc
@@ -923,38 +1075,12 @@ impl RenderBackend for VulkanBackend {
             .collect();
 
         for (stage_info, entry_point_cstr) in desc.shader_module.stages.iter().zip(&entry_points) {
-            // We need to re-find the bytecode portion?
-            // desc.shader.bytecode is the WHOLE binary?
-            // Wait, `ShaderModule` has one `bytecode: Vec<u8>`.
-            // That assumes it's a single SPIR-V per module or library?
-            // Or Slang produces one blob.
-            // We create one VkShaderModule per desc.shader.
-
-            // Create the module once:
-            // But loop is per stage...
-            // Optimally we create module outside loop.
-            // But loop context...
-
-            // For now create new module for each stage is invalid if they share bytecode?
-            // Standard Vulkan: ShaderModule is the container.
-            // We create it ONCE.
-            // TODO: Cache shader modules.
-
-            let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
-                std::slice::from_raw_parts(
-                    desc.shader_module.bytecode.as_ptr() as *const u32,
-                    desc.shader_module.bytecode.len() / 4,
-                )
-            });
-
-            let module = unsafe { device.handle.create_shader_module(&create_info, None) }
-                .expect("Shader module creation failed");
-            specialized_modules.push(module);
-
             let stage_flag = if stage_info.stage.contains(ShaderStageFlags::Vertex) {
                 vk::ShaderStageFlags::VERTEX
             } else if stage_info.stage.contains(ShaderStageFlags::Fragment) {
                 vk::ShaderStageFlags::FRAGMENT
+            } else if stage_info.stage.contains(ShaderStageFlags::Compute) {
+                vk::ShaderStageFlags::COMPUTE
             } else {
                 vk::ShaderStageFlags::empty()
             };
@@ -1100,11 +1226,20 @@ impl RenderBackend for VulkanBackend {
 
         // Create Descriptor Set Layouts (filling gaps)
         let mut descriptor_set_layouts = Vec::new();
+        let mut pushable_sets_mask = 0;
         if !set_bindings.is_empty() {
             let max_set = *set_bindings.keys().max().unwrap();
             for i in 0..=max_set {
                 let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
-                let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
+                let mut layout_info =
+                    vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
+
+                // Enable Push Descriptors for Set 0 (implied by backend requirement)
+                if i == 0 {
+                    layout_info =
+                        layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
+                    pushable_sets_mask |= 1 << 0;
+                }
 
                 let layout = unsafe {
                     device
@@ -1117,10 +1252,7 @@ impl RenderBackend for VulkanBackend {
                 self.descriptor_set_layouts.push(layout); // Track for cleanup
             }
         }
-
-        // Store layouts for this pipeline
-        self.pipeline_layouts
-            .insert(id, descriptor_set_layouts.clone());
+        // (pipeline_layouts field was removed, descriptor layouts are stored in PhysicalPipeline)
 
         // Push Constants from reflection
         let pc_ranges: Vec<vk::PushConstantRange> = desc
@@ -1129,9 +1261,9 @@ impl RenderBackend for VulkanBackend {
             .push_constants
             .iter()
             .map(|pc| vk::PushConstantRange {
-                stage_flags: convert_shader_stage_flags(ShaderStageFlags::from_bits_truncate(
-                    pc.stage_flags.bits(),
-                )),
+                stage_flags: crate::convert::convert_shader_stage_flags(
+                    ShaderStageFlags::from_bits_truncate(pc.stage_flags.bits()),
+                ),
                 offset: pc.offset,
                 size: pc.size,
             })
@@ -1201,17 +1333,137 @@ impl RenderBackend for VulkanBackend {
         }
         .expect("Pipeline creation failed")[0];
 
-        // Cleanup modules (pipeline owns the internal shader code? No, we need to destroy modules BUT not before pipeline is created)
-        // We defer destruction.
-        // Or store them.
-        self.shader_modules.extend(specialized_modules);
-        self.pipelines.push(pipeline);
-        self.layouts.push(pipeline_layout);
+        // Create PhysicalPipeline struct
+        let physical = PhysicalPipeline {
+            handle: pipeline,
+            layout: pipeline_layout,
+            bind_point: vk::PipelineBindPoint::GRAPHICS,
+            set_layouts: descriptor_set_layouts,
+            pushable_sets_mask,
+        };
 
-        self.pipeline_map.insert(id, pipeline);
-        self.pipeline_layout_map.insert(id, pipeline_layout);
+        let physical_handle = self.pipeline_resources.insert(physical);
+        BackendPipeline(physical_handle)
+    }
 
-        BackendPipeline(id)
+    fn create_compute_pipeline(&mut self, desc: &ComputePipelineCreateInfo) -> BackendPipeline {
+        let device = self.get_device().clone();
+        let _id = self.next_id();
+        debug!("Creating Compute Pipeline");
+        use crate::convert::*;
+
+        // 1. Create Shader Module
+        let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
+            std::slice::from_raw_parts(
+                desc.shader_module.bytecode.as_ptr() as *const u32,
+                desc.shader_module.bytecode.len() / 4,
+            )
+        });
+
+        let module = unsafe { device.handle.create_shader_module(&create_info, None) }
+            .expect("Shader module creation failed");
+        self.shader_modules.push(module);
+
+        // Compute has exactly one stage
+        let entry_point =
+            std::ffi::CString::new(desc.shader_module.stages[0].entry_point.as_str()).unwrap();
+        let stage_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(module)
+            .name(&entry_point);
+
+        // 2. Layout
+        let mut set_bindings: HashMap<u32, Vec<vk::DescriptorSetLayoutBinding>> = HashMap::new();
+        for binding in &desc.shader_module.reflection.bindings {
+            let descriptor_type = convert_binding_type_to_descriptor(binding.binding_type.clone());
+            let stage_flags = vk::ShaderStageFlags::COMPUTE;
+
+            let vk_binding = vk::DescriptorSetLayoutBinding::default()
+                .binding(binding.binding)
+                .descriptor_type(descriptor_type)
+                .descriptor_count(binding.count)
+                .stage_flags(stage_flags);
+
+            set_bindings
+                .entry(binding.set)
+                .or_default()
+                .push(vk_binding);
+        }
+
+        let mut descriptor_set_layouts = Vec::new();
+        let mut pushable_sets_mask = 0;
+        if !set_bindings.is_empty() {
+            let max_set = *set_bindings.keys().max().unwrap();
+            for i in 0..=max_set {
+                let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
+                let mut layout_info =
+                    vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
+
+                // Enable Push Descriptors for Set 0 (implied by backend requirement)
+                if i == 0 {
+                    layout_info =
+                        layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
+                    pushable_sets_mask |= 1 << 0;
+                }
+
+                let layout = unsafe {
+                    device
+                        .handle
+                        .create_descriptor_set_layout(&layout_info, None)
+                        .expect("Failed to create descriptor set layout")
+                };
+
+                descriptor_set_layouts.push(layout);
+                self.descriptor_set_layouts.push(layout);
+            }
+        }
+
+        // (pipeline_layouts field was removed, descriptor layouts are stored in PhysicalPipeline)
+
+        let pc_ranges: Vec<vk::PushConstantRange> = desc
+            .shader_module
+            .reflection
+            .push_constants
+            .iter()
+            .map(|pc| vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: pc.offset,
+                size: pc.size,
+            })
+            .collect();
+
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&descriptor_set_layouts)
+            .push_constant_ranges(&pc_ranges);
+
+        let pipeline_layout =
+            unsafe { device.handle.create_pipeline_layout(&layout_info, None) }.unwrap();
+
+        // 3. Pipeline
+        let pipeline_info = vk::ComputePipelineCreateInfo::default()
+            .stage(stage_info)
+            .layout(pipeline_layout);
+
+        let pipeline = unsafe {
+            device.handle.create_compute_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info],
+                None,
+            )
+        }
+        .expect("Compute pipeline creation failed")[0];
+
+        // Create PhysicalPipeline struct
+        let physical = PhysicalPipeline {
+            handle: pipeline,
+            layout: pipeline_layout,
+            bind_point: vk::PipelineBindPoint::COMPUTE,
+            set_layouts: descriptor_set_layouts,
+            pushable_sets_mask,
+        };
+
+        let handle = self.pipeline_resources.insert(physical);
+        BackendPipeline(handle)
     }
 
     fn acquire_swapchain_image(
@@ -1222,7 +1474,7 @@ impl RenderBackend for VulkanBackend {
         let frame_slot = self.global_frame_index;
 
         loop {
-            let (result, semaphore) = {
+            let (sc_handle, acquire_sem_id, semaphore) = {
                 let ctx = self
                     .windows
                     .get_mut(&window.0)
@@ -1249,75 +1501,93 @@ impl RenderBackend for VulkanBackend {
                 }
 
                 let swapchain = ctx.swapchain.as_ref().unwrap();
-                let semaphore = ctx.acquire_semaphores[frame_slot % ctx.acquire_semaphores.len()];
+                let sem_id =
+                    ctx.acquire_semaphore_ids[frame_slot % ctx.acquire_semaphore_ids.len()];
+                let sem = ctx.acquire_semaphores[frame_slot % ctx.acquire_semaphores.len()];
 
-                let res = unsafe {
-                    self.swapchain_loader.as_ref().unwrap().acquire_next_image(
-                        swapchain.handle,
-                        u64::MAX,
-                        semaphore,
-                        vk::Fence::null(),
-                    )
-                };
-                (res, semaphore)
+                (swapchain.handle, sem_id, sem)
             };
 
-            if result.is_err() {
-                let err = result.as_ref().err().unwrap();
-                if *err == vk::Result::ERROR_OUT_OF_DATE_KHR || *err == vk::Result::SUBOPTIMAL_KHR {
-                    let (sc_opt, size) = {
+            let fp = self.swapchain_loader.as_ref().unwrap();
+            let res =
+                unsafe { fp.acquire_next_image(sc_handle, u64::MAX, semaphore, vk::Fence::null()) };
+
+            match res {
+                Ok((index, suboptimal)) => {
+                    if suboptimal {
+                        debug!("Swapchain is suboptimal, invalidating for recreation");
+                        let images_to_remove = {
+                            let ctx = self.windows.get_mut(&window.0).unwrap();
+                            let sc = ctx.swapchain.take().unwrap();
+                            let imgs = sc.images.clone();
+                            ctx.swapchain = Some(sc); // Put it back if we still want to use it
+                            imgs
+                        };
+                        unsafe {
+                            self.get_device().handle.device_wait_idle().ok();
+                        }
+                        self.unregister_swapchain_images(&images_to_remove);
                         let ctx = self.windows.get_mut(&window.0).unwrap();
-                        (ctx.swapchain.take(), ctx.raw.handle.drawable_size())
+                        ctx.swapchain = None;
+                    }
+
+                    let ctx = self.windows.get_mut(&window.0).unwrap();
+                    let swapchain = ctx.swapchain.as_ref().unwrap();
+                    ctx.current_acquire_sem_id = Some(acquire_sem_id);
+                    ctx.current_image_index = Some(index);
+
+                    let image_raw = swapchain.images[index as usize];
+                    let image_id = image_raw.as_raw();
+                    let arena_id = if let Some(&id) = self.external_to_physical.get(&image_id) {
+                        // Force UNDEFINED layout on acquisition to avoid redundant PRESENT -> ATTACHMENT transitions
+                        if let Some(img) = self.images.get_mut(id) {
+                            img.last_layout = vk::ImageLayout::UNDEFINED;
+                            img.last_access = vk::AccessFlags2::empty();
+                            img.last_stage = vk::PipelineStageFlags2::TOP_OF_PIPE;
+                        }
+                        id
+                    } else {
+                        let view_raw = swapchain.image_views[index as usize];
+                        let new_id = self.images.insert(PhysicalImage {
+                            image: image_raw,
+                            view: view_raw,
+                            allocation: None,
+                            desc: ImageDesc::new(
+                                swapchain.extent.width,
+                                swapchain.extent.height,
+                                crate::convert::convert_vk_format(swapchain.format),
+                            ),
+                            format: swapchain.format,
+                            last_layout: vk::ImageLayout::UNDEFINED,
+                            last_access: vk::AccessFlags2::empty(),
+                            last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        });
+                        self.external_to_physical.insert(image_id, new_id);
+                        new_id
                     };
-                    if let Some(sc) = sc_opt {
-                        self.unregister_swapchain_images(&sc);
-                    }
-                    if size.0 == 0 || size.1 == 0 {
-                        return Ok(None);
-                    }
-                    continue;
+
+                    return Ok(Some((BackendImage(arena_id), acquire_sem_id, index)));
                 }
-                return Err(format!("Failed to acquire swapchain image: {}", err));
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    debug!("Swapchain out of date during acquire, invalidating...");
+                    let images_to_remove = {
+                        let ctx = self.windows.get_mut(&window.0).unwrap();
+                        if let Some(sc) = ctx.swapchain.take() {
+                            sc.images.clone()
+                        } else {
+                            Vec::new()
+                        }
+                    };
+                    unsafe {
+                        self.get_device().handle.device_wait_idle().ok();
+                    }
+                    self.unregister_swapchain_images(&images_to_remove);
+                    continue; // Loop and recreate
+                }
+                Err(e) => {
+                    return Err(format!("Failed to acquire swapchain image: {}", e));
+                }
             }
-
-            let (index, _) = result.unwrap();
-            let ctx = self.windows.get_mut(&window.0).unwrap();
-            let swapchain = ctx.swapchain.as_ref().unwrap();
-
-            ctx.current_acquire_sem = Some(semaphore);
-            ctx.current_image_index = Some(index);
-
-            let image_raw = swapchain.images[index as usize];
-            let image_id = image_raw.as_raw();
-            let arena_id = if let Some(&id) = self.external_to_physical.get(&image_id) {
-                // Force UNDEFINED layout on acquisition to avoid redundant PRESENT -> ATTACHMENT transitions
-                if let Some(img) = self.images.get_mut(id) {
-                    img.last_layout = vk::ImageLayout::UNDEFINED;
-                    img.last_access = vk::AccessFlags2::empty();
-                    img.last_stage = vk::PipelineStageFlags2::TOP_OF_PIPE;
-                }
-                id
-            } else {
-                let view_raw = swapchain.image_views[index as usize];
-                let new_id = self.images.insert(PhysicalImage {
-                    image: image_raw,
-                    view: view_raw,
-                    allocation: None,
-                    desc: ImageDesc::new(
-                        swapchain.extent.width,
-                        swapchain.extent.height,
-                        crate::convert::convert_vk_format(swapchain.format),
-                    ),
-                    format: swapchain.format,
-                    last_layout: vk::ImageLayout::UNDEFINED,
-                    last_access: vk::AccessFlags2::empty(),
-                    last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
-                });
-                self.external_to_physical.insert(image_id, new_id);
-                new_id
-            };
-
-            return Ok(Some((BackendImage(arena_id), 0, index)));
         }
     }
 
@@ -1336,18 +1606,24 @@ impl RenderBackend for VulkanBackend {
         let mut active_windows = Vec::with_capacity(2);
         let frame_slot = self.global_frame_index;
         for ctx in self.windows.values_mut() {
-            if let (Some(a), Some(i)) = (
-                ctx.current_acquire_sem.take(),
+            if let (Some(a_id), Some(i)) = (
+                ctx.current_acquire_sem_id.take(),
                 ctx.current_image_index.take(),
             ) {
                 let release_sem = ctx.present_semaphores[frame_slot % ctx.present_semaphores.len()];
-                active_windows.push((ctx.swapchain.as_ref().unwrap().handle, i, a, release_sem));
+                let acquire_sem = self.semaphores.get(a_id).cloned().unwrap();
+                active_windows.push((
+                    ctx.swapchain.as_ref().unwrap().handle,
+                    i,
+                    acquire_sem,
+                    release_sem,
+                ));
             }
         }
 
         // 2. Process Binary Semaphores (Outside borrow scope)
-        let mut wait_binary = Vec::with_capacity(active_windows.len());
-        let mut signal_binary = Vec::with_capacity(active_windows.len());
+        let mut wait_binary: Vec<vk::Semaphore> = Vec::with_capacity(active_windows.len());
+        let mut signal_binary: Vec<vk::Semaphore> = Vec::with_capacity(active_windows.len());
         let mut present_info = Vec::with_capacity(active_windows.len());
 
         for (sc_handle, image_index, acquire_sem, release_sem) in active_windows {
@@ -1488,12 +1764,186 @@ impl RenderBackend for VulkanBackend {
                 .begin_command_buffer(cmd, &begin_info)
                 .unwrap()
         };
+        let is_compute = if let Some(h) = desc.pipeline {
+            self.pipeline_resources
+                .get(h.0.0)
+                .map(|p| p.bind_point == vk::PipelineBindPoint::COMPUTE)
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
-        let mut ctx = VulkanPassContext::new(cmd, self);
+        let mut ctx = VulkanPassContext {
+            cmd,
+            device: self.get_device().clone(),
+            present_request: None,
+            backend: self as *mut VulkanBackend,
+            pipeline: None,
+            descriptor_pool: self.frame_contexts
+                [self.global_frame_index % self.frame_contexts.len()]
+            .descriptor_pool,
+            current_pipeline_layout: vk::PipelineLayout::null(),
+            current_bind_point: vk::PipelineBindPoint::GRAPHICS,
+        };
 
-        // If pipeline is set, bind it
+        // If pipeline is set, determine bind point and bind it
         if let Some(pipe_handle) = desc.pipeline {
-            ctx.bind_pipeline(pipe_handle);
+            if let Some(pipe) = self.pipeline_resources.get(pipe_handle.0.0).cloned() {
+                unsafe {
+                    device
+                        .handle
+                        .cmd_bind_pipeline(cmd, pipe.bind_point, pipe.handle);
+                }
+                ctx.pipeline = Some(pipe.clone());
+                ctx.current_pipeline_layout = pipe.layout;
+                ctx.current_bind_point = pipe.bind_point;
+
+                // Bind Declarative Descriptor Sets
+                for (set_index, writes) in desc.descriptor_sets {
+                    let set_index = *set_index;
+                    if (pipe.pushable_sets_mask & (1 << set_index)) != 0 {
+                        // Push Descriptor Path
+                        let mut buffer_infos = Vec::with_capacity(writes.len());
+                        let mut image_infos = Vec::with_capacity(writes.len());
+
+                        // Pass 1: Resolve and collect infos
+                        for write in writes.iter() {
+                            match write.descriptor_type {
+                                i3_gfx::graph::pipeline::BindingType::UniformBuffer
+                                | i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
+                                    if let Some(info) = &write.buffer_info {
+                                        if let Some(buf) = self.buffers.get(info.buffer.0.0) {
+                                            buffer_infos.push(vk::DescriptorBufferInfo {
+                                                buffer: buf.buffer,
+                                                offset: info.offset,
+                                                range: if info.range == 0 {
+                                                    vk::WHOLE_SIZE
+                                                } else {
+                                                    info.range
+                                                },
+                                            });
+                                        }
+                                    }
+                                }
+                                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler
+                                | i3_gfx::graph::pipeline::BindingType::Texture
+                                | i3_gfx::graph::pipeline::BindingType::StorageTexture
+                                | i3_gfx::graph::pipeline::BindingType::Sampler => {
+                                    if let Some(info) = &write.image_info {
+                                        let physical_id = if let Some(&phy) =
+                                            self.external_to_physical.get(&info.image.0.0)
+                                        {
+                                            phy
+                                        } else {
+                                            info.image.0.0
+                                        };
+                                        if let Some(img) = self.images.get(physical_id) {
+                                            let layout = match info.image_layout {
+                                                i3_gfx::graph::backend::DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
+                                                i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                                            };
+                                            let vk_sampler =
+                                                if let Some(sampler_handle) = info.sampler {
+                                                    self.samplers
+                                                        .get(sampler_handle.0)
+                                                        .cloned()
+                                                        .unwrap_or(vk::Sampler::null())
+                                                } else {
+                                                    vk::Sampler::null()
+                                                };
+                                            image_infos.push(vk::DescriptorImageInfo {
+                                                sampler: vk_sampler,
+                                                image_view: img.view,
+                                                image_layout: layout,
+                                            });
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // Pass 2: Build writes (using collected infos)
+                        let mut descriptor_writes = Vec::with_capacity(writes.len());
+                        let mut buf_ptr = 0;
+                        let mut img_ptr = 0;
+
+                        for write in writes.iter() {
+                            let mut vk_write = vk::WriteDescriptorSet::default()
+                                .dst_binding(write.binding)
+                                .dst_array_element(write.array_element)
+                                .descriptor_count(1);
+
+                            match write.descriptor_type {
+                                i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
+                                    if buf_ptr < buffer_infos.len() {
+                                        vk_write = vk_write
+                                            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                                            .buffer_info(std::slice::from_ref(
+                                                &buffer_infos[buf_ptr],
+                                            ));
+                                        buf_ptr += 1;
+                                        descriptor_writes.push(vk_write);
+                                    }
+                                }
+                                i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
+                                    if buf_ptr < buffer_infos.len() {
+                                        vk_write = vk_write
+                                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                            .buffer_info(std::slice::from_ref(
+                                                &buffer_infos[buf_ptr],
+                                            ));
+                                        buf_ptr += 1;
+                                        descriptor_writes.push(vk_write);
+                                    }
+                                }
+                                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
+                                    if img_ptr < image_infos.len() {
+                                        vk_write = vk_write
+                                            .descriptor_type(
+                                                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                                            )
+                                            .image_info(std::slice::from_ref(
+                                                &image_infos[img_ptr],
+                                            ));
+                                        img_ptr += 1;
+                                        descriptor_writes.push(vk_write);
+                                    }
+                                }
+                                i3_gfx::graph::pipeline::BindingType::StorageTexture => {
+                                    if img_ptr < image_infos.len() {
+                                        vk_write = vk_write
+                                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                            .image_info(std::slice::from_ref(
+                                                &image_infos[img_ptr],
+                                            ));
+                                        img_ptr += 1;
+                                        descriptor_writes.push(vk_write);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        unsafe {
+                            device.push_descriptor.cmd_push_descriptor_set(
+                                cmd,
+                                pipe.bind_point,
+                                pipe.layout,
+                                set_index,
+                                &descriptor_writes,
+                            );
+                        }
+                    } else {
+                        // Pool Path (Static allocation from frame pool)
+                        let set_handle = self
+                            .allocate_descriptor_set(pipe_handle, set_index)
+                            .unwrap();
+                        self.update_descriptor_set(set_handle, writes);
+                        ctx.bind_descriptor_set(set_index, set_handle);
+                    }
+                }
+            }
         }
 
         // Dynamic Viewport/Scissor setup (Use resolved extent)
@@ -1544,6 +1994,12 @@ impl RenderBackend for VulkanBackend {
                     vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                     vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
                     vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
+                )
+            } else if ctx.current_bind_point == vk::PipelineBindPoint::COMPUTE {
+                (
+                    vk::ImageLayout::GENERAL,
+                    vk::AccessFlags2::SHADER_STORAGE_WRITE,
+                    vk::PipelineStageFlags2::COMPUTE_SHADER,
                 )
             } else {
                 (
@@ -1614,25 +2070,18 @@ impl RenderBackend for VulkanBackend {
             rendering_info = rendering_info.depth_attachment(depth);
         }
 
-        if !color_attachments.is_empty() || depth_attachment_info.is_some() {
+        if !is_compute && (!color_attachments.is_empty() || depth_attachment_info.is_some()) {
             unsafe {
                 device.handle.cmd_begin_rendering(cmd, &rendering_info);
             }
         }
 
         // RECORD COMMANDS
-        let mut ctx = VulkanPassContext::new(cmd, self);
-
-        // Auto-bind pipeline if specified in descriptor
-        if let Some(pipeline_handle) = desc.pipeline {
-            ctx.bind_pipeline(pipeline_handle);
-        }
-
         f(&mut ctx);
 
         let present_req = ctx.present_request;
 
-        if !color_attachments.is_empty() || depth_attachment_info.is_some() {
+        if !is_compute && (!color_attachments.is_empty() || depth_attachment_info.is_some()) {
             unsafe {
                 device.handle.cmd_end_rendering(cmd);
             }
@@ -1661,42 +2110,42 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn resolve_image(&self, handle: ImageHandle) -> BackendImage {
-        let physical_id = if let Some(&id) = self.external_to_physical.get(&handle.0.0) {
-            id
+        if let Some(phy) = self.external_to_physical.get(&handle.0.0).cloned() {
+            BackendImage(phy)
         } else {
-            handle.0.0
-        };
-
-        if self.images.get(physical_id).is_some() {
-            BackendImage(physical_id)
-        } else {
-            panic!("Unresolved image handle: {:?}", handle);
+            BackendImage(handle.0.0)
         }
     }
 
     fn resolve_buffer(&self, handle: BufferHandle) -> BackendBuffer {
-        BackendBuffer(handle.0.0)
+        if let Some(phy) = self.external_to_physical.get(&handle.0.0).cloned() {
+            BackendBuffer(phy)
+        } else {
+            BackendBuffer(handle.0.0)
+        }
     }
 
     fn resolve_pipeline(&self, handle: PipelineHandle) -> BackendPipeline {
         BackendPipeline(handle.0.0)
     }
+
     fn register_external_image(&mut self, handle: ImageHandle, physical: BackendImage) {
         self.external_to_physical.insert(handle.0.0, physical.0);
     }
+
     fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String> {
         let device = self.get_device();
-        let semaphore = self.timeline_sem; // Use backend's semaphore
-        let semaphores = [semaphore];
+        let sems = [self.timeline_sem];
         let values = [value];
         let wait_info = vk::SemaphoreWaitInfo::default()
-            .semaphores(&semaphores)
+            .semaphores(&sems)
             .values(&values);
+
         unsafe {
             device
                 .handle
                 .wait_semaphores(&wait_info, timeout_ns)
-                .map_err(|e| format!("Wait failed: {}", e))
+                .map_err(|e| e.to_string())
         }
     }
 
@@ -1706,30 +2155,20 @@ impl RenderBackend for VulkanBackend {
         data: &[u8],
         offset: u64,
     ) -> Result<(), String> {
-        // Extract device first to avoid borrow conflict
         let device = self.get_device().clone();
-        let allocator_lock = device.allocator.lock().unwrap();
-
-        // Then get allocation via Arena
-        if let Some(physical) = self.buffers.get_mut(handle.0) {
-            if let Some(allocation) = &mut physical.allocation {
-                // Map memory
-                let ptr = unsafe {
-                    allocator_lock
-                        .map_memory(allocation)
-                        .map_err(|e| format!("Failed to map memory: {}", e))?
-                };
-
+        if let Some(buf) = self.buffers.get_mut(handle.0) {
+            if let Some(alloc) = &mut buf.allocation {
                 unsafe {
-                    let dst = ptr.offset(offset as isize);
-                    std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+                    let allocator = device.allocator.lock().unwrap();
+                    let ptr = allocator.map_memory(alloc).map_err(|e| e.to_string())?;
 
-                    // Flush if not coherent
-                    allocator_lock
-                        .flush_allocation(allocation, offset, data.len() as u64)
-                        .map_err(|e| format!("Failed to flush allocation: {}", e))?;
+                    std::ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        ptr.add(offset as usize),
+                        data.len(),
+                    );
 
-                    allocator_lock.unmap_memory(allocation);
+                    allocator.unmap_memory(alloc);
                 }
                 Ok(())
             } else {
@@ -1745,23 +2184,25 @@ impl RenderBackend for VulkanBackend {
         set_index: u32,
     ) -> Result<DescriptorSetHandle, String> {
         let pipeline_id = pipeline.0.0;
-        let layouts = self
-            .pipeline_layouts
-            .get(&pipeline_id)
-            .ok_or_else(|| format!("Pipeline layout not found for {:?}", pipeline))?;
+        let layout = {
+            let p = self
+                .pipeline_resources
+                .get(pipeline_id)
+                .ok_or_else(|| format!("Pipeline layout not found for {:?}", pipeline))?;
 
-        if set_index as usize >= layouts.len() {
-            return Err(format!(
-                "Set index {} out of bounds for pipeline {:?}",
-                set_index, pipeline
-            ));
-        }
+            if set_index as usize >= p.set_layouts.len() {
+                return Err(format!(
+                    "Set index {} out of bounds for pipeline {:?}",
+                    set_index, pipeline
+                ));
+            }
+            p.set_layouts[set_index as usize]
+        };
 
-        let layout = layouts[set_index as usize];
         let layouts_to_alloc = [layout];
-
+        let pool = self.static_descriptor_pool;
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(self.descriptor_pool)
+            .descriptor_pool(pool)
             .set_layouts(&layouts_to_alloc);
 
         let sets = unsafe {
@@ -1772,14 +2213,13 @@ impl RenderBackend for VulkanBackend {
         };
 
         let set = sets[0];
-        let handle_id = self.next_id();
-        self.descriptor_sets.insert(handle_id, set);
+        let handle_id = self.descriptor_sets.insert(set);
 
         Ok(DescriptorSetHandle(handle_id))
     }
 
     fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]) {
-        let vk_set = if let Some(s) = self.descriptor_sets.get(&set.0) {
+        let vk_set = if let Some(s) = self.descriptor_sets.get(set.0) {
             *s
         } else {
             error!("Descriptor set not found: {:?}", set);
@@ -1814,7 +2254,9 @@ impl RenderBackend for VulkanBackend {
                     }
                 }
                 i3_gfx::graph::pipeline::BindingType::CombinedImageSampler
-                | i3_gfx::graph::pipeline::BindingType::Texture => {
+                | i3_gfx::graph::pipeline::BindingType::Texture
+                | i3_gfx::graph::pipeline::BindingType::StorageTexture
+                | i3_gfx::graph::pipeline::BindingType::Sampler => {
                     if let Some(info) = &write.image_info {
                         // Resolve Image View
                         // We need `image_views` map, but it's keyed by physical ID.
@@ -1835,7 +2277,7 @@ impl RenderBackend for VulkanBackend {
 
                             let vk_sampler = if let Some(sampler_handle) = info.sampler {
                                 self.samplers
-                                    .get(&sampler_handle.0)
+                                    .get(sampler_handle.0)
                                     .cloned()
                                     .unwrap_or(vk::Sampler::null())
                             } else {
@@ -1898,14 +2340,28 @@ impl RenderBackend for VulkanBackend {
                         descriptor_writes.push(vk_write);
                     }
                 }
+                i3_gfx::graph::pipeline::BindingType::StorageTexture => {
+                    vk_write = vk_write.descriptor_type(vk::DescriptorType::STORAGE_IMAGE);
+                    if img_idx < image_infos.len() {
+                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
+                        img_idx += 1;
+                        descriptor_writes.push(vk_write);
+                    }
+                }
+                i3_gfx::graph::pipeline::BindingType::Sampler => {
+                    vk_write = vk_write.descriptor_type(vk::DescriptorType::SAMPLER);
+                    if img_idx < image_infos.len() {
+                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
+                        img_idx += 1;
+                        descriptor_writes.push(vk_write);
+                    }
+                }
                 _ => {}
             }
         }
 
         unsafe {
-            self.device
-                .as_ref()
-                .unwrap()
+            self.get_device()
                 .handle
                 .update_descriptor_sets(&descriptor_writes, &[]);
         }
@@ -1914,24 +2370,15 @@ impl RenderBackend for VulkanBackend {
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
         info!("Shutting down Vulkan Backend...");
-        if let Some(device) = &self.device {
+        if let Some(device) = self.device.clone() {
             unsafe {
                 debug!("Waiting for GPU idle...");
                 device.handle.device_wait_idle().ok();
                 debug!("GPU idle. Starting resource cleanup...");
 
                 // 1. Clean up Window Resources
-                for ctx in self.windows.values() {
-                    for &sem in &ctx.acquire_semaphores {
-                        device.handle.destroy_semaphore(sem, None);
-                    }
-                    for &sem in &ctx.present_semaphores {
-                        device.handle.destroy_semaphore(sem, None);
-                    }
-                    if let Some(sem) = ctx.current_acquire_sem {
-                        device.handle.destroy_semaphore(sem, None);
-                    }
-                }
+                // Note: Semaphores are destroyed via self.semaphores loop below.
+                // Doing it here would cause double-destruction validation errors.
 
                 debug!("Destroying windows and swapchains...");
                 self.windows.clear();
@@ -1939,14 +2386,17 @@ impl Drop for VulkanBackend {
                 debug!("Destroying frame contexts...");
                 for ctx in &self.frame_contexts {
                     device.handle.destroy_command_pool(ctx.command_pool, None);
+                    device
+                        .handle
+                        .destroy_descriptor_pool(ctx.descriptor_pool, None);
                 }
 
                 debug!("Destroying pipelines and shaders...");
-                for &p in &self.pipelines {
-                    device.handle.destroy_pipeline(p, None);
-                }
-                for &l in &self.layouts {
-                    device.handle.destroy_pipeline_layout(l, None);
+                for id in self.pipeline_resources.ids() {
+                    if let Some(p) = self.pipeline_resources.get(id) {
+                        device.handle.destroy_pipeline(p.handle, None);
+                        device.handle.destroy_pipeline_layout(p.layout, None);
+                    }
                 }
                 for &s in &self.shader_modules {
                     device.handle.destroy_shader_module(s, None);
@@ -1959,8 +2409,8 @@ impl Drop for VulkanBackend {
                 {
                     let allocator = device.allocator.lock().unwrap();
                     for (_id, physical) in self.buffers.iter_mut() {
-                        if let Some(alloc) = physical.allocation.take() {
-                            allocator.destroy_buffer(physical.buffer, &mut alloc.clone());
+                        if let Some(alloc) = physical.allocation.as_mut() {
+                            allocator.destroy_buffer(physical.buffer, alloc);
                         }
                     }
                 }
@@ -1969,9 +2419,9 @@ impl Drop for VulkanBackend {
                 {
                     let allocator = device.allocator.lock().unwrap();
                     for (_id, physical) in self.images.iter_mut() {
-                        if let Some(mut alloc) = physical.allocation.take() {
+                        if let Some(alloc) = physical.allocation.as_mut() {
                             device.handle.destroy_image_view(physical.view, None);
-                            allocator.destroy_image(physical.image, &mut alloc);
+                            allocator.destroy_image(physical.image, alloc);
                         } else {
                             // This is likely a swapchain image, DO NOT destroy its view/image as it's owned elsewhere.
                             debug!("Skipping destruction of external image {:?}", _id);
@@ -1992,14 +2442,16 @@ impl Drop for VulkanBackend {
                     for (_, sampler) in &mut self.dead_samplers {
                         device.handle.destroy_sampler(*sampler, None);
                     }
-                    for (_, _, sem) in &self.dead_semaphores {
-                        device.handle.destroy_semaphore(*sem, None);
+                    for (_, _, sem_handle) in &self.dead_semaphores {
+                        device.handle.destroy_semaphore(*sem_handle, None);
                     }
                 }
 
                 debug!("Destroying semaphores...");
-                for (_, sem) in &self.semaphores {
-                    device.handle.destroy_semaphore(*sem, None);
+                // Iterate over all remaining semaphores in the arena and destroy them
+                let semaphore_ids = self.semaphores.ids();
+                for id in semaphore_ids {
+                    self.destroy_semaphore_internal(id);
                 }
                 for &sem in &self.recycled_semaphores {
                     device.handle.destroy_semaphore(sem, None);
@@ -2009,61 +2461,95 @@ impl Drop for VulkanBackend {
                 }
 
                 debug!("Destroying samplers...");
-                for (_, sampler) in &self.samplers {
+                for (_, sampler) in self.samplers.iter() {
                     device.handle.destroy_sampler(*sampler, None);
                 }
 
                 debug!("Destroying descriptor pool...");
-                if self.descriptor_pool != vk::DescriptorPool::null() {
+                if self.static_descriptor_pool != vk::DescriptorPool::null() {
                     device
                         .handle
-                        .destroy_descriptor_pool(self.descriptor_pool, None);
+                        .destroy_descriptor_pool(self.static_descriptor_pool, None);
                 }
-
                 info!("Vulkan Backend shutdown complete.");
             }
         }
     }
 }
 
-pub struct VulkanPassContext<'a> {
-    cmd: vk::CommandBuffer,
-    device: Arc<crate::device::VulkanDevice>,
-    present_request: Option<ImageHandle>,
-    backend: &'a VulkanBackend,
-    current_pipeline_layout: vk::PipelineLayout,
+pub struct VulkanPassContext {
+    pub cmd: vk::CommandBuffer,
+    pub device: Arc<crate::device::VulkanDevice>,
+    pub present_request: Option<ImageHandle>,
+    pub backend: *mut VulkanBackend,
+    pub pipeline: Option<PhysicalPipeline>,
+    pub descriptor_pool: vk::DescriptorPool,
+    pub current_pipeline_layout: vk::PipelineLayout,
+    pub current_bind_point: vk::PipelineBindPoint,
 }
 
-impl<'a> VulkanPassContext<'a> {
-    pub fn new(cmd: vk::CommandBuffer, backend: &'a VulkanBackend) -> Self {
-        Self {
-            cmd,
-            device: backend.get_device().clone(),
-            present_request: None,
-            backend,
-            current_pipeline_layout: vk::PipelineLayout::null(),
+impl VulkanPassContext {
+    pub fn backend(&self) -> &VulkanBackend {
+        unsafe { &*self.backend }
+    }
+
+    pub fn backend_mut(&mut self) -> &mut VulkanBackend {
+        unsafe { &mut *self.backend }
+    }
+}
+
+impl VulkanBackend {
+    pub fn create_semaphore_internal(&mut self) -> Result<(vk::Semaphore, u64), String> {
+        let device = self.get_device();
+        let semaphore = unsafe {
+            device
+                .handle
+                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                .map_err(|e| e.to_string())?
+        };
+
+        let handle = self.semaphores.insert(semaphore);
+        Ok((semaphore, handle))
+    }
+
+    pub fn destroy_semaphore_internal(&mut self, handle: u64) {
+        if let Some(sem) = self.semaphores.remove(handle) {
+            unsafe {
+                self.get_device().handle.destroy_semaphore(sem, None);
+            }
+        }
+    }
+
+    fn unregister_swapchain_images(&mut self, images: &[vk::Image]) {
+        for &image in images {
+            let vk_handle = image.as_raw();
+            if let Some(arena_id) = self.external_to_physical.remove(&vk_handle) {
+                self.images.remove(arena_id);
+            }
         }
     }
 }
 
-impl<'a> PassContext for VulkanPassContext<'a> {
+impl PassContext for VulkanPassContext {
     fn bind_pipeline(&mut self, pipeline: PipelineHandle) {
-        if let Some(pipe) = self.backend.pipeline_map.get(&pipeline.0.0) {
-            unsafe {
-                self.device.handle.cmd_bind_pipeline(
-                    self.cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    *pipe,
-                );
-            }
+        let p = if let Some(p) = self.backend().pipeline_resources.get(pipeline.0.0) {
+            p.clone()
+        } else {
+            return;
+        };
+
+        unsafe {
+            self.device
+                .handle
+                .cmd_bind_pipeline(self.cmd, p.bind_point, p.handle);
         }
-        if let Some(layout) = self.backend.pipeline_layout_map.get(&pipeline.0.0) {
-            self.current_pipeline_layout = *layout;
-        }
+        self.pipeline = Some(p.clone());
+        self.current_pipeline_layout = p.layout;
+        self.current_bind_point = p.bind_point;
     }
 
     fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
-        if let Some(buf) = self.backend.buffers.get(handle.0.0) {
+        if let Some(buf) = self.backend().buffers.get(handle.0.0) {
             unsafe {
                 self.device
                     .handle
@@ -2073,7 +2559,7 @@ impl<'a> PassContext for VulkanPassContext<'a> {
     }
 
     fn bind_index_buffer(&mut self, handle: BufferHandle, index_type: IndexType) {
-        if let Some(buf) = self.backend.buffers.get(handle.0.0) {
+        if let Some(buf) = self.backend().buffers.get(handle.0.0) {
             let vk_type = match index_type {
                 IndexType::Uint16 => vk::IndexType::UINT16,
                 IndexType::Uint32 => vk::IndexType::UINT32,
@@ -2087,11 +2573,11 @@ impl<'a> PassContext for VulkanPassContext<'a> {
     }
 
     fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle) {
-        if let Some(set) = self.backend.descriptor_sets.get(&handle.0) {
+        if let Some(set) = self.backend().descriptor_sets.get(handle.0) {
             unsafe {
                 self.device.handle.cmd_bind_descriptor_sets(
                     self.cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
+                    self.current_bind_point,
                     self.current_pipeline_layout,
                     set_index,
                     &[*set],
@@ -2128,19 +2614,6 @@ impl<'a> PassContext for VulkanPassContext<'a> {
     }
 
     fn draw(&mut self, vertex_count: u32, first_vertex: u32) {
-        // Hack: BeginRendering here if not started?
-        // We know we are drawing.
-        // But we need attachments.
-
-        // For the TRIANGLE example, we rely on the fact that `begin_pass`
-        // should have set up rendering.
-        // Since I deferred `vkCmdBeginRendering` logic in `begin_pass` due to complexity,
-        // and now I need it, I'll insert a simplified version there or here.
-        // Realistically, `begin_pass` is where it belongs.
-
-        // For MVP, if we haven't started rendering, the draw will fail validation.
-        // We need `vkCmdBeginRendering`.
-
         unsafe {
             self.device
                 .handle
@@ -2161,30 +2634,31 @@ impl<'a> PassContext for VulkanPassContext<'a> {
         }
     }
 
-    fn dispatch(&mut self, _x: u32, _y: u32, _z: u32) {}
+    fn push_constants(
+        &mut self,
+        stages: i3_gfx::graph::pipeline::ShaderStageFlags,
+        offset: u32,
+        data: &[u8],
+    ) {
+        unsafe {
+            self.device.handle.cmd_push_constants(
+                self.cmd,
+                self.current_pipeline_layout,
+                crate::convert::convert_shader_stage_flags(stages),
+                offset,
+                data,
+            );
+        }
+    }
+
+    fn dispatch(&mut self, x: u32, y: u32, z: u32) {
+        unsafe {
+            let device = self.backend().get_device();
+            device.handle.cmd_dispatch(self.cmd, x, y, z);
+        }
+    }
 
     fn present(&mut self, image: ImageHandle) {
         self.present_request = Some(image);
-        let physical_id = if let Some(&phy) = self.backend.external_to_physical.get(&image.0.0) {
-            phy
-        } else {
-            image.0.0
-        };
-
-        if let Some(img) = self.backend.images.get(physical_id) {
-            // Success! We have the physical image handle here in O(1).
-            let _ = img.image;
-        }
-    }
-}
-
-impl VulkanBackend {
-    fn unregister_swapchain_images(&mut self, swapchain: &crate::swapchain::VulkanSwapchain) {
-        for &image in &swapchain.images {
-            let vk_handle = image.as_raw();
-            if let Some(arena_id) = self.external_to_physical.remove(&vk_handle) {
-                self.images.remove(arena_id);
-            }
-        }
     }
 }

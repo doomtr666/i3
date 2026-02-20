@@ -39,11 +39,11 @@ struct SynthwaveApp {
     vertex_buffer: BackendBuffer,
     index_buffer: BackendBuffer,
     uniform_buffer: BackendBuffer,
-    set_handle: DescriptorSetHandle,
+    // set_handle: DescriptorSetHandle, // Removed
 
     // PostFX Resources
     post_pipeline: PipelineHandle,
-    post_set: DescriptorSetHandle,
+    // post_set: DescriptorSetHandle, // Removed
     scene_color: ImageHandle,
     #[allow(dead_code)]
     scene_sampler: SamplerHandle,
@@ -110,23 +110,16 @@ impl ExampleApp for SynthwaveApp {
         let pipeline = self.pipeline;
         let vb = self.vertex_buffer;
         let ib = self.index_buffer;
-        let set = self.set_handle;
 
-        // PostFX captures
-        let post_pipeline = self.post_pipeline;
-        let post_set = self.post_set;
+        // Capture handles to avoid self-reference in closures
+        let uniform_buffer_handle = BufferHandle(SymbolId(self.uniform_buffer.0));
+        let post_uniform_buffer_handle = BufferHandle(SymbolId(self.post_uniform_buffer.0));
         let scene_color = self.scene_color;
-        // scene_sampler implicitly used in set
-        // Actually we need to declare usage of scene_color in the second pass for Barriers!
+        let post_pipeline = self.post_pipeline;
+        let scene_sampler = self.scene_sampler;
 
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
-
-            // We use our registered external image logic for scene_color
-            // But builder.import_image would be nice.
-            // Since we used register_external_image, the backend knows it.
-            // But the graph needs to know it to schedule barriers.
-            // We can just use the handle we created "scene_color".
 
             // Create Depth Buffer (Transient) - Still needed for Grid
             let depth_desc = ImageDesc {
@@ -148,11 +141,25 @@ impl ExampleApp for SynthwaveApp {
                 sub.write_image(scene_color, ResourceUsage::COLOR_ATTACHMENT);
                 sub.write_image(depth_img, ResourceUsage::DEPTH_STENCIL);
 
+                // Declarative Bindings (Push Descriptors)
+                sub.bind_descriptor_set(
+                    0,
+                    vec![DescriptorWrite {
+                        binding: 0,
+                        array_element: 0,
+                        descriptor_type: BindingType::UniformBuffer,
+                        buffer_info: Some(DescriptorBufferInfo {
+                            buffer: uniform_buffer_handle,
+                            offset: 0,
+                            range: std::mem::size_of::<Uniforms>() as u64,
+                        }),
+                        image_info: None,
+                    }],
+                );
+
                 move |ctx| {
                     ctx.bind_vertex_buffer(0, BufferHandle(SymbolId(vb.0)));
                     ctx.bind_index_buffer(BufferHandle(SymbolId(ib.0)), IndexType::Uint16);
-                    ctx.bind_descriptor_set(0, set);
-
                     ctx.draw_indexed(6, 0, 0);
                 }
             });
@@ -163,8 +170,36 @@ impl ExampleApp for SynthwaveApp {
                 sub.read_image(scene_color, ResourceUsage::SHADER_READ);
                 sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
 
+                // Declarative Bindings (Push Descriptors)
+                sub.bind_descriptor_set(
+                    0,
+                    vec![
+                        DescriptorWrite {
+                            binding: 0,
+                            array_element: 0,
+                            descriptor_type: BindingType::UniformBuffer,
+                            buffer_info: Some(DescriptorBufferInfo {
+                                buffer: post_uniform_buffer_handle,
+                                offset: 0,
+                                range: std::mem::size_of::<PostUniforms>() as u64,
+                            }),
+                            image_info: None,
+                        },
+                        DescriptorWrite {
+                            binding: 1,
+                            array_element: 0,
+                            descriptor_type: BindingType::CombinedImageSampler,
+                            buffer_info: None,
+                            image_info: Some(DescriptorImageInfo {
+                                image: scene_color,
+                                image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
+                                sampler: Some(scene_sampler),
+                            }),
+                        },
+                    ],
+                );
+
                 move |ctx| {
-                    ctx.bind_descriptor_set(0, post_set);
                     ctx.draw(3, 0); // Fullscreen triangle (3 vertices)
                     ctx.present(backbuffer); // Present happens after this pass
                 }
@@ -355,51 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend_crt = backend.create_graphics_pipeline(&crt_pipeline_info);
     let post_pipeline = PipelineHandle(SymbolId(backend_crt.0));
 
-    // 6. Descriptor Sets
-    let set_handle = backend.allocate_descriptor_set(pipeline, 0)?;
-    backend.update_descriptor_set(
-        set_handle,
-        &[DescriptorWrite {
-            binding: 0,
-            array_element: 0,
-            descriptor_type: BindingType::UniformBuffer,
-            buffer_info: Some(DescriptorBufferInfo {
-                buffer: BufferHandle(SymbolId(uniform_buffer.0)),
-                offset: 0,
-                range: std::mem::size_of::<Uniforms>() as u64,
-            }),
-            image_info: None,
-        }],
-    );
-
-    let post_set = backend.allocate_descriptor_set(post_pipeline, 0)?;
-    backend.update_descriptor_set(
-        post_set,
-        &[
-            DescriptorWrite {
-                binding: 0,
-                array_element: 0,
-                descriptor_type: BindingType::UniformBuffer,
-                buffer_info: Some(DescriptorBufferInfo {
-                    buffer: BufferHandle(SymbolId(post_uniform_buffer.0)),
-                    offset: 0,
-                    range: std::mem::size_of::<PostUniforms>() as u64,
-                }),
-                image_info: None,
-            },
-            DescriptorWrite {
-                binding: 1,
-                array_element: 0,
-                descriptor_type: BindingType::CombinedImageSampler,
-                buffer_info: None,
-                image_info: Some(DescriptorImageInfo {
-                    image: scene_color,
-                    image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                    sampler: Some(scene_sampler),
-                }),
-            },
-        ],
-    );
+    // 6. Manual sets removed
 
     // 7. Run
     let app = SynthwaveApp {
@@ -409,10 +400,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vertex_buffer,
         index_buffer,
         uniform_buffer,
-        set_handle,
-
+        // set_handle,
         post_pipeline,
-        post_set,
+        // post_set,
         scene_color,
         scene_sampler,
         post_uniform_buffer,

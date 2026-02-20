@@ -1,4 +1,4 @@
-use crate::graph::backend::PassContext;
+use crate::graph::backend::{DescriptorWrite, PassContext};
 use crate::graph::types::{
     BufferHandle, ImageDesc, ImageHandle, PassDomain, ResourceUsage, WindowHandle,
 };
@@ -55,6 +55,10 @@ impl<'a> PassBuilder<'a> {
         self.inner.bind_pipeline(handle);
     }
 
+    pub fn bind_descriptor_set(&mut self, set_index: u32, writes: Vec<DescriptorWrite>) {
+        self.inner.bind_descriptor_set(set_index, writes);
+    }
+
     pub fn register_external_image(
         &mut self,
         handle: crate::graph::types::ImageHandle,
@@ -97,6 +101,7 @@ pub(crate) trait InternalPassBuilder {
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
     fn bind_pipeline(&mut self, handle: crate::graph::types::PipelineHandle);
+    fn bind_descriptor_set(&mut self, set_index: u32, writes: Vec<DescriptorWrite>);
 
     fn register_external_image(
         &mut self,

@@ -1,0 +1,12 @@
+[package]
+name = "compute_mandelbrot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+i3_gfx = { path = "../../crates/i3_gfx" }
+i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }
+i3_slang = { path = "../../crates/i3_slang" }
+examples_common = { path = "../common" }
+nalgebra-glm = { workspace = true }
+tracing = { workspace = true }

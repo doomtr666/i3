@@ -9,3 +9,4 @@ workspace = true
 [dependencies]
 shader-slang = { git = "https://github.com/FloatyMonkey/slang-rs" }
 i3_gfx = { path = "../i3_gfx" }
+tracing = "0.1"

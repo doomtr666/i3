@@ -1,5 +1,5 @@
 use crate::graph::backend::{
-    BackendBuffer, BackendImage, PassContext, PassDescriptor, RenderBackend,
+    BackendBuffer, BackendImage, DescriptorWrite, PassContext, PassDescriptor, RenderBackend,
 };
 use crate::graph::pass::{InternalPassBuilder, Node, PassBuilder};
 use crate::graph::types::*;
@@ -76,6 +76,7 @@ pub struct NodeStorage {
 
     pub external_images: Vec<(ImageHandle, BackendImage)>,
     pub swapchain_requests: Vec<(ImageHandle, WindowHandle)>,
+    pub descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
 }
 
 impl std::fmt::Debug for NodeStorage {
@@ -153,6 +154,10 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
 
     fn bind_pipeline(&mut self, handle: PipelineHandle) {
         self.storage.pipeline = Some(handle);
+    }
+
+    fn bind_descriptor_set(&mut self, set_index: u32, writes: Vec<DescriptorWrite>) {
+        self.storage.descriptor_sets.push((set_index, writes));
     }
 
     fn register_external_image(&mut self, handle: ImageHandle, physical: BackendImage) {
@@ -236,6 +241,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             buffer_writes: Vec::new(),
             external_images: Vec::new(),
             swapchain_requests: Vec::new(),
+            descriptor_sets: Vec::new(),
         };
 
         {
@@ -273,6 +279,7 @@ impl FrameGraph {
                 buffer_writes: Vec::new(),
                 external_images: Vec::new(),
                 swapchain_requests: Vec::new(),
+                descriptor_sets: Vec::new(),
             },
         }
     }
@@ -431,6 +438,7 @@ impl CompiledGraph {
                     image_writes: &node.image_writes,
                     buffer_reads: &node.buffer_reads,
                     buffer_writes: &node.buffer_writes,
+                    descriptor_sets: &node.descriptor_sets,
                 };
                 tracing::debug!(pass = %desc.name, writes = ?desc.image_writes.len(), "Executing pass");
                 last_sem = Some(backend.begin_pass(desc, execute));

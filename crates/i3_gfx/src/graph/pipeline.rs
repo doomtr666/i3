@@ -547,3 +547,16 @@ impl Default for GraphicsPipelineCreateInfo {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComputePipelineCreateInfo {
+    pub shader_module: ShaderModule,
+}
+
+impl Default for ComputePipelineCreateInfo {
+    fn default() -> Self {
+        Self {
+            shader_module: ShaderModule::default(),
+        }
+    }
+}

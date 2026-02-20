@@ -97,6 +97,16 @@ impl VulkanSwapchain {
             vk::CompositeAlphaFlagsKHR::INHERIT // Fallback
         };
 
+        let mut image_usage =
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST;
+        if !config.srgb
+            && capabilities
+                .supported_usage_flags
+                .contains(vk::ImageUsageFlags::STORAGE)
+        {
+            image_usage |= vk::ImageUsageFlags::STORAGE;
+        }
+
         let create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(surface)
             .min_image_count(config.min_image.max(capabilities.min_image_count)) // Ensure min
@@ -104,7 +114,7 @@ impl VulkanSwapchain {
             .image_color_space(color_space)
             .image_extent(extent)
             .image_array_layers(1)
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
+            .image_usage(image_usage)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(capabilities.current_transform) // Use current transform
             .composite_alpha(composite_alpha)

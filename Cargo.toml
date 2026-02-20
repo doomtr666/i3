@@ -7,6 +7,7 @@ members = [
     "examples/draw_triangle",
     "examples/common",
     "examples/synthwave_grid",
+    "examples/compute_mandelbrot",
     "tools/rust_diagnostics",
     "tools/vulkan_diagnostics", "crates/i3_baker", "crates/i3_io",
 ]

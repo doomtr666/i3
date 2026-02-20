@@ -16,6 +16,7 @@ pub struct VulkanDevice {
 
     pub dynamic_rendering: ash::khr::dynamic_rendering::Device,
     pub sync2: ash::khr::synchronization2::Device,
+    pub push_descriptor: ash::khr::push_descriptor::Device,
 }
 
 impl VulkanDevice {
@@ -96,6 +97,7 @@ impl VulkanDevice {
             ash::khr::swapchain::NAME.as_ptr(),
             ash::khr::dynamic_rendering::NAME.as_ptr(),
             ash::khr::synchronization2::NAME.as_ptr(),
+            ash::khr::push_descriptor::NAME.as_ptr(),
         ];
 
         let device_create_info = vk::DeviceCreateInfo::default()
@@ -115,6 +117,7 @@ impl VulkanDevice {
         // Load extensions
         let dynamic_rendering = ash::khr::dynamic_rendering::Device::new(&instance.handle, &handle);
         let sync2 = ash::khr::synchronization2::Device::new(&instance.handle, &handle);
+        let push_descriptor = ash::khr::push_descriptor::Device::new(&instance.handle, &handle);
 
         // Initialize VMA Allocator
         let allocator_create_info =
@@ -131,6 +134,7 @@ impl VulkanDevice {
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
             dynamic_rendering,
             sync2,
+            push_descriptor,
         })
     }
 }

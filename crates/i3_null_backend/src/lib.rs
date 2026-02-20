@@ -109,6 +109,16 @@ impl RenderBackend for NullBackend {
         i3_gfx::graph::backend::BackendPipeline(h)
     }
 
+    fn create_compute_pipeline(
+        &mut self,
+        _desc: &i3_gfx::graph::pipeline::ComputePipelineCreateInfo,
+    ) -> i3_gfx::graph::backend::BackendPipeline {
+        let h = self.next_handle();
+        self.allocated_pipelines.insert(h);
+        info!(handle = h, "Created Compute Pipeline");
+        i3_gfx::graph::backend::BackendPipeline(h)
+    }
+
     fn enumerate_devices(&self) -> Vec<i3_gfx::graph::backend::DeviceInfo> {
         vec![i3_gfx::graph::backend::DeviceInfo {
             id: 0,
@@ -355,6 +365,15 @@ impl<'a> PassContext for NullPassContext<'a> {
             offset = vertex_offset,
             "DRAW_INDEXED"
         );
+    }
+
+    fn push_constants(
+        &mut self,
+        _stages: i3_gfx::graph::pipeline::ShaderStageFlags,
+        _offset: u32,
+        _data: &[u8],
+    ) {
+        info!(pass = %self.pass_name, "PUSH_CONSTANTS");
     }
 
     fn dispatch(&mut self, x: u32, y: u32, z: u32) {

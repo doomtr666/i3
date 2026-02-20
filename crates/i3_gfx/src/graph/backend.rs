@@ -45,6 +45,10 @@ pub enum Event {
     Quit,
     KeyDown { key: KeyCode },
     Resize { width: u32, height: u32 },
+    MouseDown { button: u8, x: i32, y: i32 },
+    MouseUp { button: u8, x: i32, y: i32 },
+    MouseMove { x: i32, y: i32 },
+    MouseWheel { x: i32, y: i32 },
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +89,7 @@ pub struct PassDescriptor<'a> {
     pub image_writes: &'a [(ImageHandle, ResourceUsage)],
     pub buffer_reads: &'a [(BufferHandle, ResourceUsage)],
     pub buffer_writes: &'a [(BufferHandle, ResourceUsage)],
+    pub descriptor_sets: &'a [(u32, Vec<DescriptorWrite>)],
 }
 
 /// Hardware-specific context used to record commands during a pass.
@@ -108,6 +113,12 @@ pub trait PassContext {
     // Commands
     fn draw(&mut self, vertex_count: u32, first_vertex: u32);
     fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32);
+    fn push_constants(
+        &mut self,
+        stages: crate::graph::pipeline::ShaderStageFlags,
+        offset: u32,
+        data: &[u8],
+    );
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
 }
@@ -154,6 +165,11 @@ pub trait RenderBackend {
     fn create_graphics_pipeline(
         &mut self,
         desc: &crate::graph::pipeline::GraphicsPipelineCreateInfo,
+    ) -> BackendPipeline;
+
+    fn create_compute_pipeline(
+        &mut self,
+        desc: &crate::graph::pipeline::ComputePipelineCreateInfo,
     ) -> BackendPipeline;
 
     fn destroy_image(&mut self, handle: BackendImage);
