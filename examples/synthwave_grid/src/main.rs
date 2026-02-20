@@ -39,11 +39,9 @@ struct SynthwaveApp {
     vertex_buffer: BackendBuffer,
     index_buffer: BackendBuffer,
     uniform_buffer: BackendBuffer,
-    // set_handle: DescriptorSetHandle, // Removed
 
     // PostFX Resources
     post_pipeline: PipelineHandle,
-    // post_set: DescriptorSetHandle, // Removed
     scene_color: ImageHandle,
     #[allow(dead_code)]
     scene_sampler: SamplerHandle,

@@ -1,11 +1,7 @@
 use examples_common::{ExampleApp, init_tracing, main_loop};
-use i3_gfx::graph::backend::{
-    CommandBatch, DescriptorImageLayout, DescriptorWrite, Event, PassDescriptor, RenderBackend,
-    ResourceUsage, SwapchainConfig, WindowDesc,
-};
-use i3_gfx::graph::pipeline::{BindingType, ComputePipelineCreateInfo, ShaderStageFlags};
-use i3_gfx::graph::types::{ImageHandle, PipelineHandle, SymbolId, WindowHandle};
-use i3_slang::{ShaderTarget, SlangCompiler};
+use i3_gfx::prelude::*;
+use i3_slang::prelude::*;
+use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
 use std::time::Duration;
 
@@ -46,16 +42,11 @@ void main(uint3 threadId : SV_DispatchThreadID)
     
     float3 color;
     if (iter == maxIter) {
-        color = float3(0.02, 0.02, 0.05); // Deep dark blue for the set
+        color = float3(0.02, 0.02, 0.05);
     } else {
-        // Smooth coloring (Normalized Escape Time)
         float sn = float(iter) - log2(log2(dot(z,z))) + 4.0;
         float f = sn / float(maxIter);
-        
-        // Premium Vibrant Palette (Cosine-based)
         color = 0.5 + 0.5 * cos(3.0 + f * 40.0 + float3(0.0, 0.6, 1.1));
-        
-        // Darken the edges slightly
         color *= pow(f, 0.1); 
     }
     
@@ -64,7 +55,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
 "#;
 
 struct MandelbrotApp {
-    backend: Box<dyn RenderBackend>,
+    backend: VulkanBackend,
     window: WindowHandle,
     pipeline: PipelineHandle,
     center: glm::Vec2,
@@ -77,9 +68,7 @@ struct MandelbrotApp {
 
 impl MandelbrotApp {
     fn new() -> Self {
-        let mut backend = i3_vulkan_backend::VulkanBackend::new()
-            .map(|b| Box::new(b) as Box<dyn RenderBackend>)
-            .unwrap();
+        let mut backend = VulkanBackend::new().unwrap();
         backend.initialize(0).unwrap();
 
         let width = 1280;
@@ -103,7 +92,6 @@ impl MandelbrotApp {
             )
             .unwrap();
 
-        // Compile Shader
         let compiler = SlangCompiler::new().unwrap();
         let shader_module = compiler
             .compile_inline(
@@ -114,20 +102,19 @@ impl MandelbrotApp {
             )
             .unwrap();
 
-        let pipeline =
+        let backend_pipeline =
             backend.create_compute_pipeline(&ComputePipelineCreateInfo { shader_module });
 
         Self {
             backend,
             window,
-            pipeline: PipelineHandle(SymbolId(pipeline.0)),
+            pipeline: PipelineHandle(SymbolId(backend_pipeline.0)),
             center: glm::vec2(-0.5, 0.0),
             zoom: 2.5,
             mouse_pos: glm::vec2(0.0, 0.0),
             is_dragging: false,
             width,
             height,
-            // descriptor_set: None,
         }
     }
 }
@@ -136,70 +123,52 @@ impl ExampleApp for MandelbrotApp {
     fn update(&mut self, _delta: Duration) {}
 
     fn render(&mut self) {
-        self.backend.begin_frame();
+        let mut graph = FrameGraph::new();
+        let window = self.window;
+        let pipeline = self.pipeline;
+        let width = self.width;
+        let height = self.height;
 
-        if let Ok(Some((swap_image, semaphore_val, _))) =
-            self.backend.acquire_swapchain_image(self.window)
-        {
-            let swap_handle = ImageHandle(SymbolId(999));
-            self.backend
-                .register_external_image(swap_handle, swap_image);
+        let push_data = [self.center.x, self.center.y, self.zoom, 0.0];
+        let push_bytes: Vec<u8> = push_data.iter().flat_map(|f| f.to_ne_bytes()).collect();
 
-            let pipeline_handle = self.pipeline;
+        graph.record(move |builder| {
+            let backbuffer = builder.acquire_backbuffer(window);
 
-            // let set = if let Some(s) = self.descriptor_set { ... } // Replaced by declarative bindings
+            builder.add_node("MandelbrotPass", move |sub| {
+                sub.bind_pipeline(pipeline);
+                sub.write_image(backbuffer, ResourceUsage::SHADER_WRITE);
+                sub.bind_descriptor_set(
+                    0,
+                    vec![DescriptorWrite {
+                        binding: 0,
+                        array_element: 0,
+                        descriptor_type: BindingType::StorageTexture,
+                        image_info: Some(DescriptorImageInfo {
+                            image: backbuffer,
+                            sampler: None,
+                            image_layout: DescriptorImageLayout::General,
+                        }),
+                        buffer_info: None,
+                    }],
+                );
 
-            let push_data = [
-                self.center.x,
-                self.center.y,
-                self.zoom,
-                0.0, // padding
-            ];
-            let push_bytes: &[u8] = unsafe {
-                std::slice::from_raw_parts(push_data.as_ptr() as *const u8, push_data.len() * 4)
-            };
+                move |ctx| {
+                    ctx.push_constants(ShaderStageFlags::Compute, 0, &push_bytes);
+                    ctx.dispatch((width + 15) / 16, (height + 15) / 16, 1);
+                    ctx.present(backbuffer);
+                }
+            });
+        });
 
-            let pass_name = "MandelbrotPass";
-            let image_writes = [(swap_handle, ResourceUsage::SHADER_WRITE)];
-
-            self.backend.begin_pass(
-                PassDescriptor {
-                    name: pass_name,
-                    pipeline: Some(pipeline_handle),
-                    image_reads: &[],
-                    image_writes: &image_writes,
-                    buffer_reads: &[],
-                    buffer_writes: &[],
-                    descriptor_sets: &[(
-                        0,
-                        vec![DescriptorWrite {
-                            binding: 0,
-                            array_element: 0,
-                            descriptor_type: BindingType::StorageTexture,
-                            image_info: Some(i3_gfx::graph::backend::DescriptorImageInfo {
-                                image: swap_handle,
-                                sampler: None,
-                                image_layout: DescriptorImageLayout::General,
-                            }),
-                            buffer_info: None,
-                        }],
-                    )],
-                },
-                Box::new(move |ctx| {
-                    ctx.bind_pipeline(pipeline_handle);
-                    // ctx.bind_descriptor_set(0, set); // Handled by begin_pass
-                    ctx.push_constants(ShaderStageFlags::Compute, 0, push_bytes);
-                    ctx.dispatch((1280 + 15) / 16, (720 + 15) / 16, 1);
-                    ctx.present(swap_handle);
-                }),
-            );
-
-            let batch = CommandBatch::default();
-
-            let _ = self.backend.submit(batch, &[semaphore_val], &[]).unwrap();
+        let compiled = graph.compile();
+        match compiled.execute(&mut self.backend) {
+            Ok(_) => {}
+            Err(e) if e == "WindowMinimized" => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => panic!("Graph execution failed: {}", e),
         }
-
-        self.backend.end_frame();
     }
 
     fn poll_events(&mut self) -> Vec<Event> {

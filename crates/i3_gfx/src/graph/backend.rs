@@ -128,6 +128,8 @@ pub trait PassContext {
 pub struct DescriptorSetHandle(pub u64);
 
 /// The main interface for hardware backends (Vulkan, DX12, Null).
+/// This trait exposes only user-facing operations: lifecycle, windowing, resource creation,
+/// pipeline management, and data upload.
 pub trait RenderBackend {
     // --- Lifecycle & Device Management ---
 
@@ -160,7 +162,7 @@ pub trait RenderBackend {
     // --- Resource Management ---
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage;
     fn create_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
-    fn create_sampler(&mut self, desc: &crate::graph::types::SamplerDesc) -> SamplerHandle; // New
+    fn create_sampler(&mut self, desc: &crate::graph::types::SamplerDesc) -> SamplerHandle;
 
     fn create_graphics_pipeline(
         &mut self,
@@ -174,21 +176,27 @@ pub trait RenderBackend {
 
     fn destroy_image(&mut self, handle: BackendImage);
     fn destroy_buffer(&mut self, handle: BackendBuffer);
-    fn destroy_sampler(&mut self, handle: SamplerHandle); // New
+    fn destroy_sampler(&mut self, handle: SamplerHandle);
 
-    // --- Transient Resource Management (Pooling) ---
-    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage;
-    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
-    fn release_transient_image(&mut self, handle: BackendImage);
-    fn release_transient_buffer(&mut self, handle: BackendBuffer);
-    fn garbage_collect(&mut self);
+    // --- Data Upload ---
+    /// Upload data to a buffer.
+    fn upload_buffer(
+        &mut self,
+        handle: BackendBuffer,
+        data: &[u8],
+        offset: u64,
+    ) -> Result<(), String>;
+}
 
-    // --- Frame Control (Internal) ---
+/// Internal trait consumed by the FrameGraph compiler and pass execution.
+/// Backend implementations must implement this alongside `RenderBackend`.
+/// User code should not call these methods directly.
+pub trait RenderBackendInternal: RenderBackend {
+    // --- Frame Control ---
     fn begin_frame(&mut self);
     fn end_frame(&mut self);
 
     /// Acquire the next available image from the swapchain associated with the window.
-    /// Returns the image handle and a binary semaphore handle that will be signaled when the image is ready.
     fn acquire_swapchain_image(
         &mut self,
         window: crate::graph::types::WindowHandle,
@@ -197,7 +205,6 @@ pub trait RenderBackend {
     // --- Execution & Sync ---
 
     /// Submit a batch of commands to the GPU.
-    /// Returns a timeline semaphore value representing the completion of this batch.
     fn submit(
         &mut self,
         batch: CommandBatch,
@@ -211,7 +218,7 @@ pub trait RenderBackend {
         f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
     ) -> u64;
 
-    // Handle Resolution (Called by the FrameGraph during execution)
+    // --- Handle Resolution ---
     fn resolve_image(&self, handle: crate::graph::types::ImageHandle) -> BackendImage;
     fn resolve_buffer(&self, handle: crate::graph::types::BufferHandle) -> BackendBuffer;
     fn resolve_pipeline(&self, handle: crate::graph::types::PipelineHandle) -> BackendPipeline;
@@ -222,23 +229,16 @@ pub trait RenderBackend {
     );
 
     /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
-    /// Timeout is in nanoseconds.
     fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String>;
 
-    // --- Data Upload ---
-    /// Upload data to a buffer.
-    /// In a real engine, this would likely use a staging buffer and transfer command.
-    /// For this simplified backend, we might map memory directly.
-    fn upload_buffer(
-        &mut self,
-        handle: BackendBuffer,
-        data: &[u8],
-        offset: u64,
-    ) -> Result<(), String>;
+    // --- Transient Resource Management (Pooling) ---
+    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage;
+    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
+    fn release_transient_image(&mut self, handle: BackendImage);
+    fn release_transient_buffer(&mut self, handle: BackendBuffer);
+    fn garbage_collect(&mut self);
 
-    // --- Descriptor Management ---
-    // Simplified API: Allocate a set from the pipeline's layout.
-    // Index 0, 1, 2, 3 corresponding to set=0, set=1, etc. in shader.
+    // --- Descriptor Management (Internal) ---
     fn allocate_descriptor_set(
         &mut self,
         pipeline: crate::graph::types::PipelineHandle,

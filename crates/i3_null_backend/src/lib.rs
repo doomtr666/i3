@@ -1,4 +1,6 @@
-use i3_gfx::graph::backend::{BackendBuffer, BackendImage, PassContext, RenderBackend};
+use i3_gfx::graph::backend::{
+    BackendBuffer, BackendImage, PassContext, RenderBackend, RenderBackendInternal,
+};
 use std::collections::HashSet;
 use thiserror::Error;
 use tracing::{error, info};
@@ -73,29 +75,6 @@ impl RenderBackend for NullBackend {
         info!(handle = handle.0, "Destroyed Sampler");
     }
 
-    fn create_transient_image(&mut self, desc: &i3_gfx::graph::backend::ImageDesc) -> BackendImage {
-        self.create_image(desc)
-    }
-
-    fn create_transient_buffer(
-        &mut self,
-        desc: &i3_gfx::graph::backend::BufferDesc,
-    ) -> BackendBuffer {
-        self.create_buffer(desc)
-    }
-
-    fn release_transient_image(&mut self, handle: BackendImage) {
-        self.destroy_image(handle);
-    }
-
-    fn release_transient_buffer(&mut self, handle: BackendBuffer) {
-        self.destroy_buffer(handle);
-    }
-
-    fn garbage_collect(&mut self) {
-        // No-op
-    }
-
     fn create_graphics_pipeline(
         &mut self,
         _desc: &i3_gfx::graph::pipeline::GraphicsPipelineCreateInfo,
@@ -132,14 +111,6 @@ impl RenderBackend for NullBackend {
         Ok(())
     }
 
-    fn begin_frame(&mut self) {
-        // No-op for null backend
-    }
-
-    fn end_frame(&mut self) {
-        self.garbage_collect();
-    }
-
     fn create_window(
         &mut self,
         desc: i3_gfx::graph::backend::WindowDesc,
@@ -163,6 +134,49 @@ impl RenderBackend for NullBackend {
 
     fn poll_events(&mut self) -> Vec<i3_gfx::graph::backend::Event> {
         Vec::new()
+    }
+
+    fn upload_buffer(
+        &mut self,
+        handle: BackendBuffer,
+        data: &[u8],
+        offset: u64,
+    ) -> Result<(), String> {
+        info!(?handle, size = data.len(), offset, "Uploaded buffer data");
+        Ok(())
+    }
+}
+
+impl RenderBackendInternal for NullBackend {
+    fn begin_frame(&mut self) {
+        // No-op for null backend
+    }
+
+    fn end_frame(&mut self) {
+        self.garbage_collect();
+    }
+
+    fn create_transient_image(&mut self, desc: &i3_gfx::graph::backend::ImageDesc) -> BackendImage {
+        self.create_image(desc)
+    }
+
+    fn create_transient_buffer(
+        &mut self,
+        desc: &i3_gfx::graph::backend::BufferDesc,
+    ) -> BackendBuffer {
+        self.create_buffer(desc)
+    }
+
+    fn release_transient_image(&mut self, handle: BackendImage) {
+        self.destroy_image(handle);
+    }
+
+    fn release_transient_buffer(&mut self, handle: BackendBuffer) {
+        self.destroy_buffer(handle);
+    }
+
+    fn garbage_collect(&mut self) {
+        // No-op
     }
 
     fn acquire_swapchain_image(
@@ -204,7 +218,6 @@ impl RenderBackend for NullBackend {
         &self,
         handle: i3_gfx::graph::types::ImageHandle,
     ) -> i3_gfx::graph::backend::BackendImage {
-        // In NullBackend we can just return a deterministic handle based on SymbolId.
         i3_gfx::graph::backend::BackendImage(handle.0.0)
     }
 
@@ -240,22 +253,12 @@ impl RenderBackend for NullBackend {
         Ok(())
     }
 
-    fn upload_buffer(
-        &mut self,
-        handle: BackendBuffer,
-        data: &[u8],
-        offset: u64,
-    ) -> Result<(), String> {
-        info!(?handle, size = data.len(), offset, "Uploaded buffer data");
-        Ok(())
-    }
-
     fn allocate_descriptor_set(
         &mut self,
         _pipeline: i3_gfx::graph::types::PipelineHandle,
         set_index: u32,
     ) -> Result<i3_gfx::graph::backend::DescriptorSetHandle, String> {
-        let h = self.next_handle(); // Dummy handle
+        let h = self.next_handle();
         info!(set_index, handle = h, "Allocated Descriptor Set");
         Ok(i3_gfx::graph::backend::DescriptorSetHandle(h))
     }

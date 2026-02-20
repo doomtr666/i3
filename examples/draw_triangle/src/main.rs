@@ -4,7 +4,6 @@ use i3_slang::prelude::*;
 use std::time::Duration;
 
 use i3_vulkan_backend::VulkanBackend;
-// use i3_null_backend::NullBackend;
 
 struct TriangleApp {
     backend: VulkanBackend,
@@ -18,15 +17,12 @@ impl ExampleApp for TriangleApp {
     }
 
     fn render(&mut self) {
-        // 1. Execute Graph (Swapchain is acquired internally)
         let mut graph = FrameGraph::new();
         let pipeline_id = self.pipeline_id;
         let window = self.window;
 
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
-            // Register the physical image for this virtual handle
-            // This is a temporary way to map them until FrameGraph handles this automatically
 
             builder.add_node("MainPass", move |builder| {
                 builder.bind_pipeline(PipelineHandle(pipeline_id));
@@ -34,7 +30,7 @@ impl ExampleApp for TriangleApp {
 
                 move |ctx| {
                     ctx.draw(3, 0);
-                    ctx.present(backbuffer); // Present via command
+                    ctx.present(backbuffer);
                 }
             });
         });

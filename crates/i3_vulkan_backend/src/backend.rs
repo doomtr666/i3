@@ -1,5 +1,6 @@
 use ash::vk;
 use ash::vk::Handle;
+use i3_gfx::graph::backend::RenderBackendInternal;
 use i3_gfx::graph::backend::*;
 use i3_gfx::graph::pipeline::*;
 use i3_gfx::graph::types::*;
@@ -561,55 +562,6 @@ impl RenderBackend for VulkanBackend {
         Ok(())
     }
 
-    fn begin_frame(&mut self) {
-        if self.frame_started {
-            return;
-        }
-
-        let device = self.get_device().clone();
-        self.global_frame_index = (self.global_frame_index + 1) % self.frame_contexts.len();
-        self.frame_count += 1;
-        self.cpu_timeline += 1;
-
-        let ctx = &mut self.frame_contexts[self.global_frame_index];
-
-        // Wait for this frame slot to be ready
-        if ctx.last_completion_value > 0 {
-            let semaphores = [self.timeline_sem];
-            let values = [ctx.last_completion_value];
-            let wait_info = vk::SemaphoreWaitInfo::default()
-                .semaphores(&semaphores)
-                .values(&values);
-            unsafe {
-                device
-                    .handle
-                    .wait_semaphores(&wait_info, u64::MAX)
-                    .expect("Failed to wait for frame timeline");
-            }
-        }
-
-        // Reset the pools for this frame
-        unsafe {
-            device
-                .handle
-                .reset_command_pool(ctx.command_pool, vk::CommandPoolResetFlags::empty())
-                .expect("Failed to reset command pool");
-            device
-                .handle
-                .reset_descriptor_pool(ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
-                .expect("Failed to reset descriptor pool");
-        }
-
-        ctx.cursor = 0;
-        ctx.submitted_cursor = 0;
-        self.frame_started = true;
-    }
-
-    fn end_frame(&mut self) {
-        self.garbage_collect();
-        self.frame_started = false;
-    }
-
     fn create_window(&mut self, desc: WindowDesc) -> Result<WindowHandle, String> {
         let window_handle = self
             .video
@@ -982,67 +934,6 @@ impl RenderBackend for VulkanBackend {
     fn destroy_sampler(&mut self, handle: SamplerHandle) {
         if let Some(sampler) = self.samplers.remove(handle.0) {
             self.dead_samplers.push((self.frame_count, sampler));
-        }
-    }
-
-    // --- Transient Resource Management (Pooling) ---
-
-    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage {
-        if let Some(pool) = self.transient_image_pool.get_mut(desc) {
-            if let Some(id) = pool.pop() {
-                return BackendImage(id);
-            }
-        }
-
-        self.create_image(desc)
-    }
-
-    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer {
-        if let Some(pool) = self.transient_buffer_pool.get_mut(desc) {
-            if let Some(id) = pool.pop() {
-                return BackendBuffer(id);
-            }
-        }
-        self.create_buffer(desc)
-    }
-
-    fn release_transient_image(&mut self, handle: BackendImage) {
-        if let Some(physical) = self.images.get_mut(handle.0) {
-            // Update last used frame for GC
-            // For now, we store last_used_frame in the pool or in PhysicalImage?
-            // Actually, PhysicalImage doesn't have it yet. Let's add it or use a separate tracking.
-            // Simplified: we just push it back to the pool.
-            let desc = physical.desc;
-            self.transient_image_pool
-                .entry(desc)
-                .or_default()
-                .push(handle.0);
-        }
-    }
-
-    fn release_transient_buffer(&mut self, handle: BackendBuffer) {
-        if let Some(physical) = self.buffers.get_mut(handle.0) {
-            let desc = physical.desc;
-            self.transient_buffer_pool
-                .entry(desc)
-                .or_default()
-                .push(handle.0);
-        }
-    }
-
-    fn garbage_collect(&mut self) {
-        // We defer full GC for transient pools to avoid complexity in this step.
-        // But we must recycle semaphores.
-        let safe_threshold = self.frame_count.saturating_sub(10);
-
-        let mut i = 0;
-        while i < self.dead_semaphores.len() {
-            if self.dead_semaphores[i].0 <= safe_threshold {
-                let (_, _, sem_id) = self.dead_semaphores.swap_remove(i);
-                self.recycled_semaphores.push(sem_id);
-            } else {
-                i += 1;
-            }
         }
     }
 
@@ -1464,6 +1355,142 @@ impl RenderBackend for VulkanBackend {
 
         let handle = self.pipeline_resources.insert(physical);
         BackendPipeline(handle)
+    }
+
+    fn upload_buffer(
+        &mut self,
+        handle: BackendBuffer,
+        data: &[u8],
+        offset: u64,
+    ) -> Result<(), String> {
+        let device = self.get_device().clone();
+        if let Some(buf) = self.buffers.get_mut(handle.0) {
+            if let Some(alloc) = &mut buf.allocation {
+                unsafe {
+                    let allocator = device.allocator.lock().unwrap();
+                    let ptr = allocator.map_memory(alloc).map_err(|e| e.to_string())?;
+
+                    std::ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        ptr.add(offset as usize),
+                        data.len(),
+                    );
+
+                    allocator.unmap_memory(alloc);
+                }
+                Ok(())
+            } else {
+                Err("Buffer has no allocation (external?)".to_string())
+            }
+        } else {
+            Err(format!("Buffer not found: {:?}", handle))
+        }
+    }
+}
+
+impl RenderBackendInternal for VulkanBackend {
+    fn begin_frame(&mut self) {
+        if self.frame_started {
+            return;
+        }
+
+        let device = self.get_device().clone();
+        self.global_frame_index = (self.global_frame_index + 1) % self.frame_contexts.len();
+        self.frame_count += 1;
+        self.cpu_timeline += 1;
+
+        let ctx = &mut self.frame_contexts[self.global_frame_index];
+
+        // Wait for this frame slot to be ready
+        if ctx.last_completion_value > 0 {
+            let semaphores = [self.timeline_sem];
+            let values = [ctx.last_completion_value];
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&semaphores)
+                .values(&values);
+            unsafe {
+                device
+                    .handle
+                    .wait_semaphores(&wait_info, u64::MAX)
+                    .expect("Failed to wait for frame timeline");
+            }
+        }
+
+        // Reset the pools for this frame
+        unsafe {
+            device
+                .handle
+                .reset_command_pool(ctx.command_pool, vk::CommandPoolResetFlags::empty())
+                .expect("Failed to reset command pool");
+            device
+                .handle
+                .reset_descriptor_pool(ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .expect("Failed to reset descriptor pool");
+        }
+
+        ctx.cursor = 0;
+        ctx.submitted_cursor = 0;
+        self.frame_started = true;
+    }
+
+    fn end_frame(&mut self) {
+        self.garbage_collect();
+        self.frame_started = false;
+    }
+
+    // --- Transient Resource Management (Pooling) ---
+
+    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage {
+        if let Some(pool) = self.transient_image_pool.get_mut(desc) {
+            if let Some(id) = pool.pop() {
+                return BackendImage(id);
+            }
+        }
+
+        self.create_image(desc)
+    }
+
+    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer {
+        if let Some(pool) = self.transient_buffer_pool.get_mut(desc) {
+            if let Some(id) = pool.pop() {
+                return BackendBuffer(id);
+            }
+        }
+        self.create_buffer(desc)
+    }
+
+    fn release_transient_image(&mut self, handle: BackendImage) {
+        if let Some(physical) = self.images.get_mut(handle.0) {
+            let desc = physical.desc;
+            self.transient_image_pool
+                .entry(desc)
+                .or_default()
+                .push(handle.0);
+        }
+    }
+
+    fn release_transient_buffer(&mut self, handle: BackendBuffer) {
+        if let Some(physical) = self.buffers.get_mut(handle.0) {
+            let desc = physical.desc;
+            self.transient_buffer_pool
+                .entry(desc)
+                .or_default()
+                .push(handle.0);
+        }
+    }
+
+    fn garbage_collect(&mut self) {
+        let safe_threshold = self.frame_count.saturating_sub(10);
+
+        let mut i = 0;
+        while i < self.dead_semaphores.len() {
+            if self.dead_semaphores[i].0 <= safe_threshold {
+                let (_, _, sem_id) = self.dead_semaphores.swap_remove(i);
+                self.recycled_semaphores.push(sem_id);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     fn acquire_swapchain_image(
@@ -2149,35 +2176,6 @@ impl RenderBackend for VulkanBackend {
         }
     }
 
-    fn upload_buffer(
-        &mut self,
-        handle: BackendBuffer,
-        data: &[u8],
-        offset: u64,
-    ) -> Result<(), String> {
-        let device = self.get_device().clone();
-        if let Some(buf) = self.buffers.get_mut(handle.0) {
-            if let Some(alloc) = &mut buf.allocation {
-                unsafe {
-                    let allocator = device.allocator.lock().unwrap();
-                    let ptr = allocator.map_memory(alloc).map_err(|e| e.to_string())?;
-
-                    std::ptr::copy_nonoverlapping(
-                        data.as_ptr(),
-                        ptr.add(offset as usize),
-                        data.len(),
-                    );
-
-                    allocator.unmap_memory(alloc);
-                }
-                Ok(())
-            } else {
-                Err("Buffer has no allocation (external?)".to_string())
-            }
-        } else {
-            Err(format!("Buffer not found: {:?}", handle))
-        }
-    }
     fn allocate_descriptor_set(
         &mut self,
         pipeline: PipelineHandle,

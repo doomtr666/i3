@@ -1,5 +1,6 @@
 use crate::graph::backend::{
-    BackendBuffer, BackendImage, DescriptorWrite, PassContext, PassDescriptor, RenderBackend,
+    BackendBuffer, BackendImage, DescriptorWrite, PassContext, PassDescriptor,
+    RenderBackendInternal,
 };
 use crate::graph::pass::{InternalPassBuilder, Node, PassBuilder};
 use crate::graph::types::*;
@@ -310,7 +311,7 @@ pub struct CompiledGraph {
 }
 
 impl CompiledGraph {
-    pub fn execute(self, backend: &mut dyn RenderBackend) -> Result<Option<u64>, String> {
+    pub fn execute(self, backend: &mut dyn RenderBackendInternal) -> Result<Option<u64>, String> {
         tracing::debug!("Executing hierarchical frame graph");
 
         // Track transient resources for cleanup
@@ -352,7 +353,7 @@ impl CompiledGraph {
     fn resolve_resources_recursive(
         &self,
         node: &NodeStorage,
-        backend: &mut dyn RenderBackend,
+        backend: &mut dyn RenderBackendInternal,
         transient_images: &mut Vec<BackendImage>,
         transient_buffers: &mut Vec<BackendBuffer>,
     ) {
@@ -391,7 +392,7 @@ impl CompiledGraph {
 
     fn execute_node_recursive(
         mut node: NodeStorage,
-        backend: &mut dyn RenderBackend,
+        backend: &mut dyn RenderBackendInternal,
         inactive_images: &mut Vec<u64>,
     ) -> Result<Option<u64>, String> {
         // 0. Process Swapchain Requests (Automatic Acquire)
