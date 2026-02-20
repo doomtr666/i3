@@ -188,6 +188,21 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         actual_handle
     }
 
+    fn declare_buffer(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
+        let id = self.storage.symbols.publish(
+            name,
+            Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::Buffer(desc),
+                lifetime: SymbolLifetime::Transient,
+                data: None,
+            },
+        );
+        let actual_handle = BufferHandle(id);
+        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        actual_handle
+    }
+
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle {
         let name = format!("Window_{}", window.0);
         let id = self.storage.symbols.publish(

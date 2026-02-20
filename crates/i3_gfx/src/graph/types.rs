@@ -60,8 +60,13 @@ pub enum SymbolLifetime {
 pub enum Format {
     Undefined,
     R8G8B8A8_UNORM,
+    R8G8B8A8_SRGB,
     B8G8R8A8_UNORM,
     B8G8R8A8_SRGB,
+    R8G8_UNORM,
+    R16G16_SFLOAT,
+    R16G16B16A16_SFLOAT,
+    R11G11B10_UFLOAT,
     R32_FLOAT,
     R32G32B32A32_FLOAT,
     D32_FLOAT,
@@ -77,6 +82,24 @@ pub enum Format {
     R32G32_SFLOAT,
     R32G32B32_SFLOAT,
     R32G32B32A32_SFLOAT,
+}
+
+impl Format {
+    pub fn is_depth(&self) -> bool {
+        matches!(self, Format::D32_FLOAT)
+    }
+
+    pub fn is_srgb(&self) -> bool {
+        matches!(self, Format::R8G8B8A8_SRGB | Format::B8G8R8A8_SRGB)
+    }
+
+    pub fn aspect_mask(&self) -> ImageAspectFlags {
+        if self.is_depth() {
+            ImageAspectFlags::Depth
+        } else {
+            ImageAspectFlags::Color
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

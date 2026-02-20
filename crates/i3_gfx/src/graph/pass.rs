@@ -51,6 +51,15 @@ impl<'a> PassBuilder<'a> {
         self.inner.acquire_backbuffer(window)
     }
 
+    /// Declares a new transient buffer and publishes it.
+    pub fn declare_buffer(
+        &mut self,
+        name: &str,
+        desc: crate::graph::types::BufferDesc,
+    ) -> BufferHandle {
+        self.inner.declare_buffer(name, desc)
+    }
+
     pub fn bind_pipeline(&mut self, handle: crate::graph::types::PipelineHandle) {
         self.inner.bind_pipeline(handle);
     }
@@ -98,6 +107,8 @@ pub(crate) trait InternalPassBuilder {
     fn write_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage);
 
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    fn declare_buffer(&mut self, name: &str, desc: crate::graph::types::BufferDesc)
+    -> BufferHandle;
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
     fn bind_pipeline(&mut self, handle: crate::graph::types::PipelineHandle);
