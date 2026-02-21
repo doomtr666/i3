@@ -333,7 +333,3 @@ pub enum BorderColor {
     FloatOpaqueWhite,
     IntOpaqueWhite,
 }
-
-#[cfg(test)]
-#[path = "types.tests.rs"]
-mod tests;

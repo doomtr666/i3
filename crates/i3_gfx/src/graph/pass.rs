@@ -109,6 +109,7 @@ pub(crate) trait InternalPassBuilder {
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
     fn declare_buffer(&mut self, name: &str, desc: crate::graph::types::BufferDesc)
     -> BufferHandle;
+
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
     fn bind_pipeline(&mut self, handle: crate::graph::types::PipelineHandle);

@@ -217,6 +217,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "deferred_cubes"
+version = "0.1.0"
+dependencies = [
+ "examples_common",
+ "i3_gfx",
+ "i3_renderer",
+ "i3_slang",
+ "i3_vulkan_backend",
+ "nalgebra-glm",
+ "tracing",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -417,6 +430,15 @@ version = "0.1.0"
 dependencies = [
  "i3_gfx",
  "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "i3_renderer"
+version = "0.1.0"
+dependencies = [
+ "i3_gfx",
+ "nalgebra-glm",
  "tracing",
 ]
 
