@@ -12,6 +12,7 @@ members = [
     "tools/vulkan_diagnostics", "crates/i3_baker", "crates/i3_io",
     "crates/i3_renderer",
     "examples/deferred_cubes",
+    "examples/deferred_gltf",
 ]
 resolver = "2"
 
@@ -34,6 +35,7 @@ sdl2 = { version = "0.37", default-features = false }
 vk-mem = "0.5.0"
 nalgebra = "0.33"
 nalgebra-glm = "0.19"
+gltf = "0.16"
 
 # Internal
 i3_gfx = { path = "crates/i3_gfx" }

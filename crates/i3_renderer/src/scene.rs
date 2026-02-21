@@ -36,6 +36,17 @@ pub struct LightData {
     pub light_type: LightType,
 }
 
+/// A GPU-resident mesh. Carries buffer handles only, no CPU vertex data.
+///
+/// The actual upload mechanism is an implementation detail of the
+/// `SceneProvider` — could be CPU upload, Direct Storage, or streaming.
+#[derive(Debug, Clone, Copy)]
+pub struct Mesh {
+    pub vertex_buffer: i3_gfx::prelude::BackendBuffer,
+    pub index_buffer: i3_gfx::prelude::BackendBuffer,
+    pub index_count: u32,
+}
+
 /// Trait that the application (or ECS bridge) implements to feed
 /// scene data to the renderer's GPU sync passes.
 ///
@@ -59,4 +70,7 @@ pub trait SceneProvider {
 
     /// Iterate all lights.
     fn iter_lights(&self) -> Box<dyn Iterator<Item = (LightId, &LightData)> + '_>;
+
+    /// Access a GPU-resident mesh by ID.
+    fn mesh(&self, id: u32) -> &Mesh;
 }

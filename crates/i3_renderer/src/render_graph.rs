@@ -2,17 +2,21 @@ use i3_gfx::prelude::*;
 
 use crate::passes::debug_viz::{self, DebugChannel};
 use crate::passes::gbuffer::{self, GBufferPushConstants};
+use crate::scene::{Mesh, SceneProvider};
+
+/// A single draw command extracted from the scene for the GBuffer pass.
+#[derive(Clone, Copy)]
+pub struct DrawCommand {
+    pub mesh: Mesh,
+    pub push_constants: GBufferPushConstants,
+}
 
 /// The default render graph for deferred clustered shading.
 ///
-/// Phase 1: GBuffer with hardcoded cubes + debug visualization.
-/// Owns the GPU resources (pipelines, buffers) and records passes into
-/// the FrameGraph each frame.
+/// Owns pipelines and samplers. Geometry comes from the SceneProvider.
 pub struct DefaultRenderGraph {
     gbuffer_pipeline: PipelineHandle,
     debug_viz_pipeline: PipelineHandle,
-    cube_vertex_buffer: BackendBuffer,
-    cube_index_buffer: BackendBuffer,
     sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
 }
@@ -24,48 +28,13 @@ pub struct RenderConfig {
 }
 
 impl DefaultRenderGraph {
-    /// Creates the render graph resources.
-    ///
-    /// Call once at init time. Creates pipelines and uploads geometry.
+    /// Creates the render graph resources (pipelines only, no geometry).
     pub fn new(
         backend: &mut dyn RenderBackend,
         gbuffer_shader: ShaderModule,
         debug_viz_shader: ShaderModule,
         config: &RenderConfig,
     ) -> Self {
-        // Upload cube geometry
-        let (vertices, indices) = gbuffer::generate_cube();
-
-        let vb = backend.create_buffer(&BufferDesc {
-            size: (vertices.len() * std::mem::size_of::<gbuffer::GBufferVertex>()) as u64,
-            usage: BufferUsageFlags::VERTEX_BUFFER,
-            memory: MemoryType::CpuToGpu,
-        });
-        let vb_bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                vertices.len() * std::mem::size_of::<gbuffer::GBufferVertex>(),
-            )
-        };
-        backend
-            .upload_buffer(vb, vb_bytes, 0)
-            .expect("Failed to upload cube vertices");
-
-        let ib = backend.create_buffer(&BufferDesc {
-            size: (indices.len() * std::mem::size_of::<u16>()) as u64,
-            usage: BufferUsageFlags::INDEX_BUFFER,
-            memory: MemoryType::CpuToGpu,
-        });
-        let ib_bytes = unsafe {
-            std::slice::from_raw_parts(
-                indices.as_ptr() as *const u8,
-                indices.len() * std::mem::size_of::<u16>(),
-            )
-        };
-        backend
-            .upload_buffer(ib, ib_bytes, 0)
-            .expect("Failed to upload cube indices");
-
         // Create GBuffer pipeline (4 MRT + depth)
         let gbuffer_pipeline_info = GraphicsPipelineCreateInfo {
             shader_module: gbuffer_shader,
@@ -169,8 +138,6 @@ impl DefaultRenderGraph {
         Self {
             gbuffer_pipeline,
             debug_viz_pipeline,
-            cube_vertex_buffer: vb,
-            cube_index_buffer: ib,
             sampler,
             debug_channel: DebugChannel::Albedo,
         }
@@ -178,17 +145,31 @@ impl DefaultRenderGraph {
 
     /// Records the full render graph for one frame.
     ///
-    /// Phase 1: GBuffer pass → debug visualization pass.
+    /// Extracts draw commands from the scene, then records GBuffer + debug viz passes.
     pub fn record(
         &self,
         graph: &mut FrameGraph,
         window: WindowHandle,
+        scene: &dyn SceneProvider,
         view_projection: nalgebra_glm::Mat4,
     ) {
+        // Extract draw commands from scene (before the 'static closure)
+        let draw_commands: Vec<DrawCommand> = scene
+            .iter_objects()
+            .map(|(_, obj)| {
+                let mesh = *scene.mesh(obj.mesh_id);
+                DrawCommand {
+                    mesh,
+                    push_constants: GBufferPushConstants {
+                        view_projection,
+                        model: obj.world_transform,
+                    },
+                }
+            })
+            .collect();
+
         let pipeline = self.gbuffer_pipeline;
         let debug_pipeline = self.debug_viz_pipeline;
-        let vb = self.cube_vertex_buffer;
-        let ib = self.cube_index_buffer;
         let sampler = self.sampler;
         let channel = self.debug_channel;
 
@@ -267,23 +248,16 @@ impl DefaultRenderGraph {
                 },
             );
 
-            // GBuffer pass — draw cubes
-            let push = GBufferPushConstants {
-                view_projection,
-                model: nalgebra_glm::identity(),
-            };
-
+            // GBuffer pass — draw all objects from scene
             gbuffer::record_gbuffer_pass(
                 builder,
                 pipeline,
-                vb,
-                ib,
                 depth_buffer,
                 gbuffer_albedo,
                 gbuffer_normal,
                 gbuffer_roughmetal,
                 gbuffer_emissive,
-                push,
+                &draw_commands,
             );
 
             // Debug visualization — fullscreen pass reading GBuffer → backbuffer

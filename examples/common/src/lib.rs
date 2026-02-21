@@ -1,3 +1,6 @@
+pub mod basic_scene;
+pub mod gltf_loader;
+
 use std::time::{Duration, Instant};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};

@@ -1,17 +1,17 @@
 extern crate nalgebra_glm;
 
 use examples_common::basic_scene::BasicScene;
-use examples_common::{ExampleApp, init_tracing, main_loop};
+use examples_common::gltf_loader;
+use examples_common::{init_tracing, main_loop, ExampleApp};
 use i3_gfx::prelude::*;
 use i3_renderer::render_graph::{DefaultRenderGraph, RenderConfig};
-use i3_renderer::scene::ObjectData;
 use i3_slang::prelude::*;
 use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
-struct DeferredCubesApp {
+struct DeferredGltfApp {
     backend: VulkanBackend,
     window: WindowHandle,
     render_graph: DefaultRenderGraph,
@@ -19,20 +19,22 @@ struct DeferredCubesApp {
     time: f32,
 }
 
-impl ExampleApp for DeferredCubesApp {
+impl ExampleApp for DeferredGltfApp {
     fn update(&mut self, delta: Duration) {
         self.time += delta.as_secs_f32();
     }
 
     fn render(&mut self) {
         // Orbiting camera
-        let eye = glm::vec3(3.0 * self.time.cos(), 2.0, 3.0 * self.time.sin());
+        // Using a larger radius for generic models since they might be big
+        let radius = 10.0;
+        let eye = glm::vec3(radius * self.time.cos(), 5.0, radius * self.time.sin());
         let target = glm::vec3(0.0, 0.0, 0.0);
         let up = glm::vec3(0.0, 1.0, 0.0);
 
         let view = glm::look_at_rh(&eye, &target, &up);
         let projection =
-            glm::perspective_rh_zo(1280.0 / 720.0, std::f32::consts::FRAC_PI_4, 0.1, 100.0);
+            glm::perspective_rh_zo(1280.0 / 720.0, std::f32::consts::FRAC_PI_4, 0.1, 1000.0);
         let vp = projection * view;
 
         let mut graph = FrameGraph::new();
@@ -51,8 +53,20 @@ impl ExampleApp for DeferredCubesApp {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _guard = init_tracing("deferred_cubes.log");
-    info!("Starting Deferred Cubes Demo");
+    let _guard = init_tracing("deferred_gltf.log");
+    info!("Starting Deferred glTF Demo");
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        error!("Usage: {} <path-to-gltf-or-glb>", args[0]);
+        std::process::exit(1);
+    }
+    let gltf_path = std::path::Path::new(&args[1]);
+
+    if !gltf_path.exists() {
+        error!("File not found: {:?}", gltf_path);
+        std::process::exit(1);
+    }
 
     // 1. Initialize Backend
     let mut backend = VulkanBackend::new()?;
@@ -60,21 +74,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Create Window
     let window = backend.create_window(WindowDesc {
-        title: "Deferred Cubes".to_string(),
+        title: "Deferred glTF".to_string(),
         width: 1280,
         height: 720,
     })?;
 
-    // 3. Build scene
-    let mut scene = BasicScene::new();
-    let cube_mesh = scene.add_cube_mesh(&mut backend);
-    scene.add_object(ObjectData {
-        world_transform: glm::identity(),
-        prev_transform: glm::identity(),
-        material_id: 0,
-        mesh_id: cube_mesh,
-    });
-    scene.add_default_light();
+    // 3. Load scene from glTF
+    info!("Loading glTF from {:?}", gltf_path);
+    let scene = match gltf_loader::load_gltf(gltf_path, &mut backend) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to load glTF: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // 4. Compile Shaders
     let slang = SlangCompiler::new()?;
@@ -95,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         DefaultRenderGraph::new(&mut backend, gbuffer_shader, debug_viz_shader, &config);
 
     // 6. Run
-    let app = DeferredCubesApp {
+    let app = DeferredGltfApp {
         backend,
         window,
         render_graph,
