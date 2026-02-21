@@ -248,6 +248,18 @@ impl RenderBackendInternal for NullBackend {
         self.image_map.insert(handle, physical);
     }
 
+    fn register_external_buffer(
+        &mut self,
+        handle: i3_gfx::graph::types::BufferHandle,
+        physical: i3_gfx::graph::backend::BackendBuffer,
+    ) {
+        info!(
+            ?handle,
+            ?physical,
+            "Registered external buffer in NullBackend"
+        );
+    }
+
     fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String> {
         info!(value, timeout_ns, "Waiting for timeline (NullBackend)");
         Ok(())
@@ -381,6 +393,10 @@ impl<'a> PassContext for NullPassContext<'a> {
 
     fn dispatch(&mut self, x: u32, y: u32, z: u32) {
         info!(pass = %self.pass_name, x, y, z, "DISPATCH");
+    }
+
+    fn clear_buffer(&mut self, _buffer: i3_gfx::graph::types::BufferHandle, _clear_value: u32) {
+        info!(pass = %self.pass_name, "CLEAR_BUFFER");
     }
 
     fn present(&mut self, image: i3_gfx::graph::types::ImageHandle) {

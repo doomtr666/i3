@@ -59,8 +59,7 @@ pub fn load_gltf(
                 .map(|((p, n), c)| [p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2]])
                 .collect();
 
-            // Indices
-            let indices: Vec<u16> = reader
+            let mut indices: Vec<u16> = reader
                 .read_indices()
                 .ok_or_else(|| {
                     format!(
@@ -71,6 +70,12 @@ pub fn load_gltf(
                 .into_u32()
                 .map(|i| i as u16)
                 .collect();
+
+            // Engine convention uses CCW FrontFace, but glTF combined with our coordinate
+            // system matrices flips the apparent winding. Reverse triangle indices.
+            for chunk in indices.chunks_exact_mut(3) {
+                chunk.swap(0, 2);
+            }
 
             let vb_bytes = unsafe {
                 std::slice::from_raw_parts(
@@ -123,7 +128,7 @@ pub fn load_gltf(
     }
 
     // 3. Add default light if scene has none
-    scene.add_default_light();
+    scene.add_default_lights();
 
     info!(
         "Loaded glTF: {} meshes, {} objects from {:?}",

@@ -125,16 +125,27 @@ impl BasicScene {
         self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
     }
 
-    /// Convenience: adds a default directional light.
-    pub fn add_default_light(&mut self) -> LightId {
+    /// Convenience: adds default directional lights (key light and backlight).
+    pub fn add_default_lights(&mut self) {
+        // Main key light (Warm white)
         self.add_light(LightData {
             position: glm::vec3(0.0, 0.0, 0.0),
             direction: glm::normalize(&glm::vec3(-1.0, -1.0, -1.0)),
-            color: glm::vec3(1.0, 1.0, 1.0),
+            color: glm::vec3(1.0, 0.95, 0.9),
             intensity: 1.0,
             radius: 0.0,
             light_type: LightType::Directional,
-        })
+        });
+
+        // Backlight (Cool blue / softer)
+        self.add_light(LightData {
+            position: glm::vec3(0.0, 0.0, 0.0),
+            direction: glm::normalize(&glm::vec3(1.0, 0.5, 1.0)),
+            color: glm::vec3(0.2, 0.4, 1.0),
+            intensity: 0.5,
+            radius: 0.0,
+            light_type: LightType::Directional,
+        });
     }
 }
 

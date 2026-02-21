@@ -296,7 +296,9 @@ pub fn convert_stencil_op_state(state: &StencilOpState) -> vk::StencilOpState {
 pub fn convert_binding_type_to_descriptor(binding_type: BindingType) -> vk::DescriptorType {
     match binding_type {
         BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-        BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+        BindingType::StorageBuffer | BindingType::RawBuffer | BindingType::MutableRawBuffer => {
+            vk::DescriptorType::STORAGE_BUFFER
+        }
         BindingType::Texture => vk::DescriptorType::SAMPLED_IMAGE,
         BindingType::StorageTexture => vk::DescriptorType::STORAGE_IMAGE,
         BindingType::Sampler => vk::DescriptorType::SAMPLER,

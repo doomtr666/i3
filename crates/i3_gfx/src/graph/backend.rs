@@ -84,6 +84,7 @@ use crate::graph::types::{BufferHandle, ImageHandle, PipelineHandle};
 #[derive(Debug, Clone)]
 pub struct PassDescriptor<'a> {
     pub name: &'a str,
+    pub domain: crate::graph::types::PassDomain,
     pub pipeline: Option<PipelineHandle>,
     pub image_reads: &'a [(ImageHandle, ResourceUsage)],
     pub image_writes: &'a [(ImageHandle, ResourceUsage)],
@@ -120,6 +121,7 @@ pub trait PassContext {
         data: &[u8],
     );
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
+    fn clear_buffer(&mut self, buffer: crate::graph::types::BufferHandle, clear_value: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
 }
 
@@ -226,6 +228,11 @@ pub trait RenderBackendInternal: RenderBackend {
         &mut self,
         handle: crate::graph::types::ImageHandle,
         physical: BackendImage,
+    );
+    fn register_external_buffer(
+        &mut self,
+        handle: crate::graph::types::BufferHandle,
+        physical: BackendBuffer,
     );
 
     /// Wait for the timeline semaphore to reach a specific value on the host (CPU).

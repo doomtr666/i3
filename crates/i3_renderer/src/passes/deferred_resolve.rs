@@ -1,34 +1,21 @@
 use i3_gfx::prelude::*;
+use nalgebra_glm as glm;
 
-/// Which GBuffer channel to display in the debug visualization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DebugChannel {
-    Lit,
-    LightDensity,
-    ClusterGrid,
-    Albedo,
-    Normal,
-    Roughness,
-    Metallic,
-    Emissive,
-    Depth,
-}
-
-/// Push constants for the debug visualization pass.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct DebugVizPushConstants {
-    /// Channel selector (maps to DebugChannel enum as u32).
-    pub channel: u32,
-    /// Padding to align to 4 bytes.
-    pub _pad: [u32; 3],
+#[derive(Debug, Clone, Copy)]
+pub struct DeferredResolvePushConstants {
+    pub inv_view_proj: glm::Mat4,
+    pub inv_projection: glm::Mat4,
+    pub camera_pos: glm::Vec3,
+    pub near_plane: f32,
+    pub grid_size: [u32; 3],
+    pub far_plane: f32,
+    pub screen_dimensions: [f32; 2],
+    pub debug_mode: u32,
+    pub _pad: u32,
 }
 
-/// Records the debug visualization pass into the FrameGraph.
-///
-/// Draws a fullscreen triangle that samples the selected GBuffer channel
-/// and writes to the backbuffer.
-pub fn record_debug_viz_pass(
+pub fn record_deferred_resolve_pass(
     builder: &mut PassBuilder,
     pipeline: PipelineHandle,
     backbuffer: ImageHandle,
@@ -36,22 +23,31 @@ pub fn record_debug_viz_pass(
     gbuffer_normal: ImageHandle,
     gbuffer_roughmetal: ImageHandle,
     gbuffer_emissive: ImageHandle,
+    depth_buffer: ImageHandle,
+    lights: BufferHandle,
+    cluster_grid: BufferHandle,
+    cluster_light_indices: BufferHandle,
     sampler: SamplerHandle,
-    channel: DebugChannel,
+    push_constants: &DeferredResolvePushConstants,
 ) {
-    builder.add_node("DebugVizPass", move |sub| {
+    let pc = *push_constants;
+    builder.add_node("DeferredResolvePass", move |sub| {
         sub.bind_pipeline(pipeline);
 
-        // Read GBuffer targets
+        // Read GBuffers and buffers
         sub.read_image(gbuffer_albedo, ResourceUsage::SHADER_READ);
         sub.read_image(gbuffer_normal, ResourceUsage::SHADER_READ);
         sub.read_image(gbuffer_roughmetal, ResourceUsage::SHADER_READ);
         sub.read_image(gbuffer_emissive, ResourceUsage::SHADER_READ);
+        sub.read_image(depth_buffer, ResourceUsage::SHADER_READ);
+
+        sub.read_buffer(lights, ResourceUsage::SHADER_READ);
+        sub.read_buffer(cluster_grid, ResourceUsage::SHADER_READ);
+        sub.read_buffer(cluster_light_indices, ResourceUsage::SHADER_READ);
 
         // Write to backbuffer
         sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
 
-        // Bind GBuffer textures via push descriptors
         sub.bind_descriptor_set(
             0,
             vec![
@@ -99,19 +95,58 @@ pub fn record_debug_viz_pass(
                         sampler: Some(sampler),
                     }),
                 },
+                DescriptorWrite {
+                    binding: 4,
+                    array_element: 0,
+                    descriptor_type: BindingType::CombinedImageSampler,
+                    buffer_info: None,
+                    image_info: Some(DescriptorImageInfo {
+                        image: depth_buffer,
+                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
+                        sampler: Some(sampler),
+                    }),
+                },
+                DescriptorWrite {
+                    binding: 5,
+                    array_element: 0,
+                    descriptor_type: BindingType::StorageBuffer,
+                    buffer_info: Some(DescriptorBufferInfo {
+                        buffer: lights,
+                        offset: 0,
+                        range: 0,
+                    }),
+                    image_info: None,
+                },
+                DescriptorWrite {
+                    binding: 6,
+                    array_element: 0,
+                    descriptor_type: BindingType::StorageBuffer,
+                    buffer_info: Some(DescriptorBufferInfo {
+                        buffer: cluster_grid,
+                        offset: 0,
+                        range: 0,
+                    }),
+                    image_info: None,
+                },
+                DescriptorWrite {
+                    binding: 7,
+                    array_element: 0,
+                    descriptor_type: BindingType::StorageBuffer,
+                    buffer_info: Some(DescriptorBufferInfo {
+                        buffer: cluster_light_indices,
+                        offset: 0,
+                        range: 0,
+                    }),
+                    image_info: None,
+                },
             ],
         );
-
-        let push = DebugVizPushConstants {
-            channel: channel as u32,
-            _pad: [0; 3],
-        };
 
         move |ctx: &mut dyn PassContext| {
             let pc_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    &push as *const DebugVizPushConstants as *const u8,
-                    std::mem::size_of::<DebugVizPushConstants>(),
+                    &pc as *const _ as *const u8,
+                    std::mem::size_of::<DeferredResolvePushConstants>(),
                 )
             };
             ctx.push_constants(
@@ -120,7 +155,7 @@ pub fn record_debug_viz_pass(
                 pc_bytes,
             );
             ctx.draw(3, 0); // Fullscreen triangle
-            ctx.present(backbuffer);
+            ctx.present(backbuffer); // Wait, backbuffer usually presented externally? Well, debug_viz does this
         }
     });
 }

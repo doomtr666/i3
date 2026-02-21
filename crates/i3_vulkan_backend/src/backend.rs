@@ -368,6 +368,48 @@ impl VulkanBackend {
         }
     }
 
+    fn transition_buffer(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        physical_id: u64,
+        dst_access: vk::AccessFlags2,
+        dst_stage: vk::PipelineStageFlags2,
+    ) {
+        let device = self.get_device().handle.clone();
+
+        if let Some(buf) = self.buffers.get_mut(physical_id) {
+            // Optimization: Skip if state already matches
+            if (buf.last_access & dst_access) == dst_access
+                && (buf.last_stage & dst_stage) == dst_stage
+            {
+                return;
+            }
+
+            debug!(
+                "Transition Buffer {:?}: {:?} -> {:?} / {:?} -> {:?}",
+                physical_id, buf.last_stage, dst_stage, buf.last_access, dst_access
+            );
+
+            let barriers = [vk::BufferMemoryBarrier2::default()
+                .src_stage_mask(buf.last_stage)
+                .src_access_mask(buf.last_access)
+                .dst_stage_mask(dst_stage)
+                .dst_access_mask(dst_access)
+                .buffer(buf.buffer)
+                .offset(0)
+                .size(vk::WHOLE_SIZE)];
+
+            let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(&barriers);
+
+            unsafe {
+                device.cmd_pipeline_barrier2(cmd, &dependency_info);
+            }
+
+            buf.last_access = dst_access;
+            buf.last_stage = dst_stage;
+        }
+    }
+
     #[allow(dead_code)]
     pub fn create_semaphore(&mut self) -> u64 {
         let sem = self.create_semaphore_raw();
@@ -388,6 +430,12 @@ impl VulkanBackend {
             let create_info = vk::SemaphoreCreateInfo::default();
             unsafe { device.handle.create_semaphore(&create_info, None) }.unwrap()
         }
+    }
+
+    pub fn window_size(&self, window: WindowHandle) -> Option<(u32, u32)> {
+        self.windows
+            .get(&window.0)
+            .map(|ctx| ctx.raw.handle.drawable_size())
     }
 }
 
@@ -1791,14 +1839,15 @@ impl RenderBackendInternal for VulkanBackend {
                 .begin_command_buffer(cmd, &begin_info)
                 .unwrap()
         };
-        let is_compute = if let Some(h) = desc.pipeline {
-            self.pipeline_resources
-                .get(h.0.0)
-                .map(|p| p.bind_point == vk::PipelineBindPoint::COMPUTE)
-                .unwrap_or(false)
-        } else {
-            false
-        };
+        let is_compute = desc.domain != i3_gfx::graph::types::PassDomain::Graphics
+            || if let Some(h) = desc.pipeline {
+                self.pipeline_resources
+                    .get(h.0.0)
+                    .map(|p| p.bind_point == vk::PipelineBindPoint::COMPUTE)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
 
         let mut ctx = VulkanPassContext {
             cmd,
@@ -1837,9 +1886,18 @@ impl RenderBackendInternal for VulkanBackend {
                         for write in writes.iter() {
                             match write.descriptor_type {
                                 i3_gfx::graph::pipeline::BindingType::UniformBuffer
-                                | i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
+                                | i3_gfx::graph::pipeline::BindingType::StorageBuffer
+                                | i3_gfx::graph::pipeline::BindingType::RawBuffer
+                                | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
                                     if let Some(info) = &write.buffer_info {
-                                        if let Some(buf) = self.buffers.get(info.buffer.0.0) {
+                                        let physical_id = if let Some(&phy) =
+                                            self.external_to_physical.get(&info.buffer.0.0)
+                                        {
+                                            phy
+                                        } else {
+                                            info.buffer.0.0
+                                        };
+                                        if let Some(buf) = self.buffers.get(physical_id) {
                                             buffer_infos.push(vk::DescriptorBufferInfo {
                                                 buffer: buf.buffer,
                                                 offset: info.offset,
@@ -1913,7 +1971,9 @@ impl RenderBackendInternal for VulkanBackend {
                                         descriptor_writes.push(vk_write);
                                     }
                                 }
-                                i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
+                                i3_gfx::graph::pipeline::BindingType::StorageBuffer
+                                | i3_gfx::graph::pipeline::BindingType::RawBuffer
+                                | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
                                     if buf_ptr < buffer_infos.len() {
                                         vk_write = vk_write
                                             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -2085,6 +2145,57 @@ impl RenderBackendInternal for VulkanBackend {
             );
         }
 
+        // 3. Sync Writes (Buffers)
+        for (handle, _) in desc.buffer_writes {
+            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
+                phy
+            } else {
+                handle.0.0
+            };
+
+            let (target_access, target_stage) =
+                if ctx.current_bind_point == vk::PipelineBindPoint::COMPUTE {
+                    (
+                        vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_WRITE,
+                        vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    )
+                } else {
+                    (
+                        vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_WRITE,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )
+                };
+
+            self.transition_buffer(cmd, physical_id, target_access, target_stage);
+        }
+
+        // 4. Sync Reads (Buffers)
+        for (handle, _usage) in desc.buffer_reads {
+            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
+                phy
+            } else {
+                handle.0.0
+            };
+
+            // Using matches because ResourceUsage doesn't derive PartialEq if it has data, but right now it's an enum without fields in memory? Wait, actually what is it?
+            // Usually we just assume it's read
+            let (target_access, target_stage) =
+                if ctx.current_bind_point == vk::PipelineBindPoint::COMPUTE {
+                    (
+                        vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::UNIFORM_READ,
+                        vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    )
+                } else {
+                    (
+                        vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::UNIFORM_READ,
+                        vk::PipelineStageFlags2::VERTEX_SHADER
+                            | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )
+                };
+
+            self.transition_buffer(cmd, physical_id, target_access, target_stage);
+        }
+
         let mut rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
@@ -2157,6 +2268,10 @@ impl RenderBackendInternal for VulkanBackend {
     }
 
     fn register_external_image(&mut self, handle: ImageHandle, physical: BackendImage) {
+        self.external_to_physical.insert(handle.0.0, physical.0);
+    }
+
+    fn register_external_buffer(&mut self, handle: BufferHandle, physical: BackendBuffer) {
         self.external_to_physical.insert(handle.0.0, physical.0);
     }
 
@@ -2656,7 +2771,28 @@ impl PassContext for VulkanPassContext {
         }
     }
 
-    fn present(&mut self, image: ImageHandle) {
+    fn clear_buffer(&mut self, buffer: i3_gfx::graph::types::BufferHandle, clear_value: u32) {
+        let physical_id = if let Some(&phy) = self.backend().external_to_physical.get(&buffer.0.0) {
+            phy
+        } else {
+            buffer.0.0
+        };
+
+        if let Some(buf) = self.backend().buffers.get(physical_id) {
+            unsafe {
+                let device = self.backend().get_device();
+                device.handle.cmd_fill_buffer(
+                    self.cmd,
+                    buf.buffer,
+                    0,
+                    ash::vk::WHOLE_SIZE,
+                    clear_value,
+                );
+            }
+        }
+    }
+
+    fn present(&mut self, image: i3_gfx::graph::types::ImageHandle) {
         self.present_request = Some(image);
     }
 }

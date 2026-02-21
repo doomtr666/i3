@@ -31,13 +31,28 @@ impl ExampleApp for DeferredCubesApp {
         let up = glm::vec3(0.0, 1.0, 0.0);
 
         let view = glm::look_at_rh(&eye, &target, &up);
-        let projection =
-            glm::perspective_rh_zo(1280.0 / 720.0, std::f32::consts::FRAC_PI_4, 0.1, 100.0);
-        let vp = projection * view;
+        let (width, height) = self.backend.window_size(self.window).unwrap_or((1280, 720));
+        let projection = glm::perspective_rh_zo(
+            width as f32 / height as f32,
+            std::f32::consts::FRAC_PI_4,
+            0.1,
+            100.0,
+        );
+
+        self.render_graph.sync(&mut self.backend, &self.scene);
 
         let mut graph = FrameGraph::new();
-        self.render_graph
-            .record(&mut graph, self.window, &self.scene, vp);
+        self.render_graph.record(
+            &mut graph,
+            self.window,
+            &self.scene,
+            view,
+            projection,
+            0.1,
+            100.0,
+            width,
+            height,
+        );
 
         let compiler = graph.compile();
         if let Err(e) = compiler.execute(&mut self.backend) {
@@ -74,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         material_id: 0,
         mesh_id: cube_mesh,
     });
-    scene.add_default_light();
+    scene.add_default_lights();
 
     // 4. Compile Shaders
     let slang = SlangCompiler::new()?;
@@ -85,14 +100,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let gbuffer_shader = slang.compile_file("gbuffer", ShaderTarget::Spirv, &[shader_path])?;
     let debug_viz_shader = slang.compile_file("debug_viz", ShaderTarget::Spirv, &[shader_path])?;
+    let cluster_build_shader =
+        slang.compile_file("cluster_build", ShaderTarget::Spirv, &[shader_path])?;
+    let light_cull_shader =
+        slang.compile_file("light_cull", ShaderTarget::Spirv, &[shader_path])?;
+    let deferred_resolve_shader =
+        slang.compile_file("deferred_resolve", ShaderTarget::Spirv, &[shader_path])?;
 
     // 5. Create Render Graph
     let config = RenderConfig {
         width: 1280,
         height: 720,
     };
-    let render_graph =
-        DefaultRenderGraph::new(&mut backend, gbuffer_shader, debug_viz_shader, &config);
+    let render_graph = DefaultRenderGraph::new(
+        &mut backend,
+        gbuffer_shader,
+        debug_viz_shader,
+        deferred_resolve_shader,
+        cluster_build_shader,
+        light_cull_shader,
+        &config,
+    );
 
     // 6. Run
     let app = DeferredCubesApp {

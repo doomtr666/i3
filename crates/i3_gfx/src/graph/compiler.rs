@@ -76,6 +76,7 @@ pub struct NodeStorage {
     pub buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
 
     pub external_images: Vec<(ImageHandle, BackendImage)>,
+    pub external_buffers: Vec<(BufferHandle, BackendBuffer)>,
     pub swapchain_requests: Vec<(ImageHandle, WindowHandle)>,
     pub descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
 }
@@ -91,6 +92,7 @@ impl std::fmt::Debug for NodeStorage {
             .field("image_reads", &self.image_reads)
             .field("image_writes", &self.image_writes)
             .field("external_images", &self.external_images)
+            .field("external_buffers", &self.external_buffers)
             .field("swapchain_requests", &self.swapchain_requests)
             .finish()
     }
@@ -165,6 +167,10 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         self.storage.external_images.push((handle, physical));
     }
 
+    fn register_external_buffer(&mut self, handle: BufferHandle, physical: BackendBuffer) {
+        self.storage.external_buffers.push((handle, physical));
+    }
+
     fn read_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage) {
         self.storage.buffer_reads.push((handle, usage));
     }
@@ -200,6 +206,26 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         );
         let actual_handle = BufferHandle(id);
         self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        actual_handle
+    }
+
+    fn import_buffer(&mut self, name: &str, physical: BackendBuffer) -> BufferHandle {
+        let id = self.storage.symbols.publish(
+            name,
+            Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::Buffer(BufferDesc {
+                    size: 0,
+                    usage: crate::graph::types::BufferUsageFlags::empty(),
+                    memory: crate::graph::types::MemoryType::GpuOnly,
+                }), // Size/Usage ignored for external buffers
+                lifetime: SymbolLifetime::External,
+                data: None,
+            },
+        );
+        let actual_handle = BufferHandle(id);
+        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        self.register_external_buffer(actual_handle, physical);
         actual_handle
     }
 
@@ -256,6 +282,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             buffer_reads: Vec::new(),
             buffer_writes: Vec::new(),
             external_images: Vec::new(),
+            external_buffers: Vec::new(),
             swapchain_requests: Vec::new(),
             descriptor_sets: Vec::new(),
         };
@@ -268,6 +295,14 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
 
             let execute = setup(&mut child_recorder);
             child_storage.execute = Some(execute);
+        }
+
+        // Infer domain for simple utility passes
+        if child_storage.pipeline.is_none()
+            && child_storage.image_writes.is_empty()
+            && child_storage.image_reads.is_empty()
+        {
+            child_storage.domain = PassDomain::Transfer;
         }
 
         self.storage.children.push(child_storage);
@@ -294,6 +329,7 @@ impl FrameGraph {
                 buffer_reads: Vec::new(),
                 buffer_writes: Vec::new(),
                 external_images: Vec::new(),
+                external_buffers: Vec::new(),
                 swapchain_requests: Vec::new(),
                 descriptor_sets: Vec::new(),
             },
@@ -393,6 +429,14 @@ impl CompiledGraph {
                     if symbol.lifetime == SymbolLifetime::Transient {
                         let physical = backend.create_transient_buffer(desc);
                         transient_buffers.push(physical);
+                        let handle = symbol
+                            .data
+                            .as_ref()
+                            .expect("Buffer without handle")
+                            .downcast_ref::<BufferHandle>()
+                            .expect("Not a handle")
+                            .clone();
+                        backend.register_external_buffer(handle, physical);
                     }
                 }
                 _ => {}
@@ -432,6 +476,9 @@ impl CompiledGraph {
         for (virtual_handle, physical) in node.external_images {
             backend.register_external_image(virtual_handle, physical);
         }
+        for (virtual_handle, physical) in node.external_buffers {
+            backend.register_external_buffer(virtual_handle, physical);
+        }
 
         let mut last_sem = None;
 
@@ -449,6 +496,7 @@ impl CompiledGraph {
             if !is_inactive {
                 let desc = PassDescriptor {
                     name: &node.name,
+                    domain: node.domain,
                     pipeline: node.pipeline,
                     image_reads: &node.image_reads,
                     image_writes: &node.image_writes,

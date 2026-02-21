@@ -24,6 +24,8 @@ pub enum BindingType {
     Unknown,
     UniformBuffer,
     StorageBuffer,
+    RawBuffer,
+    MutableRawBuffer,
     Texture,
     StorageTexture,
     Sampler,

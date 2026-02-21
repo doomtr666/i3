@@ -60,6 +60,15 @@ impl<'a> PassBuilder<'a> {
         self.inner.declare_buffer(name, desc)
     }
 
+    /// Imports an existing physical buffer into the frame graph.
+    pub fn import_buffer(
+        &mut self,
+        name: &str,
+        physical: crate::graph::backend::BackendBuffer,
+    ) -> BufferHandle {
+        self.inner.import_buffer(name, physical)
+    }
+
     pub fn bind_pipeline(&mut self, handle: crate::graph::types::PipelineHandle) {
         self.inner.bind_pipeline(handle);
     }
@@ -74,6 +83,14 @@ impl<'a> PassBuilder<'a> {
         physical: crate::graph::backend::BackendImage,
     ) {
         self.inner.register_external_image(handle, physical);
+    }
+
+    pub fn register_external_buffer(
+        &mut self,
+        handle: crate::graph::types::BufferHandle,
+        physical: crate::graph::backend::BackendBuffer,
+    ) {
+        self.inner.register_external_buffer(handle, physical);
     }
 
     // --- Tree Construction ---
@@ -109,6 +126,11 @@ pub(crate) trait InternalPassBuilder {
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
     fn declare_buffer(&mut self, name: &str, desc: crate::graph::types::BufferDesc)
     -> BufferHandle;
+    fn import_buffer(
+        &mut self,
+        name: &str,
+        physical: crate::graph::backend::BackendBuffer,
+    ) -> BufferHandle;
 
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
@@ -119,6 +141,11 @@ pub(crate) trait InternalPassBuilder {
         &mut self,
         handle: crate::graph::types::ImageHandle,
         physical: crate::graph::backend::BackendImage,
+    );
+    fn register_external_buffer(
+        &mut self,
+        handle: crate::graph::types::BufferHandle,
+        physical: crate::graph::backend::BackendBuffer,
     );
     fn add_node_erased(
         &mut self,
