@@ -646,7 +646,13 @@ impl DefaultRenderGraph {
                     },
                 );
 
-                // Histogram clear is now handled inside record_histogram_build_pass
+                // Histogram clear must be a separate pass to ensure proper sync between TRANSFER and COMPUTE
+                builder.add_node("ClearHistogram", move |builder| {
+                    builder.write_buffer(histogram_buffer, ResourceUsage::TRANSFER_WRITE);
+                    move |ctx| {
+                        ctx.clear_buffer(histogram_buffer, 0);
+                    }
+                });
 
                 crate::passes::histogram_build::record_histogram_build_pass(
                     builder,

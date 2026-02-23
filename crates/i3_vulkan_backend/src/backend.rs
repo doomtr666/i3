@@ -321,11 +321,22 @@ impl VulkanBackend {
         let device = self.get_device().handle.clone();
 
         if let Some(img) = self.images.get_mut(physical_id) {
-            // Optimization: Skip if layout and state already match
-            if img.last_layout == new_layout
-                && (img.last_access & dst_access) == dst_access
-                && (img.last_stage & dst_stage) == dst_stage
-            {
+            // Optimization: Skip only for Read-After-Read (RAR) where layout and stage already match
+            let is_write = |access: vk::AccessFlags2| {
+                access.intersects(
+                    vk::AccessFlags2::SHADER_WRITE
+                        | vk::AccessFlags2::SHADER_STORAGE_WRITE
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
+                        | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE
+                        | vk::AccessFlags2::TRANSFER_WRITE
+                        | vk::AccessFlags2::MEMORY_WRITE,
+                )
+            };
+
+            let needs_barrier =
+                img.last_layout != new_layout || is_write(img.last_access) || is_write(dst_access);
+
+            if !needs_barrier && (img.last_stage & dst_stage) == dst_stage {
                 return;
             }
 
@@ -378,10 +389,19 @@ impl VulkanBackend {
         let device = self.get_device().handle.clone();
 
         if let Some(buf) = self.buffers.get_mut(physical_id) {
-            // Optimization: Skip if state already matches
-            if (buf.last_access & dst_access) == dst_access
-                && (buf.last_stage & dst_stage) == dst_stage
-            {
+            // Optimization: Skip only for Read-After-Read (RAR) where state already matches
+            let is_write = |access: vk::AccessFlags2| {
+                access.intersects(
+                    vk::AccessFlags2::SHADER_WRITE
+                        | vk::AccessFlags2::SHADER_STORAGE_WRITE
+                        | vk::AccessFlags2::TRANSFER_WRITE
+                        | vk::AccessFlags2::MEMORY_WRITE,
+                )
+            };
+
+            let needs_barrier = is_write(buf.last_access) || is_write(dst_access);
+
+            if !needs_barrier && (buf.last_stage & dst_stage) == dst_stage {
                 return;
             }
 
@@ -408,6 +428,100 @@ impl VulkanBackend {
             buf.last_access = dst_access;
             buf.last_stage = dst_stage;
         }
+    }
+
+    fn get_image_state(
+        &self,
+        usage: ResourceUsage,
+        is_write: bool,
+        bind_point: vk::PipelineBindPoint,
+    ) -> (vk::ImageLayout, vk::AccessFlags2, vk::PipelineStageFlags2) {
+        let mut layout = vk::ImageLayout::GENERAL;
+        let mut access = vk::AccessFlags2::empty();
+        let mut stage = vk::PipelineStageFlags2::NONE;
+
+        if usage.intersects(ResourceUsage::COLOR_ATTACHMENT) {
+            layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+            access = vk::AccessFlags2::COLOR_ATTACHMENT_WRITE;
+            if !is_write {
+                access |= vk::AccessFlags2::COLOR_ATTACHMENT_READ;
+            }
+            stage = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
+        } else if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
+            if is_write || usage.intersects(ResourceUsage::WRITE) {
+                layout = vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                access = vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE
+                    | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
+            } else {
+                layout = vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                access = vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
+            }
+            stage = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
+        } else if usage.intersects(ResourceUsage::SHADER_WRITE) {
+            layout = vk::ImageLayout::GENERAL;
+            access = vk::AccessFlags2::SHADER_STORAGE_WRITE
+                | vk::AccessFlags2::SHADER_STORAGE_READ
+                | vk::AccessFlags2::SHADER_WRITE;
+            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+            } else {
+                vk::PipelineStageFlags2::FRAGMENT_SHADER
+            };
+        } else if usage.intersects(ResourceUsage::SHADER_READ) {
+            layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            access = vk::AccessFlags2::SHADER_READ;
+            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+            } else {
+                vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER
+            };
+        } else if usage.intersects(ResourceUsage::TRANSFER_WRITE) {
+            layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+            access = vk::AccessFlags2::TRANSFER_WRITE;
+            stage = vk::PipelineStageFlags2::TRANSFER;
+        } else if usage.intersects(ResourceUsage::TRANSFER_READ) {
+            layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            access = vk::AccessFlags2::TRANSFER_READ;
+            stage = vk::PipelineStageFlags2::TRANSFER;
+        }
+
+        (layout, access, stage)
+    }
+
+    fn get_buffer_state(
+        &self,
+        usage: ResourceUsage,
+        bind_point: vk::PipelineBindPoint,
+    ) -> (vk::AccessFlags2, vk::PipelineStageFlags2) {
+        let mut access = vk::AccessFlags2::empty();
+        let mut stage = vk::PipelineStageFlags2::NONE;
+
+        if usage.intersects(ResourceUsage::SHADER_WRITE) {
+            access = vk::AccessFlags2::SHADER_STORAGE_WRITE
+                | vk::AccessFlags2::SHADER_STORAGE_READ
+                | vk::AccessFlags2::SHADER_WRITE;
+            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+            } else {
+                vk::PipelineStageFlags2::FRAGMENT_SHADER
+            };
+        } else if usage.intersects(ResourceUsage::SHADER_READ) {
+            access = vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::UNIFORM_READ;
+            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+            } else {
+                vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER
+            };
+        } else if usage.intersects(ResourceUsage::TRANSFER_WRITE) {
+            access = vk::AccessFlags2::TRANSFER_WRITE;
+            stage = vk::PipelineStageFlags2::TRANSFER;
+        } else if usage.intersects(ResourceUsage::TRANSFER_READ) {
+            access = vk::AccessFlags2::TRANSFER_READ;
+            stage = vk::PipelineStageFlags2::TRANSFER;
+        }
+
+        (access, stage)
     }
 
     #[allow(dead_code)]
@@ -1639,11 +1753,10 @@ impl RenderBackendInternal for VulkanBackend {
                     let image_raw = swapchain.images[index as usize];
                     let image_id = image_raw.as_raw();
                     let arena_id = if let Some(&id) = self.external_to_physical.get(&image_id) {
-                        // Force UNDEFINED layout on acquisition to avoid redundant PRESENT -> ATTACHMENT transitions
                         if let Some(img) = self.images.get_mut(id) {
                             img.last_layout = vk::ImageLayout::UNDEFINED;
                             img.last_access = vk::AccessFlags2::empty();
-                            img.last_stage = vk::PipelineStageFlags2::TOP_OF_PIPE;
+                            img.last_stage = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
                         }
                         id
                     } else {
@@ -1660,7 +1773,7 @@ impl RenderBackendInternal for VulkanBackend {
                             format: swapchain.format,
                             last_layout: vk::ImageLayout::UNDEFINED,
                             last_access: vk::AccessFlags2::empty(),
-                            last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+                            last_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                             last_write_frame: 0,
                         });
                         self.external_to_physical.insert(image_id, new_id);
@@ -1916,14 +2029,8 @@ impl RenderBackendInternal for VulkanBackend {
                                 | i3_gfx::graph::pipeline::BindingType::RawBuffer
                                 | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
                                     if let Some(info) = &write.buffer_info {
-                                        let physical_id = if let Some(&phy) =
-                                            self.external_to_physical.get(&info.buffer.0.0)
-                                        {
-                                            phy
-                                        } else {
-                                            info.buffer.0.0
-                                        };
-                                        if let Some(buf) = self.buffers.get(physical_id) {
+                                        let pid = self.resolve_buffer(info.buffer).0;
+                                        if let Some(buf) = self.buffers.get(pid) {
                                             buffer_infos.push(vk::DescriptorBufferInfo {
                                                 buffer: buf.buffer,
                                                 offset: info.offset,
@@ -1941,14 +2048,8 @@ impl RenderBackendInternal for VulkanBackend {
                                 | i3_gfx::graph::pipeline::BindingType::StorageTexture
                                 | i3_gfx::graph::pipeline::BindingType::Sampler => {
                                     if let Some(info) = &write.image_info {
-                                        let physical_id = if let Some(&phy) =
-                                            self.external_to_physical.get(&info.image.0.0)
-                                        {
-                                            phy
-                                        } else {
-                                            info.image.0.0
-                                        };
-                                        if let Some(img) = self.images.get(physical_id) {
+                                        let pid = self.resolve_image(info.image).0;
+                                        if let Some(img) = self.images.get(pid) {
                                             let layout = match info.image_layout {
                                                 i3_gfx::graph::backend::DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
                                                 i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -2082,7 +2183,6 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         // Dynamic Viewport/Scissor setup (Use resolved extent)
-        // Engine Convention: Negative Height Viewport for Y-Up (Enforced)
         let viewport = vk::Viewport::default()
             .x(0.0)
             .y(viewport_extent.height as f32)
@@ -2106,202 +2206,167 @@ impl RenderBackendInternal for VulkanBackend {
         // We can look them up in `self.image_handle_map`.
 
         // Prepare attachments
+        // --- Unified Resource Synchronization & Attachment Discovery ---
         let mut color_attachments = [vk::RenderingAttachmentInfo::default(); 8];
         let mut color_count = 0;
         let mut depth_attachment_info = None;
 
-        // 1. Sync Writes (Attachments)
-        for (handle, _) in desc.image_writes {
-            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
-                phy
+        // Dedup and merge usages for all images while preserving order
+        let mut pass_images_order = Vec::new();
+        let mut pass_images_map: HashMap<ImageHandle, (ResourceUsage, bool)> = HashMap::new();
+
+        for (handle, usage) in desc.image_writes {
+            if !pass_images_map.contains_key(handle) {
+                pass_images_order.push(*handle);
+            }
+            pass_images_map.insert(*handle, (*usage, true));
+        }
+        for (handle, usage) in desc.image_reads {
+            if !pass_images_map.contains_key(handle) {
+                pass_images_order.push(*handle);
+                pass_images_map.insert(*handle, (*usage, false));
             } else {
-                handle.0.0
-            };
-
-            let (format, view) = if let Some(img) = self.images.get(physical_id) {
-                (img.format, img.view)
-            } else {
-                continue;
-            };
-
-            let (target_layout, target_access, target_stage) = if format == vk::Format::D32_SFLOAT {
-                (
-                    vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                    vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                    vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
-                )
-            } else if ctx.current_bind_point == vk::PipelineBindPoint::COMPUTE {
-                (
-                    vk::ImageLayout::GENERAL,
-                    vk::AccessFlags2::SHADER_STORAGE_WRITE,
-                    vk::PipelineStageFlags2::COMPUTE_SHADER,
-                )
-            } else {
-                (
-                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                )
-            };
-
-            self.transition_image(cmd, physical_id, target_layout, target_access, target_stage);
-
-            let clear_value = if format == vk::Format::D32_SFLOAT {
-                vk::ClearValue {
-                    depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 1.0,
-                        stencil: 0,
-                    },
-                }
-            } else {
-                vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                }
-            };
-
-            let load_op = if let Some(img) = self.images.get_mut(physical_id) {
-                if img.last_write_frame < self.frame_count {
-                    img.last_write_frame = self.frame_count;
-                    vk::AttachmentLoadOp::CLEAR
-                } else {
-                    vk::AttachmentLoadOp::LOAD
-                }
-            } else {
-                vk::AttachmentLoadOp::LOAD
-            };
-
-            let attachment = vk::RenderingAttachmentInfo::default()
-                .image_view(view)
-                .image_layout(target_layout)
-                .load_op(load_op)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .clear_value(clear_value);
-
-            if format == vk::Format::D32_SFLOAT {
-                depth_attachment_info = Some(attachment);
-            } else if color_count < 8 {
-                color_attachments[color_count] = attachment;
-                color_count += 1;
+                let entry = pass_images_map.get_mut(handle).unwrap();
+                entry.0 |= *usage;
             }
         }
 
-        // 2. Sync Reads (Textures/Storage)
-        for (handle, _) in desc.image_reads {
-            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
-                phy
-            } else {
-                handle.0.0
-            };
+        // Synchronize and collect attachments in deterministic order
+        for handle in pass_images_order {
+            let (usage, is_write) = pass_images_map[&handle];
+            let pid = self.resolve_image(handle).0;
+            let (target_layout, target_access, target_stage) =
+                self.get_image_state(usage, is_write, ctx.current_bind_point);
 
-            self.transition_image(
-                cmd,
-                physical_id,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::AccessFlags2::SHADER_READ,
-                vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            );
-        }
+            self.transition_image(cmd, pid, target_layout, target_access, target_stage);
 
-        // 3. Sync Writes (Buffers)
-        for (handle, _) in desc.buffer_writes {
-            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
-                phy
-            } else {
-                handle.0.0
-            };
-
-            let (target_access, target_stage) =
-                if ctx.current_bind_point == vk::PipelineBindPoint::COMPUTE {
-                    (
-                        vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_WRITE,
-                        vk::PipelineStageFlags2::COMPUTE_SHADER,
-                    )
+            if usage.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL) {
+                let img_info = if let Some(img) = self.images.get(pid) {
+                    (img.format, img.view)
                 } else {
-                    (
-                        vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_WRITE,
-                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
-                    )
+                    continue;
                 };
 
-            self.transition_buffer(cmd, physical_id, target_access, target_stage);
-        }
-
-        // 4. Sync Reads (Buffers)
-        for (handle, _usage) in desc.buffer_reads {
-            let physical_id = if let Some(&phy) = self.external_to_physical.get(&handle.0.0) {
-                phy
-            } else {
-                handle.0.0
-            };
-
-            // Using matches because ResourceUsage doesn't derive PartialEq if it has data, but right now it's an enum without fields in memory? Wait, actually what is it?
-            // Usually we just assume it's read
-            let (target_access, target_stage) =
-                if ctx.current_bind_point == vk::PipelineBindPoint::COMPUTE {
-                    (
-                        vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::UNIFORM_READ,
-                        vk::PipelineStageFlags2::COMPUTE_SHADER,
-                    )
+                let load_op = if is_write {
+                    if let Some(img) = self.images.get_mut(pid) {
+                        if img.last_write_frame < self.frame_count {
+                            img.last_write_frame = self.frame_count;
+                            vk::AttachmentLoadOp::CLEAR
+                        } else {
+                            vk::AttachmentLoadOp::LOAD
+                        }
+                    } else {
+                        vk::AttachmentLoadOp::LOAD
+                    }
                 } else {
-                    (
-                        vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::UNIFORM_READ,
-                        vk::PipelineStageFlags2::VERTEX_SHADER
-                            | vk::PipelineStageFlags2::FRAGMENT_SHADER,
-                    )
+                    vk::AttachmentLoadOp::LOAD
                 };
 
-            self.transition_buffer(cmd, physical_id, target_access, target_stage);
+                let clear_value = if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
+                    vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
+                    }
+                } else {
+                    vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                    }
+                };
+
+                let attachment = vk::RenderingAttachmentInfo::default()
+                    .image_view(img_info.1)
+                    .image_layout(target_layout)
+                    .load_op(load_op)
+                    .store_op(if is_write {
+                        vk::AttachmentStoreOp::STORE
+                    } else {
+                        vk::AttachmentStoreOp::NONE
+                    })
+                    .clear_value(clear_value);
+
+                if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
+                    depth_attachment_info = Some(attachment);
+                } else if color_count < 8 {
+                    color_attachments[color_count] = attachment;
+                    color_count += 1;
+                }
+            }
         }
 
-        let mut rendering_info = vk::RenderingInfo::default()
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: viewport_extent,
-            })
-            .layer_count(1)
-            .color_attachments(&color_attachments[..color_count]);
-
-        if let Some(depth) = &depth_attachment_info {
-            rendering_info = rendering_info.depth_attachment(depth);
+        // Deduplicate and synchronize buffers while preserving order
+        let mut pass_buffers_order = Vec::new();
+        let mut pass_buffers_map: HashMap<BufferHandle, ResourceUsage> = HashMap::new();
+        for (handle, usage) in desc.buffer_writes {
+            if !pass_buffers_map.contains_key(handle) {
+                pass_buffers_order.push(*handle);
+            }
+            pass_buffers_map.insert(*handle, *usage);
+        }
+        for (handle, usage) in desc.buffer_reads {
+            if !pass_buffers_map.contains_key(handle) {
+                pass_buffers_order.push(*handle);
+                pass_buffers_map.insert(*handle, *usage);
+            } else {
+                let entry = pass_buffers_map.get_mut(handle).unwrap();
+                *entry |= *usage;
+            }
         }
 
-        if !is_compute && (!color_attachments.is_empty() || depth_attachment_info.is_some()) {
+        for handle in pass_buffers_order {
+            let usage = pass_buffers_map[&handle];
+            let pid = self.resolve_buffer(handle).0;
+            let (target_access, target_stage) =
+                self.get_buffer_state(usage, ctx.current_bind_point);
+            self.transition_buffer(cmd, pid, target_access, target_stage);
+        }
+
+        if !is_compute && (color_count > 0 || depth_attachment_info.is_some()) {
+            let rendering_info = vk::RenderingInfo::default()
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: viewport_extent,
+                })
+                .layer_count(1)
+                .color_attachments(&color_attachments[..color_count]);
+
+            let rendering_info = if let Some(depth) = &depth_attachment_info {
+                rendering_info.depth_attachment(depth)
+            } else {
+                rendering_info
+            };
+
             unsafe {
                 device.handle.cmd_begin_rendering(cmd, &rendering_info);
             }
         }
 
-        // RECORD COMMANDS
         f(&mut ctx);
 
-        let present_req = ctx.present_request;
-
-        if !is_compute && (!color_attachments.is_empty() || depth_attachment_info.is_some()) {
+        if !is_compute && (color_count > 0 || depth_attachment_info.is_some()) {
             unsafe {
                 device.handle.cmd_end_rendering(cmd);
             }
         }
 
         // Handle explicit transition for Present if requested
-        if let Some(handle) = present_req {
-            let physical_id = if let Some(&id) = self.external_to_physical.get(&handle.0.0) {
-                id
-            } else {
-                handle.0.0
-            };
-
+        if let Some(handle) = ctx.present_request {
+            let pid = self.resolve_image(handle).0;
             self.transition_image(
                 cmd,
-                physical_id,
+                pid,
                 vk::ImageLayout::PRESENT_SRC_KHR,
                 vk::AccessFlags2::empty(),
                 vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
             );
         }
 
-        unsafe { device.handle.end_command_buffer(cmd).unwrap() };
+        unsafe {
+            device.handle.end_command_buffer(cmd).unwrap();
+        }
 
         self.cpu_timeline
     }

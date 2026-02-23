@@ -78,7 +78,6 @@ pub fn record_histogram_build_pass(
                 )
             };
             ctx.push_constants(ShaderStageFlags::Compute, 0, pc_bytes);
-            ctx.clear_buffer(histogram_buffer, 0);
 
             // Assuming GROUP_SIZE = 16
             let group_count_x = (width + 15) / 16;

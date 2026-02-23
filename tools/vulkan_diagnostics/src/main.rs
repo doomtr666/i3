@@ -7,8 +7,8 @@ fn main() -> io::Result<()> {
     let werror = args.iter().any(|arg| arg == "--werror" || arg == "-Werror");
     let verbose = args.iter().any(|arg| arg == "--verbose" || arg == "-v");
 
-    // Regex to extract VUID
-    let vuid_re = Regex::new(r"VUID-(?P<vuid>[^\]\s\)]+)").unwrap();
+    // Regex to extract VUID or Sync Hazard name
+    let vuid_re = Regex::new(r"(VUID-|SYNC-HAZARD-)(?P<vuid>[^\]\s\)|]+)").unwrap();
     let panic_re = Regex::new(r"thread '.*' panicked at '(?P<msg>.*)',").unwrap();
 
     // stdin reader
@@ -148,7 +148,7 @@ fn main() -> io::Result<()> {
                 .replace('\n', " ")
                 .replace('\r', "")
                 .replace('\t', " ");
-            let snippet: String = clean_msg.chars().take(40).collect();
+            let snippet: String = clean_msg.chars().take(200).collect();
             println!("{:<40} | {:<3} | {}...", vuid, count, snippet);
         }
     } else if verbose {
