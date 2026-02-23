@@ -378,11 +378,15 @@ impl DefaultRenderGraph {
         // Save the light count from the scene
         let light_count = scene.iter_lights().count().min(1024) as u32;
 
-        let (sun_dir, sun_int) = scene
+        let (sun_dir, sun_int, sun_col) = scene
             .iter_lights()
             .find(|(_, l)| l.light_type == crate::scene::LightType::Directional)
-            .map(|(_, l)| (l.direction, l.intensity))
-            .unwrap_or((nalgebra_glm::vec3(0.0, -1.0, 0.0), 1.0));
+            .map(|(_, l)| (l.direction, l.intensity, l.color))
+            .unwrap_or((
+                nalgebra_glm::vec3(0.0, -1.0, 0.0),
+                1.0,
+                nalgebra_glm::vec3(1.0, 0.9, 0.8),
+            ));
 
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
@@ -579,6 +583,8 @@ impl DefaultRenderGraph {
                     _pad0: 0.0,
                     sun_direction: sun_dir,
                     sun_intensity: sun_int,
+                    sun_color: sun_col,
+                    _pad1: 0.0,
                 },
             );
 
@@ -640,12 +646,7 @@ impl DefaultRenderGraph {
                     },
                 );
 
-                builder.add_node("ClearHistogram", move |b| {
-                    b.write_buffer(histogram_buffer, ResourceUsage::TRANSFER_WRITE);
-                    move |ctx| {
-                        ctx.clear_buffer(histogram_buffer, 0);
-                    }
-                });
+                // Histogram clear is now handled inside record_histogram_build_pass
 
                 crate::passes::histogram_build::record_histogram_build_pass(
                     builder,

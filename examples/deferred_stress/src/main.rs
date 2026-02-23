@@ -159,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     scene.add_light(LightData {
         position: glm::vec3(0.0, 0.0, 0.0),
         direction: glm::normalize(&glm::vec3(-1.0, -1.0, -1.0)),
-        color: glm::vec3(0.1, 0.3, 0.8),
+        color: glm::vec3(1.0, 0.9, 0.8),
         intensity: 5.0,
         radius: 0.0,
         light_type: LightType::Directional,

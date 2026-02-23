@@ -9,6 +9,8 @@ pub struct SkyPushConstants {
     pub _pad0: f32,
     pub sun_direction: glm::Vec3,
     pub sun_intensity: f32,
+    pub sun_color: glm::Vec3,
+    pub _pad1: f32,
 }
 
 pub fn record_sky_pass(

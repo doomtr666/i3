@@ -5,6 +5,8 @@ struct PushConstants
     float pad0;
     float3 sun_direction;
     float sun_intensity;
+    float3 sun_color;
+    float pad1;
 };
 
 [[vk::push_constant]]
@@ -62,9 +64,10 @@ float3 get_sky_color(float3 dir, float3 sun_dir, float3 sun_color)
 float4 fragmentMain(VertexOutput input) : SV_Target
 {
     float3 dir = normalize(input.view_dir);
-    float3 sun_color = float3(1.0, 0.9, 0.7); // Approximate sun color
     
-    float3 color = get_sky_color(dir, pc.sun_direction, sun_color * pc.sun_intensity);
+    // sun_direction is the direction the light is pointing (downwards).
+    // The sun is in the opposite direction.
+    float3 color = get_sky_color(dir, -pc.sun_direction, pc.sun_color * pc.sun_intensity);
     
     return float4(color, 1.0);
 }

@@ -63,8 +63,5 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     // ACES Tonemapping
     color = ACESFilm(color);
     
-    // Gamma correction (sRGB)
-    color = pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2));
-
     return float4(color, 1.0);
 }
