@@ -205,7 +205,7 @@ impl ExampleApp for SynthwaveApp {
         });
 
         let compiler = graph.compile();
-        if let Err(e) = compiler.execute(&mut self.backend) {
+        if let Err(e) = compiler.execute(&mut self.backend, None) {
             warn!("Graph execution failed: {}", e);
         }
     }

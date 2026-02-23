@@ -51,6 +51,8 @@ pub enum SymbolLifetime {
     Transient,
     /// Persists across frames (owned by the graph).
     Persistent,
+    /// Manages an N and N-1 double buffering state for temporal algorithms.
+    TemporalHistory,
     /// Injected from external system (e.g., Swapchain, Global Settings).
     External,
 }

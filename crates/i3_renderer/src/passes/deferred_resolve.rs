@@ -18,7 +18,7 @@ pub struct DeferredResolvePushConstants {
 pub fn record_deferred_resolve_pass(
     builder: &mut PassBuilder,
     pipeline: PipelineHandle,
-    backbuffer: ImageHandle,
+    hdr_target: ImageHandle,
     gbuffer_albedo: ImageHandle,
     gbuffer_normal: ImageHandle,
     gbuffer_roughmetal: ImageHandle,
@@ -28,27 +28,29 @@ pub fn record_deferred_resolve_pass(
     cluster_grid: BufferHandle,
     cluster_light_indices: BufferHandle,
     sampler: SamplerHandle,
+    exposure_buffer: BufferHandle,
     push_constants: &DeferredResolvePushConstants,
 ) {
     let pc = *push_constants;
-    builder.add_node("DeferredResolvePass", move |sub| {
-        sub.bind_pipeline(pipeline);
+    builder.add_node("DeferredResolvePass", move |builder| {
+        builder.bind_pipeline(pipeline);
 
         // Read GBuffers and buffers
-        sub.read_image(gbuffer_albedo, ResourceUsage::SHADER_READ);
-        sub.read_image(gbuffer_normal, ResourceUsage::SHADER_READ);
-        sub.read_image(gbuffer_roughmetal, ResourceUsage::SHADER_READ);
-        sub.read_image(gbuffer_emissive, ResourceUsage::SHADER_READ);
-        sub.read_image(depth_buffer, ResourceUsage::SHADER_READ);
+        builder.read_image(gbuffer_albedo, ResourceUsage::SHADER_READ);
+        builder.read_image(gbuffer_normal, ResourceUsage::SHADER_READ);
+        builder.read_image(gbuffer_roughmetal, ResourceUsage::SHADER_READ);
+        builder.read_image(gbuffer_emissive, ResourceUsage::SHADER_READ);
+        builder.read_image(depth_buffer, ResourceUsage::SHADER_READ);
 
-        sub.read_buffer(lights, ResourceUsage::SHADER_READ);
-        sub.read_buffer(cluster_grid, ResourceUsage::SHADER_READ);
-        sub.read_buffer(cluster_light_indices, ResourceUsage::SHADER_READ);
+        builder.read_buffer(lights, ResourceUsage::SHADER_READ);
+        builder.read_buffer(cluster_grid, ResourceUsage::SHADER_READ);
+        builder.read_buffer(cluster_light_indices, ResourceUsage::SHADER_READ);
+        builder.read_buffer(exposure_buffer, ResourceUsage::SHADER_READ);
 
-        // Write to backbuffer
-        sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+        // Write to HDR target
+        builder.write_image(hdr_target, ResourceUsage::COLOR_ATTACHMENT);
 
-        sub.bind_descriptor_set(
+        builder.bind_descriptor_set(
             0,
             vec![
                 DescriptorWrite {
@@ -139,6 +141,17 @@ pub fn record_deferred_resolve_pass(
                     }),
                     image_info: None,
                 },
+                DescriptorWrite {
+                    binding: 8,
+                    array_element: 0,
+                    descriptor_type: BindingType::StorageBuffer,
+                    buffer_info: Some(DescriptorBufferInfo {
+                        buffer: exposure_buffer,
+                        offset: 0,
+                        range: 0,
+                    }),
+                    image_info: None,
+                },
             ],
         );
 
@@ -155,7 +168,6 @@ pub fn record_deferred_resolve_pass(
                 pc_bytes,
             );
             ctx.draw(3, 0); // Fullscreen triangle
-            ctx.present(backbuffer); // Wait, backbuffer usually presented externally? Well, debug_viz does this
         }
     });
 }

@@ -28,7 +28,7 @@ fn test_triangle_frame_flow() {
 
     // 4. Compile & Execute
     let compiled = graph.compile();
-    compiled.execute(&mut backend).unwrap();
+    compiled.execute(&mut backend, None).unwrap();
 
     // Success criteria: Test completed without panic.
     // NullBackend logs (viewable with --nocapture) would show the calls.
@@ -93,7 +93,7 @@ fn test_complex_hierarchical_graph() {
     });
 
     let compiled = graph.compile();
-    compiled.execute(&mut backend).unwrap();
+    compiled.execute(&mut backend, None).unwrap();
 }
 
 // Modular helper for Scene rendering
@@ -145,5 +145,5 @@ fn test_modular_resource_lifecycle() {
     });
 
     let compiled = graph.compile();
-    compiled.execute(&mut backend).unwrap();
+    compiled.execute(&mut backend, None).unwrap();
 }

@@ -17,11 +17,13 @@ struct DeferredGltfApp {
     render_graph: DefaultRenderGraph,
     scene: BasicScene,
     time: f32,
+    dt: f32,
 }
 
 impl ExampleApp for DeferredGltfApp {
     fn update(&mut self, delta: Duration) {
-        self.time += delta.as_secs_f32();
+        self.dt = delta.as_secs_f32();
+        self.time += self.dt;
     }
 
     fn render(&mut self) {
@@ -54,10 +56,14 @@ impl ExampleApp for DeferredGltfApp {
             1000.0,
             width,
             height,
+            self.dt,
         );
 
         let compiler = graph.compile();
-        if let Err(e) = compiler.execute(&mut self.backend) {
+        if let Err(e) = compiler.execute(
+            &mut self.backend,
+            Some(&mut self.render_graph.temporal_registry),
+        ) {
             warn!("Graph execution failed: {}", e);
         }
     }
@@ -117,8 +123,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         slang.compile_file("cluster_build", ShaderTarget::Spirv, &[shader_path])?;
     let light_cull_shader =
         slang.compile_file("light_cull", ShaderTarget::Spirv, &[shader_path])?;
+    let histogram_build_shader =
+        slang.compile_file("histogram_build", ShaderTarget::Spirv, &[shader_path])?;
+    let average_luminance_shader =
+        slang.compile_file("average_luminance", ShaderTarget::Spirv, &[shader_path])?;
     let deferred_resolve_shader =
         slang.compile_file("deferred_resolve", ShaderTarget::Spirv, &[shader_path])?;
+    let tonemap_shader = slang.compile_file("tonemap", ShaderTarget::Spirv, &[shader_path])?;
 
     // 5. Create Render Graph
     let config = RenderConfig {
@@ -132,6 +143,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         deferred_resolve_shader,
         cluster_build_shader,
         light_cull_shader,
+        histogram_build_shader,
+        average_luminance_shader,
+        tonemap_shader,
         &config,
     );
 
@@ -142,6 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         render_graph,
         scene,
         time: 0.0,
+        dt: 0.016,
     };
     main_loop(app);
 

@@ -125,6 +125,18 @@ impl BasicScene {
         self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
     }
 
+    /// Convenience: creates a white unit cube mesh and returns its MeshId.
+    pub fn add_white_cube_mesh(&mut self, backend: &mut dyn RenderBackend) -> u32 {
+        let (vertices, indices) = generate_white_cube();
+        let vb_bytes = unsafe {
+            std::slice::from_raw_parts(
+                vertices.as_ptr() as *const u8,
+                vertices.len() * std::mem::size_of::<[f32; 9]>(),
+            )
+        };
+        self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
+    }
+
     /// Convenience: adds default directional lights (key light and backlight).
     pub fn add_default_lights(&mut self) {
         // Main key light (Warm white)
@@ -146,6 +158,17 @@ impl BasicScene {
             radius: 0.0,
             light_type: LightType::Directional,
         });
+    }
+    /// Returns a mutable iterator over all lights.
+    pub fn iter_lights_mut(
+        &mut self,
+    ) -> impl Iterator<
+        Item = (
+            i3_renderer::scene::LightId,
+            &mut i3_renderer::scene::LightData,
+        ),
+    > {
+        self.lights.iter_mut().map(|(id, data)| (*id, data))
     }
 }
 
@@ -180,10 +203,18 @@ impl SceneProvider for BasicScene {
     }
 }
 
+/// Generates a white unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
+fn generate_white_cube() -> (Vec<[f32; 9]>, Vec<u16>) {
+    let (mut vertices, indices) = generate_cube();
+    for v in &mut vertices {
+        v[6] = 1.0; // R
+        v[7] = 1.0; // G
+        v[8] = 1.0; // B
+    }
+    (vertices, indices)
+}
+
 /// Generates a unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
-///
-/// Each vertex is `[f32; 9]` = position(3) + normal(3) + color(3).
-/// Each face has a distinct color for debug visualization.
 fn generate_cube() -> (Vec<[f32; 9]>, Vec<u16>) {
     #[rustfmt::skip]
     let vertices: Vec<[f32; 9]> = vec![

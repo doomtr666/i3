@@ -1997,6 +1997,28 @@ impl RenderBackendInternal for VulkanBackend {
                                         descriptor_writes.push(vk_write);
                                     }
                                 }
+                                i3_gfx::graph::pipeline::BindingType::Texture => {
+                                    if img_ptr < image_infos.len() {
+                                        vk_write = vk_write
+                                            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                            .image_info(std::slice::from_ref(
+                                                &image_infos[img_ptr],
+                                            ));
+                                        img_ptr += 1;
+                                        descriptor_writes.push(vk_write);
+                                    }
+                                }
+                                i3_gfx::graph::pipeline::BindingType::Sampler => {
+                                    if img_ptr < image_infos.len() {
+                                        vk_write = vk_write
+                                            .descriptor_type(vk::DescriptorType::SAMPLER)
+                                            .image_info(std::slice::from_ref(
+                                                &image_infos[img_ptr],
+                                            ));
+                                        img_ptr += 1;
+                                        descriptor_writes.push(vk_write);
+                                    }
+                                }
                                 i3_gfx::graph::pipeline::BindingType::StorageTexture => {
                                     if img_ptr < image_infos.len() {
                                         vk_write = vk_write

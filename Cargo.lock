@@ -276,6 +276,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "deferred_stress"
+version = "0.1.0"
+dependencies = [
+ "examples_common",
+ "i3_gfx",
+ "i3_renderer",
+ "i3_slang",
+ "i3_vulkan_backend",
+ "nalgebra-glm",
+ "sdl2",
+ "tracing",
+]
+
+[[package]]
 name = "deflate"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

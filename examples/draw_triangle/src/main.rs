@@ -36,7 +36,7 @@ impl ExampleApp for TriangleApp {
         });
 
         let compiler = graph.compile();
-        match compiler.execute(&mut self.backend) {
+        match compiler.execute(&mut self.backend, None) {
             Ok(_) => {}
             Err(e) if e == "WindowMinimized" => {
                 std::thread::sleep(Duration::from_millis(100));

@@ -50,6 +50,12 @@ struct ClusterGridData {
 [[vk::binding(6, 0)]] StructuredBuffer<ClusterGridData> cluster_grid;
 [[vk::binding(7, 0)]] StructuredBuffer<uint> cluster_light_indices;
 
+struct ExposureData {
+    float prev_exposure;
+    float new_exposure;
+};
+[[vk::binding(8, 0)]] StructuredBuffer<ExposureData> exposure_buffer;
+
 struct VertexOutput
 {
     float4 position : SV_Position;
@@ -228,12 +234,16 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         // Light Density (Heatmap based on light count)
         float density = float(grid_item.count) / 64.0; // Assume max 64 lights is hot red
         color = float3(density, 0.0, 1.0 - density);
-    } else {
-        // Tonemapping (Reinhard)
-        color = color / (color + float3(1.0, 1.0, 1.0));
-        // Gamma correction
-        color = pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2));
     }
+
+    // Pre-Exposure
+    // Multiply by the previous frame's exposure to prevent clipping in the 16-bit HDR target.
+    // Ensure that exposure is at least 1.0 if not initialized.
+    float prev_ex = exposure_buffer[0].prev_exposure;
+    if (prev_ex == 0.0) {
+        prev_ex = 1.0;
+    }
+    color *= prev_ex;
 
     return float4(color, 1.0);
 }

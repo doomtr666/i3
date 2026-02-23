@@ -209,6 +209,41 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         actual_handle
     }
 
+    fn declare_buffer_history(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
+        let id = self.storage.symbols.publish(
+            name,
+            Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::Buffer(desc),
+                lifetime: SymbolLifetime::TemporalHistory,
+                data: None,
+            },
+        );
+        let actual_handle = BufferHandle(id);
+        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        actual_handle
+    }
+
+    fn read_buffer_history(&mut self, name: &str) -> BufferHandle {
+        let history_name = format!("{}_History", name);
+        let id = self.storage.symbols.publish(
+            &history_name,
+            Symbol {
+                name: history_name.clone(),
+                symbol_type: SymbolType::Buffer(BufferDesc {
+                    size: 0,
+                    usage: crate::graph::types::BufferUsageFlags::empty(),
+                    memory: crate::graph::types::MemoryType::GpuOnly,
+                }), // Size ignored since it refers to an existing external-like buffer
+                lifetime: SymbolLifetime::TemporalHistory,
+                data: None,
+            },
+        );
+        let actual_handle = BufferHandle(id);
+        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        actual_handle
+    }
+
     fn import_buffer(&mut self, name: &str, physical: BackendBuffer) -> BufferHandle {
         let id = self.storage.symbols.publish(
             name,
@@ -362,7 +397,11 @@ pub struct CompiledGraph {
 }
 
 impl CompiledGraph {
-    pub fn execute(self, backend: &mut dyn RenderBackendInternal) -> Result<Option<u64>, String> {
+    pub fn execute(
+        self,
+        backend: &mut dyn RenderBackendInternal,
+        temporal_registry: Option<&mut crate::graph::temporal::TemporalRegistry>,
+    ) -> Result<Option<u64>, String> {
         tracing::debug!("Executing hierarchical frame graph");
 
         // Track transient resources for cleanup
@@ -373,6 +412,7 @@ impl CompiledGraph {
         self.resolve_resources_recursive(
             &self._root,
             backend,
+            temporal_registry,
             &mut transient_images,
             &mut transient_buffers,
         );
@@ -405,9 +445,13 @@ impl CompiledGraph {
         &self,
         node: &NodeStorage,
         backend: &mut dyn RenderBackendInternal,
+        mut temporal_registry_opt: Option<&mut crate::graph::temporal::TemporalRegistry>,
         transient_images: &mut Vec<BackendImage>,
         transient_buffers: &mut Vec<BackendBuffer>,
     ) {
+        // We might need to split out the reference to temporal_registry so children can use it.
+        // It's technically easier to just use standard Option::as_deref_mut since we only borrow it.
+
         // Resolve symbols in current scope
         for symbol in &node.symbols.symbols {
             match symbol.symbol_type {
@@ -415,13 +459,12 @@ impl CompiledGraph {
                     if symbol.lifetime == SymbolLifetime::Transient {
                         let physical = backend.create_transient_image(desc);
                         transient_images.push(physical);
-                        let handle = symbol
+                        let handle = *symbol
                             .data
                             .as_ref()
                             .expect("Image without handle")
                             .downcast_ref::<ImageHandle>()
-                            .expect("Not a handle")
-                            .clone();
+                            .expect("Not a handle");
                         backend.register_external_image(handle, physical);
                     }
                 }
@@ -429,23 +472,53 @@ impl CompiledGraph {
                     if symbol.lifetime == SymbolLifetime::Transient {
                         let physical = backend.create_transient_buffer(desc);
                         transient_buffers.push(physical);
-                        let handle = symbol
+                        let handle = *symbol
                             .data
                             .as_ref()
                             .expect("Buffer without handle")
                             .downcast_ref::<BufferHandle>()
-                            .expect("Not a handle")
-                            .clone();
+                            .expect("Not a handle");
                         backend.register_external_buffer(handle, physical);
+                    } else if symbol.lifetime == SymbolLifetime::TemporalHistory {
+                        if let Some(ref mut temporal) = temporal_registry_opt {
+                            let handle = *symbol
+                                .data
+                                .as_ref()
+                                .expect("History Buffer without handle")
+                                .downcast_ref::<BufferHandle>()
+                                .expect("Not a handle");
+
+                            let physical = if symbol.name.ends_with("_History") {
+                                // Extract original name by stripping the _History suffix
+                                let base_name = &symbol.name[..symbol.name.len() - 8];
+                                temporal.get_or_create_history_buffer(base_name, desc, backend)
+                            } else {
+                                temporal.get_or_create_buffer(&symbol.name, desc, backend)
+                            };
+
+                            backend.register_external_buffer(handle, physical);
+                        } else {
+                            tracing::warn!(
+                                "TemporalHistory symbol '{}' declared but no TemporalRegistry provided!",
+                                symbol.name
+                            );
+                        }
                     }
                 }
                 _ => {}
             }
         }
 
-        // Recurse
+        // Recurse children
         for child in &node.children {
-            self.resolve_resources_recursive(child, backend, transient_images, transient_buffers);
+            let tr_opt = temporal_registry_opt.as_deref_mut();
+            self.resolve_resources_recursive(
+                child,
+                backend,
+                tr_opt,
+                transient_images,
+                transient_buffers,
+            );
         }
     }
 

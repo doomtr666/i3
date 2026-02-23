@@ -20,9 +20,13 @@ pub struct DefaultRenderGraph {
     deferred_resolve_pipeline: PipelineHandle,
     cluster_build_pipeline: PipelineHandle,
     light_cull_pipeline: PipelineHandle,
+    histogram_build_pipeline: PipelineHandle,
+    average_luminance_pipeline: PipelineHandle,
+    tonemap_pipeline: PipelineHandle,
     sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
     pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
+    pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -40,6 +44,9 @@ impl DefaultRenderGraph {
         deferred_resolve_shader: ShaderModule,
         cluster_build_shader: ShaderModule,
         light_cull_shader: ShaderModule,
+        histogram_build_shader: ShaderModule,
+        average_luminance_shader: ShaderModule,
+        tonemap_shader: ShaderModule,
         config: &RenderConfig,
     ) -> Self {
         // Create GBuffer pipeline (4 MRT + depth)
@@ -138,7 +145,7 @@ impl DefaultRenderGraph {
             vertex_input: VertexInputState::default(),
             render_targets: RenderTargetsInfo {
                 color_targets: vec![RenderTargetInfo {
-                    format: Format::B8G8R8A8_SRGB,
+                    format: Format::R16G16B16A16_SFLOAT,
                     ..Default::default()
                 }],
                 depth_stencil_format: None,
@@ -168,6 +175,50 @@ impl DefaultRenderGraph {
         let backend_light_cull = backend.create_compute_pipeline(&light_cull_info);
         let light_cull_pipeline = PipelineHandle(SymbolId(backend_light_cull.0));
 
+        // Create histogram build compute pipeline
+        let histogram_build_info = ComputePipelineCreateInfo {
+            shader_module: histogram_build_shader,
+        };
+        let backend_histogram_build = backend.create_compute_pipeline(&histogram_build_info);
+        let histogram_build_pipeline = PipelineHandle(SymbolId(backend_histogram_build.0));
+
+        // Create average luminance compute pipeline
+        let average_luminance_info = ComputePipelineCreateInfo {
+            shader_module: average_luminance_shader,
+        };
+        let backend_average_luminance = backend.create_compute_pipeline(&average_luminance_info);
+        let average_luminance_pipeline = PipelineHandle(SymbolId(backend_average_luminance.0));
+
+        // Create tonemap graphics pipeline
+        let tonemap_pipeline_info = GraphicsPipelineCreateInfo {
+            shader_module: tonemap_shader,
+            vertex_input: VertexInputState {
+                bindings: vec![],
+                attributes: vec![],
+            },
+            render_targets: RenderTargetsInfo {
+                color_targets: vec![RenderTargetInfo {
+                    format: Format::B8G8R8A8_SRGB,
+                    blend: None,
+                    write_mask: ColorComponentFlags::RGBA,
+                }],
+                depth_stencil_format: None,
+                logic_op: None,
+            },
+            rasterization_state: RasterizationState {
+                cull_mode: CullMode::None,
+                ..Default::default()
+            },
+            depth_stencil_state: DepthStencilState {
+                depth_test_enable: false,
+                depth_write_enable: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let backend_tonemap = backend.create_graphics_pipeline(&tonemap_pipeline_info);
+        let tonemap_pipeline = PipelineHandle(SymbolId(backend_tonemap.0));
+
         // Nearest-neighbor sampler for pixel-accurate GBuffer inspection
         let sampler = backend.create_sampler(&SamplerDesc {
             min_filter: Filter::Nearest,
@@ -184,9 +235,13 @@ impl DefaultRenderGraph {
             deferred_resolve_pipeline,
             cluster_build_pipeline,
             light_cull_pipeline,
+            histogram_build_pipeline,
+            average_luminance_pipeline,
+            tonemap_pipeline,
             sampler,
             debug_channel: DebugChannel::Lit,
             gpu_buffers,
+            temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
         }
     }
 
@@ -197,6 +252,8 @@ impl DefaultRenderGraph {
         backend: &mut dyn RenderBackend,
         scene: &dyn crate::scene::SceneProvider,
     ) {
+        self.temporal_registry.advance_frame();
+
         #[repr(C)]
         #[derive(Clone, Copy)]
         struct GpuLightData {
@@ -250,6 +307,7 @@ impl DefaultRenderGraph {
         far_plane: f32,
         screen_width: u32,
         screen_height: u32,
+        dt: f32,
     ) {
         let view_projection = projection * view;
         let inv_projection = projection
@@ -275,6 +333,9 @@ impl DefaultRenderGraph {
         let deferred_resolve_pipeline = self.deferred_resolve_pipeline;
         let cluster_build_pipeline = self.cluster_build_pipeline;
         let light_cull_pipeline = self.light_cull_pipeline;
+        let histogram_build_pipeline = self.histogram_build_pipeline;
+        let average_luminance_pipeline = self.average_luminance_pipeline;
+        let tonemap_pipeline = self.tonemap_pipeline;
         let sampler = self.sampler;
         let channel = self.debug_channel;
         let light_buffer_physical = self.gpu_buffers.light_buffer;
@@ -447,6 +508,40 @@ impl DefaultRenderGraph {
                 .map(|v| v.column(3).xyz())
                 .unwrap_or_else(|| nalgebra_glm::vec3(0.0, 0.0, 0.0));
 
+            let hdr_target = builder.declare_image(
+                "HDR_Target",
+                ImageDesc {
+                    width: screen_width,
+                    height: screen_height,
+                    depth: 1,
+                    format: Format::R16G16B16A16_SFLOAT,
+                    mip_levels: 1,
+                    array_layers: 1,
+                    usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::SAMPLED,
+                    view_type: ImageViewType::Type2D,
+                    swizzle: ComponentMapping::default(),
+                },
+            );
+
+            let exposure_buffer = builder.declare_buffer_history(
+                "ExposureBuffer",
+                i3_gfx::graph::types::BufferDesc {
+                    size: 8, // 2 f32s: PrevExposure, NewExposure
+                    usage: i3_gfx::graph::types::BufferUsageFlags::STORAGE_BUFFER,
+                    memory: i3_gfx::graph::types::MemoryType::GpuOnly,
+                },
+            );
+
+            let histogram_buffer = builder.declare_buffer(
+                "HistogramBuffer",
+                i3_gfx::graph::types::BufferDesc {
+                    size: 256 * 4, // 256 bins * 4 bytes
+                    usage: i3_gfx::graph::types::BufferUsageFlags::STORAGE_BUFFER
+                        | i3_gfx::graph::types::BufferUsageFlags::TRANSFER_DST,
+                    memory: i3_gfx::graph::types::MemoryType::GpuOnly,
+                },
+            );
+
             if channel == DebugChannel::Lit
                 || channel == DebugChannel::LightDensity
                 || channel == DebugChannel::ClusterGrid
@@ -460,7 +555,7 @@ impl DefaultRenderGraph {
                 crate::passes::deferred_resolve::record_deferred_resolve_pass(
                     builder,
                     deferred_resolve_pipeline,
-                    backbuffer,
+                    hdr_target,
                     gbuffer_albedo,
                     gbuffer_normal,
                     gbuffer_roughmetal,
@@ -470,6 +565,7 @@ impl DefaultRenderGraph {
                     cluster_grid,
                     cluster_light_indices,
                     sampler,
+                    exposure_buffer,
                     &crate::passes::deferred_resolve::DeferredResolvePushConstants {
                         inv_view_proj: view_projection
                             .try_inverse()
@@ -482,6 +578,61 @@ impl DefaultRenderGraph {
                         screen_dimensions: [screen_width as f32, screen_height as f32],
                         debug_mode,
                         _pad: 0,
+                    },
+                );
+
+                builder.add_node("ClearHistogram", move |b| {
+                    b.write_buffer(histogram_buffer, ResourceUsage::TRANSFER_WRITE);
+                    move |ctx| {
+                        ctx.clear_buffer(histogram_buffer, 0);
+                    }
+                });
+
+                crate::passes::histogram_build::record_histogram_build_pass(
+                    builder,
+                    histogram_build_pipeline,
+                    hdr_target,
+                    histogram_buffer,
+                    exposure_buffer,
+                    screen_width,
+                    screen_height,
+                    &crate::passes::histogram_build::HistogramPushConstants {
+                        min_log_lum: -10.0,
+                        max_log_lum: 10.0,
+                        time_delta: dt,
+                        pad: 0,
+                    },
+                );
+
+                crate::passes::average_luminance::record_average_luminance_pass(
+                    builder,
+                    average_luminance_pipeline,
+                    histogram_buffer,
+                    exposure_buffer,
+                    &crate::passes::average_luminance::AverageLuminancePushConstants {
+                        min_log_lum: -10.0,
+                        max_log_lum: 10.0,
+                        time_delta: dt,
+                        adaptation_rate: 2.0,
+                        pixel_count: (screen_width * screen_height) as f32,
+                        pad0: 0,
+                        pad1: 0,
+                        pad2: 0,
+                    },
+                );
+
+                crate::passes::tonemap::record_tonemap_pass(
+                    builder,
+                    tonemap_pipeline,
+                    backbuffer,
+                    hdr_target,
+                    exposure_buffer,
+                    sampler,
+                    &crate::passes::tonemap::ToneMapPushConstants {
+                        debug_mode: 0,
+                        pad0: 0,
+                        pad1: 0,
+                        pad2: 0,
                     },
                 );
             } else {
