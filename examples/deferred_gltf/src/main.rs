@@ -18,23 +18,18 @@ struct DeferredGltfApp {
     scene: BasicScene,
     time: f32,
     dt: f32,
+    camera: examples_common::camera_controller::CameraController,
 }
 
 impl ExampleApp for DeferredGltfApp {
     fn update(&mut self, delta: Duration) {
         self.dt = delta.as_secs_f32();
         self.time += self.dt;
+        self.camera.update(delta);
     }
 
     fn render(&mut self) {
-        // Orbiting camera
-        // Using a larger radius for generic models since they might be big
-        let radius = 10.0;
-        let eye = glm::vec3(radius * self.time.cos(), 5.0, radius * self.time.sin());
-        let target = glm::vec3(0.0, 0.0, 0.0);
-        let up = glm::vec3(0.0, 1.0, 0.0);
-
-        let view = glm::look_at_rh(&eye, &target, &up);
+        let view = self.camera.view_matrix();
         let (width, height) = self.backend.window_size(self.window).unwrap_or((1280, 720));
         let projection = glm::perspective_rh_zo(
             width as f32 / height as f32,
@@ -69,7 +64,11 @@ impl ExampleApp for DeferredGltfApp {
     }
 
     fn poll_events(&mut self) -> Vec<Event> {
-        self.backend.poll_events()
+        let events = self.backend.poll_events();
+        for event in &events {
+            self.camera.handle_event(event);
+        }
+        events
     }
 }
 
@@ -130,6 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let deferred_resolve_shader =
         slang.compile_file("deferred_resolve", ShaderTarget::Spirv, &[shader_path])?;
     let tonemap_shader = slang.compile_file("tonemap", ShaderTarget::Spirv, &[shader_path])?;
+    let sky_shader = slang.compile_file("sky", ShaderTarget::Spirv, &[shader_path])?;
 
     // 5. Create Render Graph
     let config = RenderConfig {
@@ -146,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         histogram_build_shader,
         average_luminance_shader,
         tonemap_shader,
+        sky_shader,
         &config,
     );
 
@@ -157,6 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         scene,
         time: 0.0,
         dt: 0.016,
+        camera: examples_common::camera_controller::CameraController::new(),
     };
     main_loop(app);
 

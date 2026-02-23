@@ -153,8 +153,8 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float2 uv = input.uv;
     
     float depth = depthBuffer.Sample(depthSampler, uv).r;
-    if (depth >= 1.0) { // Background
-        return float4(0.0, 0.0, 0.0, 1.0);
+    if (depth >= 1.0) {
+        discard;
     }
 
     // Read GBuffer

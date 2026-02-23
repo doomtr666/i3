@@ -16,10 +16,10 @@ pub struct PhysicalImage {
     pub desc: ImageDesc,
     pub format: vk::Format,
 
-    // Synchronization state (Sync2)
     pub last_layout: vk::ImageLayout,
     pub last_access: vk::AccessFlags2,
     pub last_stage: vk::PipelineStageFlags2,
+    pub last_write_frame: u64,
 }
 
 pub struct PhysicalBuffer {
@@ -437,6 +437,22 @@ impl VulkanBackend {
             .get(&window.0)
             .map(|ctx| ctx.raw.handle.drawable_size())
     }
+
+    fn sdl_to_keycode(sdl: sdl2::keyboard::Keycode) -> Option<KeyCode> {
+        match sdl {
+            sdl2::keyboard::Keycode::Escape => Some(KeyCode::Escape),
+            sdl2::keyboard::Keycode::Tab => Some(KeyCode::Tab),
+            sdl2::keyboard::Keycode::Space => Some(KeyCode::Space),
+            sdl2::keyboard::Keycode::W => Some(KeyCode::W),
+            sdl2::keyboard::Keycode::A => Some(KeyCode::A),
+            sdl2::keyboard::Keycode::S => Some(KeyCode::S),
+            sdl2::keyboard::Keycode::D => Some(KeyCode::D),
+            sdl2::keyboard::Keycode::Z => Some(KeyCode::Z),
+            sdl2::keyboard::Keycode::Q => Some(KeyCode::Q),
+            sdl2::keyboard::Keycode::LShift => Some(KeyCode::LShift),
+            _ => None,
+        }
+    }
 }
 
 impl RenderBackend for VulkanBackend {
@@ -712,11 +728,19 @@ impl RenderBackend for VulkanBackend {
                 match event {
                     sdl2::event::Event::Quit { .. } => events.push(Event::Quit),
                     sdl2::event::Event::KeyDown {
-                        keycode: Some(sdl2::keyboard::Keycode::Escape),
-                        ..
-                    } => events.push(Event::KeyDown {
-                        key: KeyCode::Escape,
-                    }),
+                        keycode: Some(kd), ..
+                    } => {
+                        if let Some(key) = Self::sdl_to_keycode(kd) {
+                            events.push(Event::KeyDown { key });
+                        }
+                    }
+                    sdl2::event::Event::KeyUp {
+                        keycode: Some(kd), ..
+                    } => {
+                        if let Some(key) = Self::sdl_to_keycode(kd) {
+                            events.push(Event::KeyUp { key });
+                        }
+                    }
                     sdl2::event::Event::Window {
                         win_event: sdl2::event::WindowEvent::Resized(w, h),
                         ..
@@ -862,6 +886,7 @@ impl RenderBackend for VulkanBackend {
             last_layout: vk::ImageLayout::UNDEFINED,
             last_access: vk::AccessFlags2::empty(),
             last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+            last_write_frame: 0,
         });
 
         BackendImage(id)
@@ -1636,6 +1661,7 @@ impl RenderBackendInternal for VulkanBackend {
                             last_layout: vk::ImageLayout::UNDEFINED,
                             last_access: vk::AccessFlags2::empty(),
                             last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+                            last_write_frame: 0,
                         });
                         self.external_to_physical.insert(image_id, new_id);
                         new_id
@@ -2135,10 +2161,21 @@ impl RenderBackendInternal for VulkanBackend {
                 }
             };
 
+            let load_op = if let Some(img) = self.images.get_mut(physical_id) {
+                if img.last_write_frame < self.frame_count {
+                    img.last_write_frame = self.frame_count;
+                    vk::AttachmentLoadOp::CLEAR
+                } else {
+                    vk::AttachmentLoadOp::LOAD
+                }
+            } else {
+                vk::AttachmentLoadOp::LOAD
+            };
+
             let attachment = vk::RenderingAttachmentInfo::default()
                 .image_view(view)
                 .image_layout(target_layout)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .load_op(load_op)
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(clear_value);
 

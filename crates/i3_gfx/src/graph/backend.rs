@@ -29,14 +29,18 @@ pub struct GraphicsPipelineDescDummy {
     pub dummy: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     Escape,
+    Tab,
     Space,
     W,
     A,
     S,
     D,
+    Z,
+    Q,
+    LShift,
     // Add more as needed
 }
 
@@ -44,6 +48,7 @@ pub enum KeyCode {
 pub enum Event {
     Quit,
     KeyDown { key: KeyCode },
+    KeyUp { key: KeyCode },
     Resize { width: u32, height: u32 },
     MouseDown { button: u8, x: i32, y: i32 },
     MouseUp { button: u8, x: i32, y: i32 },

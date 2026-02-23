@@ -23,6 +23,7 @@ pub struct DefaultRenderGraph {
     histogram_build_pipeline: PipelineHandle,
     average_luminance_pipeline: PipelineHandle,
     tonemap_pipeline: PipelineHandle,
+    sky_pipeline: PipelineHandle,
     sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
     pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
@@ -47,6 +48,7 @@ impl DefaultRenderGraph {
         histogram_build_shader: ShaderModule,
         average_luminance_shader: ShaderModule,
         tonemap_shader: ShaderModule,
+        sky_shader: ShaderModule,
         config: &RenderConfig,
     ) -> Self {
         // Create GBuffer pipeline (4 MRT + depth)
@@ -148,11 +150,16 @@ impl DefaultRenderGraph {
                     format: Format::R16G16B16A16_SFLOAT,
                     ..Default::default()
                 }],
-                depth_stencil_format: None,
+                depth_stencil_format: Some(Format::D32_FLOAT),
                 logic_op: None,
             },
             rasterization_state: RasterizationState {
                 cull_mode: CullMode::None,
+                ..Default::default()
+            },
+            depth_stencil_state: DepthStencilState {
+                depth_test_enable: false,
+                depth_write_enable: false,
                 ..Default::default()
             },
             ..Default::default()
@@ -160,6 +167,33 @@ impl DefaultRenderGraph {
         let backend_deferred_resolve =
             backend.create_graphics_pipeline(&deferred_resolve_pipeline_info);
         let deferred_resolve_pipeline = PipelineHandle(SymbolId(backend_deferred_resolve.0));
+
+        // Create Sky graphics pipeline
+        let sky_pipeline_info = GraphicsPipelineCreateInfo {
+            shader_module: sky_shader,
+            vertex_input: VertexInputState::default(),
+            render_targets: RenderTargetsInfo {
+                color_targets: vec![RenderTargetInfo {
+                    format: Format::R16G16B16A16_SFLOAT,
+                    ..Default::default()
+                }],
+                depth_stencil_format: Some(Format::D32_FLOAT),
+                logic_op: None,
+            },
+            rasterization_state: RasterizationState {
+                cull_mode: CullMode::None,
+                ..Default::default()
+            },
+            depth_stencil_state: DepthStencilState {
+                depth_test_enable: true,
+                depth_write_enable: false,
+                depth_compare_op: CompareOp::Equal,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let backend_sky = backend.create_graphics_pipeline(&sky_pipeline_info);
+        let sky_pipeline = PipelineHandle(SymbolId(backend_sky.0));
 
         // Create cluster build compute pipeline
         let cluster_build_info = ComputePipelineCreateInfo {
@@ -238,6 +272,7 @@ impl DefaultRenderGraph {
             histogram_build_pipeline,
             average_luminance_pipeline,
             tonemap_pipeline,
+            sky_pipeline,
             sampler,
             debug_channel: DebugChannel::Lit,
             gpu_buffers,
@@ -336,11 +371,18 @@ impl DefaultRenderGraph {
         let histogram_build_pipeline = self.histogram_build_pipeline;
         let average_luminance_pipeline = self.average_luminance_pipeline;
         let tonemap_pipeline = self.tonemap_pipeline;
+        let sky_pipeline = self.sky_pipeline;
         let sampler = self.sampler;
         let channel = self.debug_channel;
         let light_buffer_physical = self.gpu_buffers.light_buffer;
         // Save the light count from the scene
         let light_count = scene.iter_lights().count().min(1024) as u32;
+
+        let (sun_dir, sun_int) = scene
+            .iter_lights()
+            .find(|(_, l)| l.light_type == crate::scene::LightType::Directional)
+            .map(|(_, l)| (l.direction, l.intensity))
+            .unwrap_or((nalgebra_glm::vec3(0.0, -1.0, 0.0), 1.0));
 
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
@@ -491,18 +533,6 @@ impl DefaultRenderGraph {
                 },
             );
 
-            // GBuffer pass — draw all objects from scene
-            gbuffer::record_gbuffer_pass(
-                builder,
-                pipeline,
-                depth_buffer,
-                gbuffer_albedo,
-                gbuffer_normal,
-                gbuffer_roughmetal,
-                gbuffer_emissive,
-                &draw_commands,
-            );
-
             let camera_pos = view
                 .try_inverse()
                 .map(|v| v.column(3).xyz())
@@ -520,6 +550,35 @@ impl DefaultRenderGraph {
                     usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::SAMPLED,
                     view_type: ImageViewType::Type2D,
                     swizzle: ComponentMapping::default(),
+                },
+            );
+
+            // GBuffer pass — draw all objects from scene
+            gbuffer::record_gbuffer_pass(
+                builder,
+                pipeline,
+                depth_buffer,
+                gbuffer_albedo,
+                gbuffer_normal,
+                gbuffer_roughmetal,
+                gbuffer_emissive,
+                &draw_commands,
+            );
+
+            // Sky Pass — draw sky on the background
+            crate::passes::sky::record_sky_pass(
+                builder,
+                sky_pipeline,
+                hdr_target,
+                depth_buffer,
+                &crate::passes::sky::SkyPushConstants {
+                    inv_view_proj: view_projection
+                        .try_inverse()
+                        .unwrap_or_else(nalgebra_glm::identity),
+                    camera_pos,
+                    _pad0: 0.0,
+                    sun_direction: sun_dir,
+                    sun_intensity: sun_int,
                 },
             );
 

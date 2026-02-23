@@ -283,13 +283,11 @@ impl SlangCompiler {
                         slang::BindingType::Texture => BindingType::Texture,
                         slang::BindingType::MutableTeture => BindingType::StorageTexture,
                         slang::BindingType::Sampler => BindingType::Sampler,
-                        bt => {
-                            println!(
-                                "DEBUG: Unknown Slang BindingType (defaulting to StorageBuffer): {:?}",
-                                bt
-                            );
-                            BindingType::StorageBuffer
-                        }
+                        slang::BindingType::RawBuffer
+                        | slang::BindingType::MutableRawBuffer
+                        | slang::BindingType::TypedBuffer
+                        | slang::BindingType::MutableTypedBuffer => BindingType::StorageBuffer,
+                        _ => BindingType::StorageBuffer,
                     }
                 } else {
                     BindingType::Unknown

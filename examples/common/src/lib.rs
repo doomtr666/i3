@@ -1,4 +1,5 @@
 pub mod basic_scene;
+pub mod camera_controller;
 pub mod gltf_loader;
 
 use std::time::{Duration, Instant};
