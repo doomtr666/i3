@@ -181,14 +181,14 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float view_z = -(view_pos_h.z / view_pos_h.w); // Right-handed, view-space Z points towards camera
 
     // Calculate cluster index
-    uint tile_x = uint(uv.x * float(pc.grid_size.x));
-    uint tile_y = uint(uv.y * float(pc.grid_size.y));
+    uint tile_x = clamp(uint(uv.x * float(pc.grid_size.x)), 0u, pc.grid_size.x - 1);
+    uint tile_y = clamp(uint(uv.y * float(pc.grid_size.y)), 0u, pc.grid_size.y - 1);
     
     float z_slice = 0.0;
     if (view_z > pc.near_plane) {
         z_slice = log(view_z / pc.near_plane) * float(pc.grid_size.z) / log(pc.far_plane / pc.near_plane);
     }
-    uint tile_z = clamp(uint(z_slice), 0, pc.grid_size.z - 1);
+    uint tile_z = clamp(uint(max(0.0, z_slice)), 0u, pc.grid_size.z - 1);
 
     uint cluster_index = tile_z * pc.grid_size.x * pc.grid_size.y + 
                          tile_y * pc.grid_size.x + 
@@ -204,8 +204,9 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         uint light_idx = cluster_light_indices[1 + grid_item.offset + i];
         LightData light = lights[light_idx];
         
-        float3 L = normalize(light.position - world_pos);
-        float distance = length(light.position - world_pos);
+        float3 diff = light.position - world_pos;
+        float distance = length(diff);
+        float3 L = diff / max(distance, 0.0001);
 
         float3 radiance = float3(0.0, 0.0, 0.0);
 
@@ -213,7 +214,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
             L = normalize(-light.direction);
             radiance = light.color * light.intensity;
         } else { // Point
-            float attenuation = 1.0 / (distance * distance);
+            float attenuation = 1.0 / max(distance * distance, 0.01);
             
             // Simple windowing function to smoothly fade out at radius
             float r = distance / light.radius;

@@ -417,7 +417,7 @@ impl DefaultRenderGraph {
             let cluster_light_indices = builder.declare_buffer(
                 "ClusterLightIndices",
                 BufferDesc {
-                    size: max_clusters * 64 * 4,
+                    size: max_clusters * 256 * 4,
                     usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
                     memory: MemoryType::GpuOnly,
                 },
