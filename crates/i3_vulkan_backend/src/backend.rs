@@ -249,6 +249,8 @@ pub struct VulkanBackend {
 
     // Scratch Buffers for hot path
     target_id_scratch: Vec<u64>,
+    image_barrier_scratch: Vec<vk::ImageMemoryBarrier2<'static>>,
+    buffer_barrier_scratch: Vec<vk::BufferMemoryBarrier2<'static>>,
 
     // Global Frame Contexts
     frame_contexts: Vec<VulkanFrameContext>,
@@ -299,7 +301,9 @@ impl VulkanBackend {
             cpu_timeline: 0,
             frame_contexts: Vec::new(),
             swapchain_loader: None,
-            target_id_scratch: Vec::with_capacity(8),
+            target_id_scratch: Vec::with_capacity(32),
+            image_barrier_scratch: Vec::with_capacity(32),
+            buffer_barrier_scratch: Vec::with_capacity(32),
             frame_started: false,
             global_frame_index: 0,
             next_resource_id: 1,
@@ -310,16 +314,13 @@ impl VulkanBackend {
         self.device.as_ref().expect("Backend not initialized")
     }
 
-    fn transition_image(
+    fn get_image_barrier(
         &mut self,
-        cmd: vk::CommandBuffer,
         physical_id: u64,
         new_layout: vk::ImageLayout,
         dst_access: vk::AccessFlags2,
         dst_stage: vk::PipelineStageFlags2,
-    ) {
-        let device = self.get_device().handle.clone();
-
+    ) -> Option<vk::ImageMemoryBarrier2<'static>> {
         if let Some(img) = self.images.get_mut(physical_id) {
             // Optimization: Skip only for Read-After-Read (RAR) where layout and stage already match
             let is_write = |access: vk::AccessFlags2| {
@@ -337,7 +338,7 @@ impl VulkanBackend {
                 img.last_layout != new_layout || is_write(img.last_access) || is_write(dst_access);
 
             if !needs_barrier && (img.last_stage & dst_stage) == dst_stage {
-                return;
+                return None;
             }
 
             debug!(
@@ -351,7 +352,7 @@ impl VulkanBackend {
                 vk::ImageAspectFlags::COLOR
             };
 
-            let barriers = [vk::ImageMemoryBarrier2::default()
+            let barrier = vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(img.last_stage)
                 .src_access_mask(img.last_access)
                 .dst_stage_mask(dst_stage)
@@ -365,29 +366,24 @@ impl VulkanBackend {
                     level_count: 1,
                     base_array_layer: 0,
                     layer_count: 1,
-                })];
-
-            let dependency_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
-
-            unsafe {
-                device.cmd_pipeline_barrier2(cmd, &dependency_info);
-            }
+                });
 
             img.last_layout = new_layout;
             img.last_access = dst_access;
             img.last_stage = dst_stage;
+
+            Some(barrier)
+        } else {
+            None
         }
     }
 
-    fn transition_buffer(
+    fn get_buffer_barrier(
         &mut self,
-        cmd: vk::CommandBuffer,
         physical_id: u64,
         dst_access: vk::AccessFlags2,
         dst_stage: vk::PipelineStageFlags2,
-    ) {
-        let device = self.get_device().handle.clone();
-
+    ) -> Option<vk::BufferMemoryBarrier2<'static>> {
         if let Some(buf) = self.buffers.get_mut(physical_id) {
             // Optimization: Skip only for Read-After-Read (RAR) where state already matches
             let is_write = |access: vk::AccessFlags2| {
@@ -402,7 +398,7 @@ impl VulkanBackend {
             let needs_barrier = is_write(buf.last_access) || is_write(dst_access);
 
             if !needs_barrier && (buf.last_stage & dst_stage) == dst_stage {
-                return;
+                return None;
             }
 
             debug!(
@@ -410,23 +406,21 @@ impl VulkanBackend {
                 physical_id, buf.last_stage, dst_stage, buf.last_access, dst_access
             );
 
-            let barriers = [vk::BufferMemoryBarrier2::default()
+            let barrier = vk::BufferMemoryBarrier2::default()
                 .src_stage_mask(buf.last_stage)
                 .src_access_mask(buf.last_access)
                 .dst_stage_mask(dst_stage)
                 .dst_access_mask(dst_access)
                 .buffer(buf.buffer)
                 .offset(0)
-                .size(vk::WHOLE_SIZE)];
-
-            let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(&barriers);
-
-            unsafe {
-                device.cmd_pipeline_barrier2(cmd, &dependency_info);
-            }
+                .size(vk::WHOLE_SIZE);
 
             buf.last_access = dst_access;
             buf.last_stage = dst_stage;
+
+            Some(barrier)
+        } else {
+            None
         }
     }
 
@@ -1914,6 +1908,10 @@ impl RenderBackendInternal for VulkanBackend {
     ) -> u64 {
         let device = self.get_device().clone();
 
+        // Clear scratch vectors for this pass
+        self.image_barrier_scratch.clear();
+        self.buffer_barrier_scratch.clear();
+
         // Resolve target physical IDs from writes (Using scratch)
         self.target_id_scratch.clear();
         for (handle, _) in desc.image_writes {
@@ -2238,7 +2236,11 @@ impl RenderBackendInternal for VulkanBackend {
             let (target_layout, target_access, target_stage) =
                 self.get_image_state(usage, is_write, ctx.current_bind_point);
 
-            self.transition_image(cmd, pid, target_layout, target_access, target_stage);
+            if let Some(barrier) =
+                self.get_image_barrier(pid, target_layout, target_access, target_stage)
+            {
+                self.image_barrier_scratch.push(barrier);
+            }
 
             if usage.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL) {
                 let img_info = if let Some(img) = self.images.get(pid) {
@@ -2321,7 +2323,20 @@ impl RenderBackendInternal for VulkanBackend {
             let pid = self.resolve_buffer(handle).0;
             let (target_access, target_stage) =
                 self.get_buffer_state(usage, ctx.current_bind_point);
-            self.transition_buffer(cmd, pid, target_access, target_stage);
+            if let Some(barrier) = self.get_buffer_barrier(pid, target_access, target_stage) {
+                self.buffer_barrier_scratch.push(barrier);
+            }
+        }
+
+        // --- Unified Pipeline Barrier Emission ---
+        if !self.image_barrier_scratch.is_empty() || !self.buffer_barrier_scratch.is_empty() {
+            let dependency_info = vk::DependencyInfo::default()
+                .image_memory_barriers(&self.image_barrier_scratch)
+                .buffer_memory_barriers(&self.buffer_barrier_scratch);
+
+            unsafe {
+                device.handle.cmd_pipeline_barrier2(cmd, &dependency_info);
+            }
         }
 
         if !is_compute && (color_count > 0 || depth_attachment_info.is_some()) {
@@ -2355,13 +2370,19 @@ impl RenderBackendInternal for VulkanBackend {
         // Handle explicit transition for Present if requested
         if let Some(handle) = ctx.present_request {
             let pid = self.resolve_image(handle).0;
-            self.transition_image(
-                cmd,
+            if let Some(barrier) = self.get_image_barrier(
                 pid,
                 vk::ImageLayout::PRESENT_SRC_KHR,
                 vk::AccessFlags2::empty(),
                 vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-            );
+            ) {
+                let barriers = [barrier];
+                let dependency_info =
+                    vk::DependencyInfo::default().image_memory_barriers(&barriers);
+                unsafe {
+                    device.handle.cmd_pipeline_barrier2(cmd, &dependency_info);
+                }
+            }
         }
 
         unsafe {

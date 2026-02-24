@@ -1,4 +1,5 @@
 pub mod gpu_buffers;
 pub mod passes;
+pub mod prelude;
 pub mod render_graph;
 pub mod scene;

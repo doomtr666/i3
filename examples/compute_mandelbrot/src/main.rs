@@ -167,7 +167,7 @@ impl ExampleApp for MandelbrotApp {
             // The provided Code Edit snippet for the `if let Err` block was syntactically incorrect.
             // To faithfully apply the change while maintaining syntactic correctness,
             // we convert the `match` to an `if let Err` and handle the error cases.
-            if e == "WindowMinimized" {
+            if e == GraphError::WindowMinimized {
                 std::thread::sleep(Duration::from_millis(100));
             } else {
                 panic!("Graph execution failed: {}", e);

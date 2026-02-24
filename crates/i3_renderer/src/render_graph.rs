@@ -1,14 +1,29 @@
 use i3_gfx::prelude::*;
 
-use crate::passes::debug_viz::{self, DebugChannel};
+use crate::passes::debug_viz::DebugChannel;
 use crate::passes::gbuffer::{self, GBufferPushConstants};
-use crate::scene::{Mesh, SceneProvider};
+use crate::scene::SceneProvider;
 
 /// A single draw command extracted from the scene for the GBuffer pass.
 #[derive(Clone, Copy)]
 pub struct DrawCommand {
-    pub mesh: Mesh,
+    pub mesh: crate::scene::Mesh,
     pub push_constants: GBufferPushConstants,
+}
+
+/// Shared data published to the FrameGraph blackboard.
+#[derive(Debug, Clone, Copy)]
+pub struct CommonData {
+    pub view: nalgebra_glm::Mat4,
+    pub projection: nalgebra_glm::Mat4,
+    pub view_projection: nalgebra_glm::Mat4,
+    pub inv_projection: nalgebra_glm::Mat4,
+    pub near_plane: f32,
+    pub far_plane: f32,
+    pub screen_width: u32,
+    pub screen_height: u32,
+    pub camera_pos: nalgebra_glm::Vec3,
+    pub light_count: u32,
 }
 
 /// The default render graph for deferred clustered shading.
@@ -51,6 +66,7 @@ impl DefaultRenderGraph {
         sky_shader: ShaderModule,
         config: &RenderConfig,
     ) -> Self {
+        // ... (truncated)
         // Create GBuffer pipeline (4 MRT + depth)
         let gbuffer_pipeline_info = GraphicsPipelineCreateInfo {
             shader_module: gbuffer_shader,
@@ -282,11 +298,7 @@ impl DefaultRenderGraph {
 
     /// Synchronizes scene data (lights, materials, etc.) to persistent GPU buffers.
     /// Should be called once per frame before recording the graph.
-    pub fn sync(
-        &mut self,
-        backend: &mut dyn RenderBackend,
-        scene: &dyn crate::scene::SceneProvider,
-    ) {
+    pub fn sync(&mut self, backend: &mut dyn RenderBackend, scene: &dyn SceneProvider) {
         self.temporal_registry.advance_frame();
 
         #[repr(C)]
@@ -328,6 +340,165 @@ impl DefaultRenderGraph {
         }
     }
 
+    fn record_clustering(
+        &self,
+        builder: &mut PassBuilder,
+        light_buffer: BufferHandle,
+    ) -> (BufferHandle, BufferHandle, BufferHandle, u32, u32, u32) {
+        let common = *builder.consume::<CommonData>("Common");
+
+        // Cluster Build Pass
+        let grid_x = (common.screen_width + 63) / 64;
+        let grid_y = (common.screen_height + 63) / 64;
+        let grid_z = 16;
+
+        let max_clusters = (grid_x * grid_y * grid_z) as u64;
+        let cluster_aabbs = builder.declare_buffer(
+            "ClusterAABBs",
+            BufferDesc {
+                size: max_clusters * 32,
+                usage: BufferUsageFlags::STORAGE_BUFFER,
+                memory: MemoryType::GpuOnly,
+            },
+        );
+        let cluster_grid = builder.declare_buffer(
+            "ClusterGrid",
+            BufferDesc {
+                size: max_clusters * 8,
+                usage: BufferUsageFlags::STORAGE_BUFFER,
+                memory: MemoryType::GpuOnly,
+            },
+        );
+        let cluster_light_indices = builder.declare_buffer(
+            "ClusterLightIndices",
+            BufferDesc {
+                size: max_clusters * 256 * 4,
+                usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+                memory: MemoryType::GpuOnly,
+            },
+        );
+
+        // Clear the first u32 of cluster_light_indices
+        builder.add_node("ClearClusterIndices", move |b| {
+            b.write_buffer(cluster_light_indices, ResourceUsage::TRANSFER_WRITE);
+            move |ctx| {
+                ctx.clear_buffer(cluster_light_indices, 0);
+            }
+        });
+
+        crate::passes::cluster_build::record_cluster_build_pass(
+            builder,
+            self.cluster_build_pipeline,
+            cluster_aabbs,
+            &crate::passes::cluster_build::ClusterBuildPushConstants {
+                inv_projection: common.inv_projection,
+                grid_size: [grid_x, grid_y, grid_z],
+                near_plane: common.near_plane,
+                far_plane: common.far_plane,
+                screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
+                pad: 0,
+            },
+        );
+
+        // Light Cull Pass
+        crate::passes::light_cull::record_light_cull_pass(
+            builder,
+            self.light_cull_pipeline,
+            cluster_aabbs,
+            light_buffer,
+            cluster_grid,
+            cluster_light_indices,
+            &crate::passes::light_cull::LightCullPushConstants {
+                view_matrix: common.view,
+                grid_size: [grid_x, grid_y, grid_z],
+                light_count: common.light_count,
+            },
+        );
+
+        (
+            cluster_aabbs,
+            cluster_grid,
+            cluster_light_indices,
+            grid_x,
+            grid_y,
+            grid_z,
+        )
+    }
+
+    fn record_gbuffer(
+        &self,
+        builder: &mut PassBuilder,
+        draw_commands: &[DrawCommand],
+    ) -> (
+        ImageHandle,
+        ImageHandle,
+        ImageHandle,
+        ImageHandle,
+        ImageHandle,
+    ) {
+        let common = *builder.consume::<CommonData>("Common");
+
+        let albedo = builder.declare_image(
+            "GBuffer_Albedo",
+            ImageDesc::new(
+                common.screen_width,
+                common.screen_height,
+                Format::R8G8B8A8_SRGB,
+            ),
+        );
+        let normal = builder.declare_image(
+            "GBuffer_Normal",
+            ImageDesc::new(
+                common.screen_width,
+                common.screen_height,
+                Format::R16G16_SFLOAT,
+            ),
+        );
+        let roughmetal = builder.declare_image(
+            "GBuffer_RoughMetal",
+            ImageDesc::new(
+                common.screen_width,
+                common.screen_height,
+                Format::R8G8_UNORM,
+            ),
+        );
+        let emissive = builder.declare_image(
+            "GBuffer_Emissive",
+            ImageDesc::new(
+                common.screen_width,
+                common.screen_height,
+                Format::R11G11B10_UFLOAT,
+            ),
+        );
+        let depth = builder.declare_image(
+            "DepthBuffer",
+            ImageDesc {
+                width: common.screen_width,
+                height: common.screen_height,
+                depth: 1,
+                format: Format::D32_FLOAT,
+                mip_levels: 1,
+                array_layers: 1,
+                usage: ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | ImageUsageFlags::SAMPLED,
+                view_type: ImageViewType::Type2D,
+                swizzle: ComponentMapping::default(),
+            },
+        );
+
+        crate::passes::gbuffer::record_gbuffer_pass(
+            builder,
+            self.gbuffer_pipeline,
+            depth,
+            albedo,
+            normal,
+            roughmetal,
+            emissive,
+            draw_commands,
+        );
+
+        (albedo, normal, roughmetal, emissive, depth)
+    }
+
     /// Records the full render graph for one frame.
     ///
     /// Extracts draw commands from the scene, then records GBuffer + debug viz passes.
@@ -348,7 +519,27 @@ impl DefaultRenderGraph {
         let inv_projection = projection
             .try_inverse()
             .unwrap_or_else(nalgebra_glm::identity);
-        // Extract draw commands from scene (before the 'static closure)
+
+        let light_count = scene.light_count().min(1024) as u32;
+        let camera_pos = view
+            .try_inverse()
+            .map(|v| v.column(3).xyz())
+            .unwrap_or_else(|| nalgebra_glm::vec3(0.0, 0.0, 0.0));
+
+        let common = CommonData {
+            view,
+            projection,
+            view_projection,
+            inv_projection,
+            near_plane,
+            far_plane,
+            screen_width,
+            screen_height,
+            camera_pos,
+            light_count,
+        };
+
+        // Extract draw commands from scene
         let draw_commands: Vec<DrawCommand> = scene
             .iter_objects()
             .map(|(_, obj)| {
@@ -363,20 +554,9 @@ impl DefaultRenderGraph {
             })
             .collect();
 
-        let pipeline = self.gbuffer_pipeline;
-        let debug_pipeline = self.debug_viz_pipeline;
-        let deferred_resolve_pipeline = self.deferred_resolve_pipeline;
-        let cluster_build_pipeline = self.cluster_build_pipeline;
-        let light_cull_pipeline = self.light_cull_pipeline;
-        let histogram_build_pipeline = self.histogram_build_pipeline;
-        let average_luminance_pipeline = self.average_luminance_pipeline;
-        let tonemap_pipeline = self.tonemap_pipeline;
-        let sky_pipeline = self.sky_pipeline;
-        let sampler = self.sampler;
         let channel = self.debug_channel;
         let light_buffer_physical = self.gpu_buffers.light_buffer;
-        // Save the light count from the scene
-        let light_count = scene.iter_lights().count().min(1024) as u32;
+        let sampler = self.sampler;
 
         let (sun_dir, sun_int, sun_col) = scene
             .iter_lights()
@@ -389,190 +569,32 @@ impl DefaultRenderGraph {
             ));
 
         graph.record(move |builder| {
+            builder.publish("Common", common);
             let backbuffer = builder.acquire_backbuffer(window);
             let light_buffer = builder.import_buffer("LightBuffer", light_buffer_physical);
 
-            // Cluster Build Pass
-            let grid_x = (screen_width + 63) / 64;
-            let grid_y = (screen_height + 63) / 64;
-            let grid_z = 16;
+            // 1. Clustering & Culling
+            let (_cluster_aabbs, cluster_grid, cluster_light_indices, grid_x, grid_y, grid_z) =
+                self.record_clustering(builder, light_buffer);
 
-            let max_clusters = (grid_x * grid_y * grid_z) as u64;
-            let cluster_aabbs = builder.declare_buffer(
-                "ClusterAABBs",
-                BufferDesc {
-                    size: max_clusters * 32,
-                    usage: BufferUsageFlags::STORAGE_BUFFER,
-                    memory: MemoryType::GpuOnly,
-                },
-            );
-            let cluster_grid = builder.declare_buffer(
-                "ClusterGrid",
-                BufferDesc {
-                    size: max_clusters * 8,
-                    usage: BufferUsageFlags::STORAGE_BUFFER,
-                    memory: MemoryType::GpuOnly,
-                },
-            );
-            let cluster_light_indices = builder.declare_buffer(
-                "ClusterLightIndices",
-                BufferDesc {
-                    size: max_clusters * 256 * 4,
-                    usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
-                    memory: MemoryType::GpuOnly,
-                },
-            );
-
-            // Clear the first u32 of cluster_light_indices
-            builder.add_node("ClearClusterIndices", move |b| {
-                b.write_buffer(cluster_light_indices, ResourceUsage::TRANSFER_WRITE);
-                move |ctx| {
-                    ctx.clear_buffer(cluster_light_indices, 0);
-                }
-            });
-
-            // Cluster Build Pass
-            let grid_x = (screen_width + 63) / 64;
-            let grid_y = (screen_height + 63) / 64;
-            let grid_z = 16;
-
-            crate::passes::cluster_build::record_cluster_build_pass(
-                builder,
-                cluster_build_pipeline,
-                cluster_aabbs,
-                &crate::passes::cluster_build::ClusterBuildPushConstants {
-                    inv_projection,
-                    grid_size: [grid_x, grid_y, grid_z],
-                    near_plane,
-                    far_plane,
-                    screen_dimensions: [screen_width as f32, screen_height as f32],
-                    pad: 0,
-                },
-            );
-
-            // Light Cull Pass
-            crate::passes::light_cull::record_light_cull_pass(
-                builder,
-                light_cull_pipeline,
-                cluster_aabbs,
-                light_buffer,
-                cluster_grid,
-                cluster_light_indices,
-                &crate::passes::light_cull::LightCullPushConstants {
-                    view_matrix: view,
-                    grid_size: [grid_x, grid_y, grid_z],
-                    light_count,
-                },
-            );
-
-            // Declare GBuffer transient targets
-            let gbuffer_albedo = builder.declare_image(
-                "GBuffer_Albedo",
-                ImageDesc {
-                    width: screen_width,
-                    height: screen_height,
-                    depth: 1,
-                    format: Format::R8G8B8A8_SRGB,
-                    mip_levels: 1,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::SAMPLED,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: ComponentMapping::default(),
-                },
-            );
-            let gbuffer_normal = builder.declare_image(
-                "GBuffer_Normal",
-                ImageDesc {
-                    width: screen_width,
-                    height: screen_height,
-                    depth: 1,
-                    format: Format::R16G16_SFLOAT,
-                    mip_levels: 1,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::SAMPLED,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: ComponentMapping::default(),
-                },
-            );
-            let gbuffer_roughmetal = builder.declare_image(
-                "GBuffer_RoughMetal",
-                ImageDesc {
-                    width: screen_width,
-                    height: screen_height,
-                    depth: 1,
-                    format: Format::R8G8_UNORM,
-                    mip_levels: 1,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::SAMPLED,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: ComponentMapping::default(),
-                },
-            );
-            let gbuffer_emissive = builder.declare_image(
-                "GBuffer_Emissive",
-                ImageDesc {
-                    width: screen_width,
-                    height: screen_height,
-                    depth: 1,
-                    format: Format::R11G11B10_UFLOAT,
-                    mip_levels: 1,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::SAMPLED,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: ComponentMapping::default(),
-                },
-            );
-            let depth_buffer = builder.declare_image(
-                "DepthBuffer",
-                ImageDesc {
-                    width: screen_width,
-                    height: screen_height,
-                    depth: 1,
-                    format: Format::D32_FLOAT,
-                    mip_levels: 1,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | ImageUsageFlags::SAMPLED,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: ComponentMapping::default(),
-                },
-            );
-
-            let camera_pos = view
-                .try_inverse()
-                .map(|v| v.column(3).xyz())
-                .unwrap_or_else(|| nalgebra_glm::vec3(0.0, 0.0, 0.0));
-
-            let hdr_target = builder.declare_image(
-                "HDR_Target",
-                ImageDesc {
-                    width: screen_width,
-                    height: screen_height,
-                    depth: 1,
-                    format: Format::R16G16B16A16_SFLOAT,
-                    mip_levels: 1,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::SAMPLED,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: ComponentMapping::default(),
-                },
-            );
-
-            // GBuffer pass — draw all objects from scene
-            gbuffer::record_gbuffer_pass(
-                builder,
-                pipeline,
-                depth_buffer,
+            // 2. GBuffer Generation
+            let (
                 gbuffer_albedo,
                 gbuffer_normal,
                 gbuffer_roughmetal,
                 gbuffer_emissive,
-                &draw_commands,
+                depth_buffer,
+            ) = self.record_gbuffer(builder, &draw_commands);
+
+            let hdr_target = builder.declare_image(
+                "HDR_Target",
+                ImageDesc::new(screen_width, screen_height, Format::R16G16B16A16_SFLOAT),
             );
 
-            // Sky Pass — draw sky on the background
+            // 3. Sky Pass
             crate::passes::sky::record_sky_pass(
                 builder,
-                sky_pipeline,
+                self.sky_pipeline,
                 hdr_target,
                 depth_buffer,
                 &crate::passes::sky::SkyPushConstants {
@@ -590,20 +612,19 @@ impl DefaultRenderGraph {
 
             let exposure_buffer = builder.declare_buffer_history(
                 "ExposureBuffer",
-                i3_gfx::graph::types::BufferDesc {
-                    size: 8, // 2 f32s: PrevExposure, NewExposure
-                    usage: i3_gfx::graph::types::BufferUsageFlags::STORAGE_BUFFER,
-                    memory: i3_gfx::graph::types::MemoryType::GpuOnly,
+                BufferDesc {
+                    size: 8,
+                    usage: BufferUsageFlags::STORAGE_BUFFER,
+                    memory: MemoryType::GpuOnly,
                 },
             );
 
             let histogram_buffer = builder.declare_buffer(
                 "HistogramBuffer",
-                i3_gfx::graph::types::BufferDesc {
-                    size: 256 * 4, // 256 bins * 4 bytes
-                    usage: i3_gfx::graph::types::BufferUsageFlags::STORAGE_BUFFER
-                        | i3_gfx::graph::types::BufferUsageFlags::TRANSFER_DST,
-                    memory: i3_gfx::graph::types::MemoryType::GpuOnly,
+                BufferDesc {
+                    size: 256 * 4,
+                    usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+                    memory: MemoryType::GpuOnly,
                 },
             );
 
@@ -617,9 +638,11 @@ impl DefaultRenderGraph {
                     DebugChannel::ClusterGrid => 2,
                     _ => 0,
                 };
+
+                // 4. Deferred Shading
                 crate::passes::deferred_resolve::record_deferred_resolve_pass(
                     builder,
-                    deferred_resolve_pipeline,
+                    self.deferred_resolve_pipeline,
                     hdr_target,
                     gbuffer_albedo,
                     gbuffer_normal,
@@ -646,66 +669,19 @@ impl DefaultRenderGraph {
                     },
                 );
 
-                // Histogram clear must be a separate pass to ensure proper sync between TRANSFER and COMPUTE
-                builder.add_node("ClearHistogram", move |builder| {
-                    builder.write_buffer(histogram_buffer, ResourceUsage::TRANSFER_WRITE);
-                    move |ctx| {
-                        ctx.clear_buffer(histogram_buffer, 0);
-                    }
-                });
-
-                crate::passes::histogram_build::record_histogram_build_pass(
+                // 5. Post Processing
+                self.record_post_process(
                     builder,
-                    histogram_build_pipeline,
                     hdr_target,
-                    histogram_buffer,
-                    exposure_buffer,
-                    screen_width,
-                    screen_height,
-                    &crate::passes::histogram_build::HistogramPushConstants {
-                        min_log_lum: -10.0,
-                        max_log_lum: 10.0,
-                        time_delta: dt,
-                        pad: 0,
-                    },
-                );
-
-                crate::passes::average_luminance::record_average_luminance_pass(
-                    builder,
-                    average_luminance_pipeline,
-                    histogram_buffer,
-                    exposure_buffer,
-                    &crate::passes::average_luminance::AverageLuminancePushConstants {
-                        min_log_lum: -10.0,
-                        max_log_lum: 10.0,
-                        time_delta: dt,
-                        adaptation_rate: 2.0,
-                        pixel_count: (screen_width * screen_height) as f32,
-                        pad0: 0,
-                        pad1: 0,
-                        pad2: 0,
-                    },
-                );
-
-                crate::passes::tonemap::record_tonemap_pass(
-                    builder,
-                    tonemap_pipeline,
                     backbuffer,
-                    hdr_target,
                     exposure_buffer,
-                    sampler,
-                    &crate::passes::tonemap::ToneMapPushConstants {
-                        debug_mode: 0,
-                        pad0: 0,
-                        pad1: 0,
-                        pad2: 0,
-                    },
+                    histogram_buffer,
+                    dt,
                 );
             } else {
-                // Debug visualization — fullscreen pass reading GBuffer → backbuffer
-                debug_viz::record_debug_viz_pass(
+                crate::passes::debug_viz::record_debug_viz_pass(
                     builder,
-                    debug_pipeline,
+                    self.debug_viz_pipeline,
                     backbuffer,
                     gbuffer_albedo,
                     gbuffer_normal,
@@ -716,5 +692,72 @@ impl DefaultRenderGraph {
                 );
             }
         });
+    }
+
+    fn record_post_process(
+        &self,
+        builder: &mut PassBuilder,
+        hdr_target: ImageHandle,
+        backbuffer: ImageHandle,
+        exposure_buffer: BufferHandle,
+        histogram_buffer: BufferHandle,
+        dt: f32,
+    ) {
+        let common = *builder.consume::<CommonData>("Common");
+
+        builder.add_node("ClearHistogram", move |builder| {
+            builder.write_buffer(histogram_buffer, ResourceUsage::TRANSFER_WRITE);
+            move |ctx| {
+                ctx.clear_buffer(histogram_buffer, 0);
+            }
+        });
+
+        crate::passes::histogram_build::record_histogram_build_pass(
+            builder,
+            self.histogram_build_pipeline,
+            hdr_target,
+            histogram_buffer,
+            exposure_buffer,
+            common.screen_width,
+            common.screen_height,
+            &crate::passes::histogram_build::HistogramPushConstants {
+                min_log_lum: -10.0,
+                max_log_lum: 10.0,
+                time_delta: dt,
+                pad: 0,
+            },
+        );
+
+        crate::passes::average_luminance::record_average_luminance_pass(
+            builder,
+            self.average_luminance_pipeline,
+            histogram_buffer,
+            exposure_buffer,
+            &crate::passes::average_luminance::AverageLuminancePushConstants {
+                min_log_lum: -10.0,
+                max_log_lum: 10.0,
+                time_delta: dt,
+                adaptation_rate: 2.0,
+                pixel_count: (common.screen_width * common.screen_height) as f32,
+                pad0: 0,
+                pad1: 0,
+                pad2: 0,
+            },
+        );
+
+        crate::passes::tonemap::record_tonemap_pass(
+            builder,
+            self.tonemap_pipeline,
+            backbuffer,
+            hdr_target,
+            exposure_buffer,
+            self.sampler,
+            &crate::passes::tonemap::ToneMapPushConstants {
+                debug_mode: 0,
+                pad0: 0,
+                pad1: 0,
+                pad2: 0,
+            },
+        );
     }
 }

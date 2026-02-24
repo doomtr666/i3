@@ -1,5 +1,24 @@
 use bitflags::bitflags;
 use std::any::TypeId;
+use thiserror::Error;
+
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum GraphError {
+    #[error("Symbol '{0}' not found in current or parent scope")]
+    SymbolNotFound(String),
+
+    #[error("Type mismatch for symbol '{0}'")]
+    TypeMismatch(String),
+
+    #[error("Backend error: {0}")]
+    BackendError(String),
+
+    #[error("Window minimized")]
+    WindowMinimized,
+
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
 
 /// Unique identifier for any entry in the Scoped Symbol Table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

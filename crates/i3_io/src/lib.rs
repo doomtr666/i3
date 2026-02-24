@@ -54,9 +54,4 @@ pub struct CatalogEntry {
     pub uncompressed_size: u64,
 }
 
-pub mod prelude {
-    pub use crate::AssetHeader;
-    pub use crate::asset::{Asset, AssetHandle};
-    pub use crate::error::{IoError, Result};
-    pub use crate::vfs::{Vfs, VfsFile};
-}
+pub mod prelude;

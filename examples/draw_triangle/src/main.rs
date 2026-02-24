@@ -38,7 +38,7 @@ impl ExampleApp for TriangleApp {
         let compiler = graph.compile();
         match compiler.execute(&mut self.backend, None) {
             Ok(_) => {}
-            Err(e) if e == "WindowMinimized" => {
+            Err(e) if e == GraphError::WindowMinimized => {
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => panic!("Graph execution failed: {}", e),

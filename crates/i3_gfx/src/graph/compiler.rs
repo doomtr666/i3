@@ -401,7 +401,7 @@ impl CompiledGraph {
         self,
         backend: &mut dyn RenderBackendInternal,
         temporal_registry: Option<&mut crate::graph::temporal::TemporalRegistry>,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<Option<u64>, GraphError> {
         tracing::debug!("Executing hierarchical frame graph");
 
         // Track transient resources for cleanup
@@ -426,7 +426,7 @@ impl CompiledGraph {
         // Final Submission (Phase 0: pure submission of recorded commands)
         let _ = backend
             .submit(crate::graph::backend::CommandBatch::default(), &[], &[])
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| GraphError::BackendError(e))?;
 
         backend.end_frame();
 
@@ -526,12 +526,12 @@ impl CompiledGraph {
         mut node: NodeStorage,
         backend: &mut dyn RenderBackendInternal,
         inactive_images: &mut Vec<u64>,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<Option<u64>, GraphError> {
         // 0. Process Swapchain Requests (Automatic Acquire)
         for (handle, window) in node.swapchain_requests {
             match backend
                 .acquire_swapchain_image(window)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| GraphError::BackendError(e))?
             {
                 Some((physical, _sem, _idx)) => {
                     // Register automatically

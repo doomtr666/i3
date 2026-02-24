@@ -517,6 +517,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "i3_null_backend",
+ "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
 ]

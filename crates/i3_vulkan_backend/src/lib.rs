@@ -2,6 +2,7 @@ pub mod backend;
 pub mod convert;
 pub mod device;
 pub mod instance;
+pub mod prelude;
 pub mod swapchain;
 pub mod window;
 
