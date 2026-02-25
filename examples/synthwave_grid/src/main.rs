@@ -134,74 +134,78 @@ impl ExampleApp for SynthwaveApp {
             let depth_img = builder.declare_image("DepthBuffer", depth_desc);
 
             // Pass 1: Grid -> Scene Color
-            builder.add_node("GridPass", move |sub| {
-                sub.bind_pipeline(pipeline);
-                sub.write_image(scene_color, ResourceUsage::COLOR_ATTACHMENT);
-                sub.write_image(depth_img, ResourceUsage::DEPTH_STENCIL);
+            builder.add_pass_from_closures(
+                "GridPass",
+                move |sub: &mut PassBuilder| {
+                    sub.bind_pipeline(pipeline);
+                    sub.write_image(scene_color, ResourceUsage::COLOR_ATTACHMENT);
+                    sub.write_image(depth_img, ResourceUsage::DEPTH_STENCIL);
 
-                // Declarative Bindings (Push Descriptors)
-                sub.bind_descriptor_set(
-                    0,
-                    vec![DescriptorWrite {
-                        binding: 0,
-                        array_element: 0,
-                        descriptor_type: BindingType::UniformBuffer,
-                        buffer_info: Some(DescriptorBufferInfo {
-                            buffer: uniform_buffer_handle,
-                            offset: 0,
-                            range: std::mem::size_of::<Uniforms>() as u64,
-                        }),
-                        image_info: None,
-                    }],
-                );
-
-                move |ctx| {
-                    ctx.bind_vertex_buffer(0, BufferHandle(SymbolId(vb.0)));
-                    ctx.bind_index_buffer(BufferHandle(SymbolId(ib.0)), IndexType::Uint16);
-                    ctx.draw_indexed(6, 0, 0);
-                }
-            });
-
-            // Pass 2: PostFX (Scene -> Backbuffer)
-            builder.add_node("PostPass", move |sub| {
-                sub.bind_pipeline(post_pipeline);
-                sub.read_image(scene_color, ResourceUsage::SHADER_READ);
-                sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
-
-                // Declarative Bindings (Push Descriptors)
-                sub.bind_descriptor_set(
-                    0,
-                    vec![
-                        DescriptorWrite {
+                    // Declarative Bindings (Push Descriptors)
+                    sub.bind_descriptor_set(
+                        0,
+                        vec![DescriptorWrite {
                             binding: 0,
                             array_element: 0,
                             descriptor_type: BindingType::UniformBuffer,
                             buffer_info: Some(DescriptorBufferInfo {
-                                buffer: post_uniform_buffer_handle,
+                                buffer: uniform_buffer_handle,
                                 offset: 0,
-                                range: std::mem::size_of::<PostUniforms>() as u64,
+                                range: std::mem::size_of::<Uniforms>() as u64,
                             }),
                             image_info: None,
-                        },
-                        DescriptorWrite {
-                            binding: 1,
-                            array_element: 0,
-                            descriptor_type: BindingType::CombinedImageSampler,
-                            buffer_info: None,
-                            image_info: Some(DescriptorImageInfo {
-                                image: scene_color,
-                                image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                                sampler: Some(scene_sampler),
-                            }),
-                        },
-                    ],
-                );
+                        }],
+                    );
+                },
+                move |ctx: &mut dyn PassContext| {
+                    ctx.bind_vertex_buffer(0, BufferHandle(SymbolId(vb.0)));
+                    ctx.bind_index_buffer(BufferHandle(SymbolId(ib.0)), IndexType::Uint16);
+                    ctx.draw_indexed(6, 0, 0);
+                },
+            );
 
-                move |ctx| {
+            // Pass 2: PostFX (Scene -> Backbuffer)
+            builder.add_pass_from_closures(
+                "PostPass",
+                move |sub: &mut PassBuilder| {
+                    sub.bind_pipeline(post_pipeline);
+                    sub.read_image(scene_color, ResourceUsage::SHADER_READ);
+                    sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+
+                    // Declarative Bindings (Push Descriptors)
+                    sub.bind_descriptor_set(
+                        0,
+                        vec![
+                            DescriptorWrite {
+                                binding: 0,
+                                array_element: 0,
+                                descriptor_type: BindingType::UniformBuffer,
+                                buffer_info: Some(DescriptorBufferInfo {
+                                    buffer: post_uniform_buffer_handle,
+                                    offset: 0,
+                                    range: std::mem::size_of::<PostUniforms>() as u64,
+                                }),
+                                image_info: None,
+                            },
+                            DescriptorWrite {
+                                binding: 1,
+                                array_element: 0,
+                                descriptor_type: BindingType::CombinedImageSampler,
+                                buffer_info: None,
+                                image_info: Some(DescriptorImageInfo {
+                                    image: scene_color,
+                                    image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
+                                    sampler: Some(scene_sampler),
+                                }),
+                            },
+                        ],
+                    );
+                },
+                move |ctx: &mut dyn PassContext| {
                     ctx.draw(3, 0); // Fullscreen triangle (3 vertices)
                     ctx.present(backbuffer); // Present happens after this pass
-                }
-            });
+                },
+            );
         });
 
         let compiler = graph.compile();
@@ -258,11 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory: MemoryType::CpuToGpu,
     };
     let vertex_buffer = backend.create_buffer(&vb_desc);
-
-    let data_ptr = vertices.as_ptr() as *const u8;
-    let data_slice =
-        unsafe { std::slice::from_raw_parts(data_ptr, std::mem::size_of_val(&vertices)) };
-    backend.upload_buffer(vertex_buffer, data_slice, 0)?;
+    backend.upload_buffer_slice(vertex_buffer, &vertices, 0)?;
 
     let ib_desc = BufferDesc {
         size: std::mem::size_of_val(&indices) as u64,
@@ -270,11 +270,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory: MemoryType::CpuToGpu,
     };
     let index_buffer = backend.create_buffer(&ib_desc);
-
-    let data_ptr = indices.as_ptr() as *const u8;
-    let data_slice =
-        unsafe { std::slice::from_raw_parts(data_ptr, std::mem::size_of_val(&indices)) };
-    backend.upload_buffer(index_buffer, data_slice, 0)?;
+    backend.upload_buffer_slice(index_buffer, &indices, 0)?;
 
     let ub_desc = BufferDesc {
         size: std::mem::size_of::<Uniforms>() as u64,

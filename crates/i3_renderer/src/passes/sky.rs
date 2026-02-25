@@ -13,34 +13,33 @@ pub struct SkyPushConstants {
     pub _pad1: f32,
 }
 
-pub fn record_sky_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    hdr_target: ImageHandle,
-    depth_buffer: ImageHandle,
-    push_constants: &SkyPushConstants,
-) {
-    let pc = *push_constants;
-    builder.add_node("SkyPass", move |builder| {
-        builder.bind_pipeline(pipeline);
+/// Sky pass struct implementing the RenderPass trait.
+pub struct SkyPass {
+    pub pipeline: PipelineHandle,
+    pub hdr_target: ImageHandle,
+    pub depth_buffer: ImageHandle,
+    pub push_constants: SkyPushConstants,
+}
+
+impl RenderPass for SkyPass {
+    fn name(&self) -> &str {
+        "SkyPass"
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.bind_pipeline(self.pipeline);
 
         // Clears the HDR target and depth buffer (to 1.0)
-        builder.write_image(hdr_target, ResourceUsage::COLOR_ATTACHMENT);
-        builder.write_image(depth_buffer, ResourceUsage::DEPTH_STENCIL);
+        builder.write_image(self.hdr_target, ResourceUsage::COLOR_ATTACHMENT);
+        builder.write_image(self.depth_buffer, ResourceUsage::DEPTH_STENCIL);
+    }
 
-        move |ctx: &mut dyn PassContext| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &pc as *const _ as *const u8,
-                    std::mem::size_of::<SkyPushConstants>(),
-                )
-            };
-            ctx.push_constants(
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                pc_bytes,
-            );
-            ctx.draw(3, 0); // Fullscreen triangle
-        }
-    });
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(
+            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+            0,
+            &self.push_constants,
+        );
+        ctx.draw(3, 0); // Fullscreen triangle
+    }
 }

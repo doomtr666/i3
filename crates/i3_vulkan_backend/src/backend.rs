@@ -2,8 +2,10 @@ use ash::vk;
 use ash::vk::Handle;
 use i3_gfx::graph::backend::RenderBackendInternal;
 use i3_gfx::graph::backend::*;
+use i3_gfx::graph::pass::RenderPass;
 use i3_gfx::graph::pipeline::*;
 use i3_gfx::graph::types::*;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info};
@@ -1901,11 +1903,7 @@ impl RenderBackendInternal for VulkanBackend {
         Ok(signal_value)
     }
 
-    fn begin_pass(
-        &mut self,
-        desc: PassDescriptor<'_>,
-        f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
-    ) -> u64 {
+    fn begin_pass(&mut self, desc: PassDescriptor<'_>, pass: &dyn RenderPass) -> u64 {
         let device = self.get_device().clone();
 
         // Clear scratch vectors for this pass
@@ -2359,7 +2357,7 @@ impl RenderBackendInternal for VulkanBackend {
             }
         }
 
-        f(&mut ctx);
+        pass.execute(&mut ctx);
 
         if !is_compute && (color_count > 0 || depth_attachment_info.is_some()) {
             unsafe {
@@ -2892,7 +2890,7 @@ impl PassContext for VulkanPassContext {
         }
     }
 
-    fn push_constants(
+    fn push_bytes(
         &mut self,
         stages: i3_gfx::graph::pipeline::ShaderStageFlags,
         offset: u32,

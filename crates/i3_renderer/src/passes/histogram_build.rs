@@ -9,27 +9,35 @@ pub struct HistogramPushConstants {
     pub pad: u32,
 }
 
-pub fn record_histogram_build_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    hdr_image: ImageHandle,
-    histogram_buffer: BufferHandle,
-    exposure_buffer: BufferHandle,
-    width: u32,
-    height: u32,
-    push_constants: &HistogramPushConstants,
-) {
-    let pc = *push_constants;
+/// Histogram build pass struct implementing the RenderPass trait.
+pub struct HistogramBuildPass {
+    pub pipeline: PipelineHandle,
+    pub hdr_image: ImageHandle,
+    pub histogram_buffer: BufferHandle,
+    pub exposure_buffer: BufferHandle,
+    pub width: u32,
+    pub height: u32,
+    pub push_constants: HistogramPushConstants,
+}
 
-    builder.add_node("HistogramBuildPass", move |builder| {
-        builder.bind_pipeline(pipeline);
+impl RenderPass for HistogramBuildPass {
+    fn name(&self) -> &str {
+        "HistogramBuildPass"
+    }
+
+    fn domain(&self) -> PassDomain {
+        PassDomain::Compute
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.bind_pipeline(self.pipeline);
 
         // Read HDR image and exposure buffer
-        builder.read_image(hdr_image, ResourceUsage::SHADER_READ);
-        builder.read_buffer(exposure_buffer, ResourceUsage::SHADER_READ);
+        builder.read_image(self.hdr_image, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.exposure_buffer, ResourceUsage::SHADER_READ);
 
         // Write to histogram buffer
-        builder.write_buffer(histogram_buffer, ResourceUsage::SHADER_WRITE);
+        builder.write_buffer(self.histogram_buffer, ResourceUsage::SHADER_WRITE);
 
         builder.bind_descriptor_set(
             0,
@@ -40,7 +48,7 @@ pub fn record_histogram_build_pass(
                     descriptor_type: BindingType::Texture,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: hdr_image,
+                        image: self.hdr_image,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: None,
                     }),
@@ -50,7 +58,7 @@ pub fn record_histogram_build_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: histogram_buffer,
+                        buffer: self.histogram_buffer,
                         offset: 0,
                         range: 0,
                     }),
@@ -61,7 +69,7 @@ pub fn record_histogram_build_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: exposure_buffer,
+                        buffer: self.exposure_buffer,
                         offset: 0,
                         range: 0,
                     }),
@@ -69,20 +77,14 @@ pub fn record_histogram_build_pass(
                 },
             ],
         );
+    }
 
-        move |ctx: &mut dyn PassContext| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &pc as *const _ as *const u8,
-                    std::mem::size_of::<HistogramPushConstants>(),
-                )
-            };
-            ctx.push_constants(ShaderStageFlags::Compute, 0, pc_bytes);
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_constants);
 
-            // Assuming GROUP_SIZE = 16
-            let group_count_x = (width + 15) / 16;
-            let group_count_y = (height + 15) / 16;
-            ctx.dispatch(group_count_x, group_count_y, 1);
-        }
-    });
+        // Assuming GROUP_SIZE = 16
+        let group_count_x = (self.width + 15) / 16;
+        let group_count_y = (self.height + 15) / 16;
+        ctx.dispatch(group_count_x, group_count_y, 1);
+    }
 }

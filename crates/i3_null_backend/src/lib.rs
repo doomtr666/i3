@@ -1,6 +1,7 @@
 use i3_gfx::graph::backend::{
-    BackendBuffer, BackendImage, PassContext, RenderBackend, RenderBackendInternal,
+    BackendBuffer, BackendImage, PassContext, PassDescriptor, RenderBackend, RenderBackendInternal,
 };
+use i3_gfx::graph::pass::RenderPass;
 use std::collections::HashSet;
 use thiserror::Error;
 use tracing::{error, info};
@@ -197,11 +198,7 @@ impl RenderBackendInternal for NullBackend {
         Ok(0)
     }
 
-    fn begin_pass(
-        &mut self,
-        desc: i3_gfx::graph::backend::PassDescriptor,
-        f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
-    ) -> u64 {
+    fn begin_pass(&mut self, desc: PassDescriptor<'_>, pass: &dyn RenderPass) -> u64 {
         info!(name = %desc.name, "Beginning null pass");
         let mut ctx = NullPassContext::new(
             &desc.name,
@@ -210,7 +207,7 @@ impl RenderBackendInternal for NullBackend {
             &self.allocated_pipelines,
             &self.image_map,
         );
-        f(&mut ctx);
+        pass.execute(&mut ctx);
         0
     }
 
@@ -382,13 +379,13 @@ impl<'a> PassContext for NullPassContext<'a> {
         );
     }
 
-    fn push_constants(
+    fn push_bytes(
         &mut self,
         _stages: i3_gfx::graph::pipeline::ShaderStageFlags,
         _offset: u32,
         _data: &[u8],
     ) {
-        info!(pass = %self.pass_name, "PUSH_CONSTANTS");
+        info!(pass = %self.pass_name, "PUSH_BYTES");
     }
 
     fn dispatch(&mut self, x: u32, y: u32, z: u32) {

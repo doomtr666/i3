@@ -13,21 +13,29 @@ pub struct AverageLuminancePushConstants {
     pub pad2: u32,
 }
 
-pub fn record_average_luminance_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    histogram_buffer: BufferHandle,
-    exposure_buffer: BufferHandle,
-    push_constants: &AverageLuminancePushConstants,
-) {
-    let pc = *push_constants;
+/// Average luminance pass struct implementing the RenderPass trait.
+pub struct AverageLuminancePass {
+    pub pipeline: PipelineHandle,
+    pub histogram_buffer: BufferHandle,
+    pub exposure_buffer: BufferHandle,
+    pub push_constants: AverageLuminancePushConstants,
+}
 
-    builder.add_node("AverageLuminancePass", move |builder| {
-        builder.bind_pipeline(pipeline);
+impl RenderPass for AverageLuminancePass {
+    fn name(&self) -> &str {
+        "AverageLuminancePass"
+    }
+
+    fn domain(&self) -> PassDomain {
+        PassDomain::Compute
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.bind_pipeline(self.pipeline);
 
         // Read histogram, read/write exposure
-        builder.read_buffer(histogram_buffer, ResourceUsage::SHADER_READ);
-        builder.write_buffer(exposure_buffer, ResourceUsage::SHADER_WRITE);
+        builder.read_buffer(self.histogram_buffer, ResourceUsage::SHADER_READ);
+        builder.write_buffer(self.exposure_buffer, ResourceUsage::SHADER_WRITE);
 
         builder.bind_descriptor_set(
             0,
@@ -37,7 +45,7 @@ pub fn record_average_luminance_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: histogram_buffer,
+                        buffer: self.histogram_buffer,
                         offset: 0,
                         range: 0,
                     }),
@@ -48,7 +56,7 @@ pub fn record_average_luminance_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: exposure_buffer,
+                        buffer: self.exposure_buffer,
                         offset: 0,
                         range: 0,
                     }),
@@ -56,18 +64,12 @@ pub fn record_average_luminance_pass(
                 },
             ],
         );
+    }
 
-        move |ctx: &mut dyn PassContext| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &pc as *const _ as *const u8,
-                    std::mem::size_of::<AverageLuminancePushConstants>(),
-                )
-            };
-            ctx.push_constants(ShaderStageFlags::Compute, 0, pc_bytes);
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_constants);
 
-            // Only 1 workgroup needed to process the 256-bin histogram
-            ctx.dispatch(1, 1, 1);
-        }
-    });
+        // Only 1 workgroup needed to process the 256-bin histogram
+        ctx.dispatch(1, 1, 1);
+    }
 }

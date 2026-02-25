@@ -1,4 +1,4 @@
-use crate::graph::backend::{DescriptorWrite, PassContext};
+use crate::graph::backend::{DescriptorWrite, PassContext, RenderBackend};
 use crate::graph::types::{
     BufferHandle, ImageDesc, ImageHandle, PassDomain, ResourceUsage, WindowHandle,
 };
@@ -108,22 +108,73 @@ impl<'a> PassBuilder<'a> {
     }
 
     // --- Tree Construction ---
-    /// Adds a sub-node to the current node.
-    pub fn add_node<F, E>(&mut self, name: &str, setup: F)
-    where
-        F: FnOnce(&mut PassBuilder) -> E + 'static,
-        E: FnOnce(&mut dyn PassContext) + Send + Sync + 'static,
-    {
-        // Wrap the setup closure to handle the PassBuilder struct
-        let wrapped_setup = Box::new(move |inner_builder: &mut dyn InternalPassBuilder| {
-            let mut builder = PassBuilder {
-                inner: inner_builder,
-            };
-            let execute = setup(&mut builder);
-            Box::new(execute) as Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>
-        });
+    /// Adds a structural node (Pass or Group) to the frame graph.
+    pub fn add_node(&mut self, node: Box<dyn RenderPass>) {
+        self.inner.add_node_erased(node);
+    }
 
-        self.inner.add_node_erased(name, wrapped_setup);
+    /// Convenience method to add a render pass without explicit boxing.
+    pub fn add_pass<P: RenderPass + 'static>(&mut self, pass: P) {
+        self.add_node(Box::new(pass));
+    }
+
+    /// Helper to add a pass using two closures (record and execute).
+    pub fn add_pass_from_closures<R, E>(&mut self, name: &str, record: R, execute: E)
+    where
+        R: FnMut(&mut PassBuilder) + Send + Sync + 'static,
+        E: Fn(&mut dyn PassContext) + Send + Sync + 'static,
+    {
+        self.add_pass(SimplePass {
+            name: name.to_string(),
+            record,
+            execute,
+        });
+    }
+}
+
+/// A Node in the Frame Graph (Pass or Group).
+/// Users implement this trait to define rendering logic.
+pub trait RenderPass: Any + Send + Sync {
+    /// Name of the pass (used for debugging/profiling).
+    fn name(&self) -> &str;
+
+    /// Optional domain (Defaults to Graphics).
+    fn domain(&self) -> PassDomain {
+        PassDomain::Graphics
+    }
+
+    /// Called once after the graph is built, for creating pipelines/resources.
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {}
+
+    /// Declare resource intents and symbols.
+    fn record(&mut self, builder: &mut PassBuilder);
+
+    /// Record GPU commands (optional for purely grouping nodes).
+    fn execute(&self, _ctx: &mut dyn PassContext) {}
+}
+
+/// A simple pass implementation that uses closures.
+pub struct SimplePass<R, E> {
+    pub name: String,
+    pub record: R,
+    pub execute: E,
+}
+
+impl<R, E> RenderPass for SimplePass<R, E>
+where
+    R: FnMut(&mut PassBuilder) + Send + Sync + 'static,
+    E: Fn(&mut dyn PassContext) + Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        (self.record)(builder);
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        (self.execute)(ctx);
     }
 }
 
@@ -168,20 +219,6 @@ pub(crate) trait InternalPassBuilder {
         handle: crate::graph::types::BufferHandle,
         physical: crate::graph::backend::BackendBuffer,
     );
-    fn add_node_erased(
-        &mut self,
-        name: &str,
-        setup: Box<
-            dyn FnOnce(
-                &mut dyn InternalPassBuilder,
-            ) -> Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
-        >,
-    );
-}
 
-/// A Node in the Frame Graph (either a Pass or a Group).
-/// (Internal trait used by the compiler to manage the tree).
-pub trait Node: Send + Sync {
-    fn name(&self) -> &str;
-    fn domain(&self) -> PassDomain;
+    fn add_node_erased(&mut self, node: Box<dyn RenderPass>);
 }

@@ -26,6 +26,26 @@ pub struct CommonData {
     pub light_count: u32,
 }
 
+/// Helper pass to clear a buffer.
+struct ClearBufferPass {
+    pub name: String,
+    pub buffer: BufferHandle,
+}
+
+impl RenderPass for ClearBufferPass {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.write_buffer(self.buffer, ResourceUsage::TRANSFER_WRITE);
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.clear_buffer(self.buffer, 0);
+    }
+}
+
 /// The default render graph for deferred clustered shading.
 ///
 /// Owns pipelines and samplers. Geometry comes from the SceneProvider.
@@ -333,10 +353,7 @@ impl DefaultRenderGraph {
         }
 
         if !gpu_lights.is_empty() {
-            let size = std::mem::size_of::<GpuLightData>() * gpu_lights.len();
-            let data =
-                unsafe { std::slice::from_raw_parts(gpu_lights.as_ptr() as *const u8, size) };
-            let _ = backend.upload_buffer(self.gpu_buffers.light_buffer, data, 0);
+            let _ = backend.upload_buffer_slice(self.gpu_buffers.light_buffer, &gpu_lights, 0);
         }
     }
 
@@ -379,18 +396,15 @@ impl DefaultRenderGraph {
         );
 
         // Clear the first u32 of cluster_light_indices
-        builder.add_node("ClearClusterIndices", move |b| {
-            b.write_buffer(cluster_light_indices, ResourceUsage::TRANSFER_WRITE);
-            move |ctx| {
-                ctx.clear_buffer(cluster_light_indices, 0);
-            }
+        builder.add_pass(ClearBufferPass {
+            name: "ClearClusterIndices".to_string(),
+            buffer: cluster_light_indices,
         });
 
-        crate::passes::cluster_build::record_cluster_build_pass(
-            builder,
-            self.cluster_build_pipeline,
+        builder.add_pass(crate::passes::cluster_build::ClusterBuildPass {
+            pipeline: self.cluster_build_pipeline,
             cluster_aabbs,
-            &crate::passes::cluster_build::ClusterBuildPushConstants {
+            push_constants: crate::passes::cluster_build::ClusterBuildPushConstants {
                 inv_projection: common.inv_projection,
                 grid_size: [grid_x, grid_y, grid_z],
                 near_plane: common.near_plane,
@@ -398,22 +412,21 @@ impl DefaultRenderGraph {
                 screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
                 pad: 0,
             },
-        );
+        });
 
         // Light Cull Pass
-        crate::passes::light_cull::record_light_cull_pass(
-            builder,
-            self.light_cull_pipeline,
+        builder.add_pass(crate::passes::light_cull::LightCullPass {
+            pipeline: self.light_cull_pipeline,
             cluster_aabbs,
-            light_buffer,
+            lights: light_buffer,
             cluster_grid,
             cluster_light_indices,
-            &crate::passes::light_cull::LightCullPushConstants {
+            push_constants: crate::passes::light_cull::LightCullPushConstants {
                 view_matrix: common.view,
                 grid_size: [grid_x, grid_y, grid_z],
                 light_count: common.light_count,
             },
-        );
+        });
 
         (
             cluster_aabbs,
@@ -485,16 +498,15 @@ impl DefaultRenderGraph {
             },
         );
 
-        crate::passes::gbuffer::record_gbuffer_pass(
-            builder,
-            self.gbuffer_pipeline,
-            depth,
-            albedo,
-            normal,
-            roughmetal,
-            emissive,
-            draw_commands,
-        );
+        builder.add_pass(crate::passes::gbuffer::GBufferPass {
+            pipeline: self.gbuffer_pipeline,
+            depth_buffer: depth,
+            gbuffer_albedo: albedo,
+            gbuffer_normal: normal,
+            gbuffer_roughmetal: roughmetal,
+            gbuffer_emissive: emissive,
+            draw_commands: draw_commands.to_vec(),
+        });
 
         (albedo, normal, roughmetal, emissive, depth)
     }
@@ -592,12 +604,11 @@ impl DefaultRenderGraph {
             );
 
             // 3. Sky Pass
-            crate::passes::sky::record_sky_pass(
-                builder,
-                self.sky_pipeline,
+            builder.add_pass(crate::passes::sky::SkyPass {
+                pipeline: self.sky_pipeline,
                 hdr_target,
                 depth_buffer,
-                &crate::passes::sky::SkyPushConstants {
+                push_constants: crate::passes::sky::SkyPushConstants {
                     inv_view_proj: view_projection
                         .try_inverse()
                         .unwrap_or_else(nalgebra_glm::identity),
@@ -608,7 +619,7 @@ impl DefaultRenderGraph {
                     sun_color: sun_col,
                     _pad1: 0.0,
                 },
-            );
+            });
 
             let exposure_buffer = builder.declare_buffer_history(
                 "ExposureBuffer",
@@ -640,21 +651,20 @@ impl DefaultRenderGraph {
                 };
 
                 // 4. Deferred Shading
-                crate::passes::deferred_resolve::record_deferred_resolve_pass(
-                    builder,
-                    self.deferred_resolve_pipeline,
+                builder.add_pass(crate::passes::deferred_resolve::DeferredResolvePass {
+                    pipeline: self.deferred_resolve_pipeline,
                     hdr_target,
                     gbuffer_albedo,
                     gbuffer_normal,
                     gbuffer_roughmetal,
                     gbuffer_emissive,
                     depth_buffer,
-                    light_buffer,
+                    lights: light_buffer,
                     cluster_grid,
                     cluster_light_indices,
                     sampler,
                     exposure_buffer,
-                    &crate::passes::deferred_resolve::DeferredResolvePushConstants {
+                    push_constants: crate::passes::deferred_resolve::DeferredResolvePushConstants {
                         inv_view_proj: view_projection
                             .try_inverse()
                             .unwrap_or_else(nalgebra_glm::identity),
@@ -667,7 +677,7 @@ impl DefaultRenderGraph {
                         debug_mode,
                         _pad: 0,
                     },
-                );
+                });
 
                 // 5. Post Processing
                 self.record_post_process(
@@ -679,9 +689,8 @@ impl DefaultRenderGraph {
                     dt,
                 );
             } else {
-                crate::passes::debug_viz::record_debug_viz_pass(
-                    builder,
-                    self.debug_viz_pipeline,
+                builder.add_pass(crate::passes::debug_viz::DebugVizPass {
+                    pipeline: self.debug_viz_pipeline,
                     backbuffer,
                     gbuffer_albedo,
                     gbuffer_normal,
@@ -689,7 +698,7 @@ impl DefaultRenderGraph {
                     gbuffer_emissive,
                     sampler,
                     channel,
-                );
+                });
             }
         });
     }
@@ -705,35 +714,31 @@ impl DefaultRenderGraph {
     ) {
         let common = *builder.consume::<CommonData>("Common");
 
-        builder.add_node("ClearHistogram", move |builder| {
-            builder.write_buffer(histogram_buffer, ResourceUsage::TRANSFER_WRITE);
-            move |ctx| {
-                ctx.clear_buffer(histogram_buffer, 0);
-            }
+        builder.add_pass(ClearBufferPass {
+            name: "ClearHistogram".to_string(),
+            buffer: histogram_buffer,
         });
 
-        crate::passes::histogram_build::record_histogram_build_pass(
-            builder,
-            self.histogram_build_pipeline,
-            hdr_target,
+        builder.add_pass(crate::passes::histogram_build::HistogramBuildPass {
+            pipeline: self.histogram_build_pipeline,
+            hdr_image: hdr_target,
             histogram_buffer,
             exposure_buffer,
-            common.screen_width,
-            common.screen_height,
-            &crate::passes::histogram_build::HistogramPushConstants {
+            width: common.screen_width,
+            height: common.screen_height,
+            push_constants: crate::passes::histogram_build::HistogramPushConstants {
                 min_log_lum: -10.0,
                 max_log_lum: 10.0,
                 time_delta: dt,
                 pad: 0,
             },
-        );
+        });
 
-        crate::passes::average_luminance::record_average_luminance_pass(
-            builder,
-            self.average_luminance_pipeline,
+        builder.add_pass(crate::passes::average_luminance::AverageLuminancePass {
+            pipeline: self.average_luminance_pipeline,
             histogram_buffer,
             exposure_buffer,
-            &crate::passes::average_luminance::AverageLuminancePushConstants {
+            push_constants: crate::passes::average_luminance::AverageLuminancePushConstants {
                 min_log_lum: -10.0,
                 max_log_lum: 10.0,
                 time_delta: dt,
@@ -743,21 +748,20 @@ impl DefaultRenderGraph {
                 pad1: 0,
                 pad2: 0,
             },
-        );
+        });
 
-        crate::passes::tonemap::record_tonemap_pass(
-            builder,
-            self.tonemap_pipeline,
+        builder.add_pass(crate::passes::tonemap::TonemapPass {
+            pipeline: self.tonemap_pipeline,
             backbuffer,
             hdr_target,
             exposure_buffer,
-            self.sampler,
-            &crate::passes::tonemap::ToneMapPushConstants {
+            sampler: self.sampler,
+            push_constants: crate::passes::tonemap::ToneMapPushConstants {
                 debug_mode: 0,
                 pad0: 0,
                 pad1: 0,
                 pad2: 0,
             },
-        );
+        });
     }
 }

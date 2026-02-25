@@ -15,40 +15,79 @@ pub struct DeferredResolvePushConstants {
     pub _pad: u32,
 }
 
-pub fn record_deferred_resolve_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    hdr_target: ImageHandle,
-    gbuffer_albedo: ImageHandle,
-    gbuffer_normal: ImageHandle,
-    gbuffer_roughmetal: ImageHandle,
-    gbuffer_emissive: ImageHandle,
-    depth_buffer: ImageHandle,
-    lights: BufferHandle,
-    cluster_grid: BufferHandle,
-    cluster_light_indices: BufferHandle,
-    sampler: SamplerHandle,
-    exposure_buffer: BufferHandle,
-    push_constants: &DeferredResolvePushConstants,
-) {
-    let pc = *push_constants;
-    builder.add_node("DeferredResolvePass", move |builder| {
-        builder.bind_pipeline(pipeline);
+/// Deferred resolve pass struct implementing the RenderPass trait.
+pub struct DeferredResolvePass {
+    pub pipeline: PipelineHandle,
+    pub hdr_target: ImageHandle,
+    pub gbuffer_albedo: ImageHandle,
+    pub gbuffer_normal: ImageHandle,
+    pub gbuffer_roughmetal: ImageHandle,
+    pub gbuffer_emissive: ImageHandle,
+    pub depth_buffer: ImageHandle,
+    pub lights: BufferHandle,
+    pub cluster_grid: BufferHandle,
+    pub cluster_light_indices: BufferHandle,
+    pub sampler: SamplerHandle,
+    pub exposure_buffer: BufferHandle,
+    pub push_constants: DeferredResolvePushConstants,
+}
+
+impl DeferredResolvePass {
+    pub fn new(
+        pipeline: PipelineHandle,
+        hdr_target: ImageHandle,
+        gbuffer_albedo: ImageHandle,
+        gbuffer_normal: ImageHandle,
+        gbuffer_roughmetal: ImageHandle,
+        gbuffer_emissive: ImageHandle,
+        depth_buffer: ImageHandle,
+        lights: BufferHandle,
+        cluster_grid: BufferHandle,
+        cluster_light_indices: BufferHandle,
+        sampler: SamplerHandle,
+        exposure_buffer: BufferHandle,
+        push_constants: DeferredResolvePushConstants,
+    ) -> Self {
+        Self {
+            pipeline,
+            hdr_target,
+            gbuffer_albedo,
+            gbuffer_normal,
+            gbuffer_roughmetal,
+            gbuffer_emissive,
+            depth_buffer,
+            lights,
+            cluster_grid,
+            cluster_light_indices,
+            sampler,
+            exposure_buffer,
+            push_constants,
+        }
+    }
+}
+
+impl RenderPass for DeferredResolvePass {
+    fn name(&self) -> &str {
+        "DeferredResolvePass"
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.bind_pipeline(self.pipeline);
 
         // Read GBuffers and buffers
-        builder.read_image(gbuffer_albedo, ResourceUsage::SHADER_READ);
-        builder.read_image(gbuffer_normal, ResourceUsage::SHADER_READ);
-        builder.read_image(gbuffer_roughmetal, ResourceUsage::SHADER_READ);
-        builder.read_image(gbuffer_emissive, ResourceUsage::SHADER_READ);
-        builder.read_image(depth_buffer, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_emissive, ResourceUsage::SHADER_READ);
+        builder.read_image(self.depth_buffer, ResourceUsage::SHADER_READ);
 
-        builder.read_buffer(lights, ResourceUsage::SHADER_READ);
-        builder.read_buffer(cluster_grid, ResourceUsage::SHADER_READ);
-        builder.read_buffer(cluster_light_indices, ResourceUsage::SHADER_READ);
-        builder.read_buffer(exposure_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.lights, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.cluster_grid, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.cluster_light_indices, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.exposure_buffer, ResourceUsage::SHADER_READ);
 
         // Write to HDR target
-        builder.write_image(hdr_target, ResourceUsage::COLOR_ATTACHMENT);
+        builder.write_image(self.hdr_target, ResourceUsage::COLOR_ATTACHMENT);
 
         builder.bind_descriptor_set(
             0,
@@ -59,9 +98,9 @@ pub fn record_deferred_resolve_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_albedo,
+                        image: self.gbuffer_albedo,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -70,9 +109,9 @@ pub fn record_deferred_resolve_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_normal,
+                        image: self.gbuffer_normal,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -81,9 +120,9 @@ pub fn record_deferred_resolve_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_roughmetal,
+                        image: self.gbuffer_roughmetal,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -92,9 +131,9 @@ pub fn record_deferred_resolve_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_emissive,
+                        image: self.gbuffer_emissive,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -103,9 +142,9 @@ pub fn record_deferred_resolve_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: depth_buffer,
+                        image: self.depth_buffer,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -113,7 +152,7 @@ pub fn record_deferred_resolve_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: lights,
+                        buffer: self.lights,
                         offset: 0,
                         range: 0,
                     }),
@@ -124,7 +163,7 @@ pub fn record_deferred_resolve_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: cluster_grid,
+                        buffer: self.cluster_grid,
                         offset: 0,
                         range: 0,
                     }),
@@ -135,7 +174,7 @@ pub fn record_deferred_resolve_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: cluster_light_indices,
+                        buffer: self.cluster_light_indices,
                         offset: 0,
                         range: 0,
                     }),
@@ -146,7 +185,7 @@ pub fn record_deferred_resolve_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: exposure_buffer,
+                        buffer: self.exposure_buffer,
                         offset: 0,
                         range: 0,
                     }),
@@ -154,20 +193,14 @@ pub fn record_deferred_resolve_pass(
                 },
             ],
         );
+    }
 
-        move |ctx: &mut dyn PassContext| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &pc as *const _ as *const u8,
-                    std::mem::size_of::<DeferredResolvePushConstants>(),
-                )
-            };
-            ctx.push_constants(
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                pc_bytes,
-            );
-            ctx.draw(3, 0); // Fullscreen triangle
-        }
-    });
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(
+            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+            0,
+            &self.push_constants,
+        );
+        ctx.draw(3, 0); // Fullscreen triangle
+    }
 }

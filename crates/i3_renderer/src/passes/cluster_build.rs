@@ -12,47 +12,48 @@ pub struct ClusterBuildPushConstants {
     pub pad: u32,
 }
 
-pub fn record_cluster_build_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    cluster_aabbs: BufferHandle,
-    push_constants: &ClusterBuildPushConstants,
-) {
-    let pc = *push_constants;
-    builder.add_node("ClusterBuild", move |pass_node| {
-        pass_node.write_buffer(cluster_aabbs, ResourceUsage::SHADER_WRITE);
-        pass_node.bind_pipeline(pipeline);
-        pass_node.bind_descriptor_set(
+/// Cluster build pass struct implementing the RenderPass trait.
+pub struct ClusterBuildPass {
+    pub pipeline: PipelineHandle,
+    pub cluster_aabbs: BufferHandle,
+    pub push_constants: ClusterBuildPushConstants,
+}
+
+impl RenderPass for ClusterBuildPass {
+    fn name(&self) -> &str {
+        "ClusterBuild"
+    }
+
+    fn domain(&self) -> PassDomain {
+        PassDomain::Compute
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.write_buffer(self.cluster_aabbs, ResourceUsage::SHADER_WRITE);
+        builder.bind_pipeline(self.pipeline);
+        builder.bind_descriptor_set(
             0,
             vec![i3_gfx::graph::backend::DescriptorWrite {
                 binding: 0,
                 array_element: 0,
                 descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
                 buffer_info: Some(i3_gfx::graph::backend::DescriptorBufferInfo {
-                    buffer: cluster_aabbs,
+                    buffer: self.cluster_aabbs,
                     offset: 0,
                     range: 0,
                 }),
                 image_info: None,
             }],
         );
+    }
 
-        move |ctx| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &pc as *const _ as *const u8,
-                    std::mem::size_of::<ClusterBuildPushConstants>(),
-                )
-            };
-            ctx.push_constants(
-                i3_gfx::graph::pipeline::ShaderStageFlags::Compute,
-                0,
-                pc_bytes,
-            );
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_constants);
 
-            // Our shader uses [numthreads(1, 1, 1)] for now. Wait, I wrote [numthreads(8, 8, 1)]? No, [numthreads(1, 1, 1)]
-            // I should just dispatch one thread per cluster.
-            ctx.dispatch(pc.grid_size[0], pc.grid_size[1], pc.grid_size[2]);
-        }
-    });
+        ctx.dispatch(
+            self.push_constants.grid_size[0],
+            self.push_constants.grid_size[1],
+            self.push_constants.grid_size[2],
+        );
+    }
 }

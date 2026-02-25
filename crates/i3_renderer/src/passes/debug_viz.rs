@@ -28,31 +28,37 @@ pub struct DebugVizPushConstants {
 ///
 /// Draws a fullscreen triangle that samples the selected GBuffer channel
 /// and writes to the backbuffer.
-pub fn record_debug_viz_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    backbuffer: ImageHandle,
-    gbuffer_albedo: ImageHandle,
-    gbuffer_normal: ImageHandle,
-    gbuffer_roughmetal: ImageHandle,
-    gbuffer_emissive: ImageHandle,
-    sampler: SamplerHandle,
-    channel: DebugChannel,
-) {
-    builder.add_node("DebugVizPass", move |sub| {
-        sub.bind_pipeline(pipeline);
+/// Debug visualization pass struct implementing the RenderPass trait.
+pub struct DebugVizPass {
+    pub pipeline: PipelineHandle,
+    pub backbuffer: ImageHandle,
+    pub gbuffer_albedo: ImageHandle,
+    pub gbuffer_normal: ImageHandle,
+    pub gbuffer_roughmetal: ImageHandle,
+    pub gbuffer_emissive: ImageHandle,
+    pub sampler: SamplerHandle,
+    pub channel: DebugChannel,
+}
+
+impl RenderPass for DebugVizPass {
+    fn name(&self) -> &str {
+        "DebugVizPass"
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.bind_pipeline(self.pipeline);
 
         // Read GBuffer targets
-        sub.read_image(gbuffer_albedo, ResourceUsage::SHADER_READ);
-        sub.read_image(gbuffer_normal, ResourceUsage::SHADER_READ);
-        sub.read_image(gbuffer_roughmetal, ResourceUsage::SHADER_READ);
-        sub.read_image(gbuffer_emissive, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_emissive, ResourceUsage::SHADER_READ);
 
         // Write to backbuffer
-        sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+        builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
 
         // Bind GBuffer textures via push descriptors
-        sub.bind_descriptor_set(
+        builder.bind_descriptor_set(
             0,
             vec![
                 DescriptorWrite {
@@ -61,9 +67,9 @@ pub fn record_debug_viz_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_albedo,
+                        image: self.gbuffer_albedo,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -72,9 +78,9 @@ pub fn record_debug_viz_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_normal,
+                        image: self.gbuffer_normal,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -83,9 +89,9 @@ pub fn record_debug_viz_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_roughmetal,
+                        image: self.gbuffer_roughmetal,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -94,33 +100,26 @@ pub fn record_debug_viz_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: gbuffer_emissive,
+                        image: self.gbuffer_emissive,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
             ],
         );
+    }
 
+    fn execute(&self, ctx: &mut dyn PassContext) {
         let push = DebugVizPushConstants {
-            channel: channel as u32,
+            channel: self.channel as u32,
             _pad: [0; 3],
         };
-
-        move |ctx: &mut dyn PassContext| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &push as *const DebugVizPushConstants as *const u8,
-                    std::mem::size_of::<DebugVizPushConstants>(),
-                )
-            };
-            ctx.push_constants(
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                pc_bytes,
-            );
-            ctx.draw(3, 0); // Fullscreen triangle
-            ctx.present(backbuffer);
-        }
-    });
+        ctx.push_constant_data(
+            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+            0,
+            &push,
+        );
+        ctx.draw(3, 0); // Fullscreen triangle
+        ctx.present(self.backbuffer);
+    }
 }

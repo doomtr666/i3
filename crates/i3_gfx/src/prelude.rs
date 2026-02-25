@@ -11,11 +11,11 @@ pub use crate::graph::{
     backend::{
         BackendBuffer, BackendImage, BackendPipeline, DescriptorBufferInfo, DescriptorImageInfo,
         DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, DeviceInfo, DeviceType, Event,
-        KeyCode, PassContext, RenderBackend, RenderBackendInternal, SamplerHandle, SwapchainConfig,
-        WindowDesc,
+        KeyCode, PassContext, PassContextExt, RenderBackend, RenderBackendExt,
+        RenderBackendInternal, SamplerHandle, SwapchainConfig, WindowDesc,
     },
     compiler::{CompiledGraph, FrameGraph},
-    pass::{Node, PassBuilder},
+    pass::{PassBuilder, RenderPass},
     pipeline::{
         Binding, BindingType, BlendFactor, BlendOp, BlendState, ColorComponentFlags, CompareOp,
         ComputePipelineCreateInfo, CullMode, DepthStencilState, FrontFace,

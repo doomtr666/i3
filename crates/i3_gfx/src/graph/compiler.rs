@@ -1,8 +1,7 @@
 use crate::graph::backend::{
-    BackendBuffer, BackendImage, DescriptorWrite, PassContext, PassDescriptor,
-    RenderBackendInternal,
+    BackendBuffer, BackendImage, DescriptorWrite, PassDescriptor, RenderBackendInternal,
 };
-use crate::graph::pass::{InternalPassBuilder, Node, PassBuilder};
+use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::types::*;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -65,7 +64,7 @@ pub struct NodeStorage {
     pub domain: PassDomain,
     pub symbols: SymbolTable,
     pub children: Vec<NodeStorage>,
-    pub execute: Option<Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>>,
+    pub pass: Box<dyn RenderPass>,
 
     pub pipeline: Option<PipelineHandle>,
 
@@ -88,7 +87,6 @@ impl std::fmt::Debug for NodeStorage {
             .field("domain", &self.domain)
             .field("symbols", &self.symbols)
             .field("children", &self.children)
-            .field("has_execute", &self.execute.is_some())
             .field("image_reads", &self.image_reads)
             .field("image_writes", &self.image_writes)
             .field("external_images", &self.external_images)
@@ -98,13 +96,14 @@ impl std::fmt::Debug for NodeStorage {
     }
 }
 
-impl Node for NodeStorage {
+// NodeStorage no longer implements the old Node trait as RenderPass replaces it.
+
+struct PlaceholderPass;
+impl RenderPass for PlaceholderPass {
     fn name(&self) -> &str {
-        &self.name
+        "placeholder"
     }
-    fn domain(&self) -> PassDomain {
-        self.domain
-    }
+    fn record(&mut self, _: &mut PassBuilder) {}
 }
 
 /// Implementation of the internal PassBuilder trait.
@@ -296,21 +295,16 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         actual_handle
     }
 
-    fn add_node_erased(
-        &mut self,
-        name: &str,
-        setup: Box<
-            dyn FnOnce(
-                &mut dyn InternalPassBuilder,
-            ) -> Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
-        >,
-    ) {
+    fn add_node_erased(&mut self, node: Box<dyn RenderPass>) {
+        tracing::trace!(name = node.name(), "Adding sub-node");
+
         let mut child_storage = NodeStorage {
-            name: name.to_string(),
-            domain: PassDomain::Graphics,
+            name: node.name().to_string(),
+            domain: node.domain(),
             symbols: SymbolTable::new(),
             children: Vec::new(),
-            execute: None,
+            pass: node, // Temporary take, will record into it
+
             pipeline: None,
             image_reads: Vec::new(),
             image_writes: Vec::new(),
@@ -322,15 +316,25 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             descriptor_sets: Vec::new(),
         };
 
+        // Put it back but we need to record first
+        let mut pass = std::mem::replace(
+            &mut child_storage.pass,
+            Box::new(PlaceholderPass), // Temporary placeholder
+        );
+
         {
-            let mut child_recorder = PassRecorder {
+            let mut sub_recorder = PassRecorder {
                 storage: &mut child_storage,
                 parent_symbols: Some(&self.storage.symbols),
             };
-
-            let execute = setup(&mut child_recorder);
-            child_storage.execute = Some(execute);
+            let mut builder = PassBuilder {
+                inner: &mut sub_recorder,
+            };
+            pass.record(&mut builder);
         }
+
+        // Put the real pass back
+        child_storage.pass = pass;
 
         // Infer domain for simple utility passes
         if child_storage.pipeline.is_none()
@@ -354,10 +358,11 @@ impl FrameGraph {
         Self {
             root: NodeStorage {
                 name: "root".to_string(),
-                domain: PassDomain::Cpu,
+                domain: PassDomain::Graphics,
                 symbols: SymbolTable::new(),
                 children: Vec::new(),
-                execute: None,
+                pass: Box::new(PlaceholderPass),
+
                 pipeline: None,
                 image_reads: Vec::new(),
                 image_writes: Vec::new(),
@@ -398,7 +403,7 @@ pub struct CompiledGraph {
 
 impl CompiledGraph {
     pub fn execute(
-        self,
+        mut self,
         backend: &mut dyn RenderBackendInternal,
         temporal_registry: Option<&mut crate::graph::temporal::TemporalRegistry>,
     ) -> Result<Option<u64>, GraphError> {
@@ -421,7 +426,9 @@ impl CompiledGraph {
         backend.begin_frame();
         // Use a simple Vec for inactive images - usually 0 or 1, much faster than HashSet
         let mut inactive_images = Vec::with_capacity(2);
-        let result = Self::execute_node_recursive(self._root, backend, &mut inactive_images);
+        // Create transient resources and resolve symbols
+        let last_sem =
+            Self::execute_node_recursive(&mut self._root, backend, &mut inactive_images)?;
 
         // Final Submission (Phase 0: pure submission of recorded commands)
         let _ = backend
@@ -430,7 +437,7 @@ impl CompiledGraph {
 
         backend.end_frame();
 
-        // 3. Cleanup Transient Resources
+        // Release transient resources
         for image in transient_images {
             backend.release_transient_image(image);
         }
@@ -438,7 +445,7 @@ impl CompiledGraph {
             backend.release_transient_buffer(buffer);
         }
 
-        result
+        Ok(last_sem)
     }
 
     fn resolve_resources_recursive(
@@ -523,19 +530,19 @@ impl CompiledGraph {
     }
 
     fn execute_node_recursive(
-        mut node: NodeStorage,
+        node: &mut NodeStorage,
         backend: &mut dyn RenderBackendInternal,
         inactive_images: &mut Vec<u64>,
     ) -> Result<Option<u64>, GraphError> {
         // 0. Process Swapchain Requests (Automatic Acquire)
-        for (handle, window) in node.swapchain_requests {
+        for (handle, window) in &node.swapchain_requests {
             match backend
-                .acquire_swapchain_image(window)
+                .acquire_swapchain_image(*window)
                 .map_err(|e| GraphError::BackendError(e))?
             {
                 Some((physical, _sem, _idx)) => {
                     // Register automatically
-                    backend.register_external_image(handle, physical);
+                    backend.register_external_image(*handle, physical);
                 }
                 None => {
                     // Mark this handle as inactive (minimized)
@@ -546,17 +553,17 @@ impl CompiledGraph {
         }
 
         // Register external resources first
-        for (virtual_handle, physical) in node.external_images {
-            backend.register_external_image(virtual_handle, physical);
+        for (virtual_handle, physical) in &node.external_images {
+            backend.register_external_image(*virtual_handle, *physical);
         }
-        for (virtual_handle, physical) in node.external_buffers {
-            backend.register_external_buffer(virtual_handle, physical);
+        for (virtual_handle, physical) in &node.external_buffers {
+            backend.register_external_buffer(*virtual_handle, *physical);
         }
 
         let mut last_sem = None;
 
-        // If this node has an execute closure, it's a pass
-        if let Some(execute) = node.execute.take() {
+        // Execute this node
+        {
             // Check if any write target is inactive first to avoid heavy descriptor allocation
             let is_inactive = if inactive_images.is_empty() {
                 false
@@ -578,14 +585,14 @@ impl CompiledGraph {
                     descriptor_sets: &node.descriptor_sets,
                 };
                 tracing::debug!(pass = %desc.name, writes = ?desc.image_writes.len(), "Executing pass");
-                last_sem = Some(backend.begin_pass(desc, execute));
+                last_sem = Some(backend.begin_pass(desc, node.pass.as_ref()));
             } else {
                 tracing::debug!(pass = %node.name, "Skipping pass (targets inactive image)");
             }
         }
 
         // Execute children
-        for child in node.children {
+        for child in &mut node.children {
             if let Some(sem) = Self::execute_node_recursive(child, backend, inactive_images)? {
                 last_sem = Some(sem);
             }

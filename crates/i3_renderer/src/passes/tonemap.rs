@@ -9,25 +9,50 @@ pub struct ToneMapPushConstants {
     pub pad2: u32,
 }
 
-pub fn record_tonemap_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    backbuffer: ImageHandle,
-    hdr_target: ImageHandle,
-    exposure_buffer: BufferHandle,
-    sampler: SamplerHandle,
-    push_constants: &ToneMapPushConstants,
-) {
-    let pc = *push_constants;
-    builder.add_node("ToneMapPass", move |builder| {
-        builder.bind_pipeline(pipeline);
+/// Tonemap pass struct implementing the RenderPass trait.
+pub struct TonemapPass {
+    pub pipeline: PipelineHandle,
+    pub backbuffer: ImageHandle,
+    pub hdr_target: ImageHandle,
+    pub exposure_buffer: BufferHandle,
+    pub sampler: SamplerHandle,
+    pub push_constants: ToneMapPushConstants,
+}
+
+impl TonemapPass {
+    pub fn new(
+        pipeline: PipelineHandle,
+        backbuffer: ImageHandle,
+        hdr_target: ImageHandle,
+        exposure_buffer: BufferHandle,
+        sampler: SamplerHandle,
+        push_constants: ToneMapPushConstants,
+    ) -> Self {
+        Self {
+            pipeline,
+            backbuffer,
+            hdr_target,
+            exposure_buffer,
+            sampler,
+            push_constants,
+        }
+    }
+}
+
+impl RenderPass for TonemapPass {
+    fn name(&self) -> &str {
+        "ToneMapPass"
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.bind_pipeline(self.pipeline);
 
         // Read HDR target & ExposureBuffer
-        builder.read_image(hdr_target, ResourceUsage::SHADER_READ);
-        builder.read_buffer(exposure_buffer, ResourceUsage::SHADER_READ);
+        builder.read_image(self.hdr_target, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.exposure_buffer, ResourceUsage::SHADER_READ);
 
         // Write to backbuffer
-        builder.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+        builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
 
         builder.bind_descriptor_set(
             0,
@@ -38,9 +63,9 @@ pub fn record_tonemap_pass(
                     descriptor_type: BindingType::CombinedImageSampler,
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
-                        image: hdr_target,
+                        image: self.hdr_target,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(sampler),
+                        sampler: Some(self.sampler),
                     }),
                 },
                 DescriptorWrite {
@@ -48,7 +73,7 @@ pub fn record_tonemap_pass(
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {
-                        buffer: exposure_buffer,
+                        buffer: self.exposure_buffer,
                         offset: 0,
                         range: 0,
                     }),
@@ -56,23 +81,17 @@ pub fn record_tonemap_pass(
                 },
             ],
         );
+    }
 
-        move |ctx: &mut dyn PassContext| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &pc as *const _ as *const u8,
-                    std::mem::size_of::<ToneMapPushConstants>(),
-                )
-            };
-            ctx.push_constants(
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                pc_bytes,
-            );
-            ctx.draw(3, 0); // Fullscreen triangle
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(
+            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+            0,
+            &self.push_constants,
+        );
+        ctx.draw(3, 0); // Fullscreen triangle
 
-            // This is the final pass targeting the backbuffer, so we must present it here.
-            ctx.present(backbuffer);
-        }
-    });
+        // This is the final pass targeting the backbuffer, so we must present it here.
+        ctx.present(self.backbuffer);
+    }
 }

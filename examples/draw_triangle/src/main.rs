@@ -24,15 +24,17 @@ impl ExampleApp for TriangleApp {
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
 
-            builder.add_node("MainPass", move |builder| {
-                builder.bind_pipeline(PipelineHandle(pipeline_id));
-                builder.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
-
-                move |ctx| {
+            builder.add_pass_from_closures(
+                "MainPass",
+                move |sub: &mut PassBuilder| {
+                    sub.bind_pipeline(PipelineHandle(pipeline_id));
+                    sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+                },
+                move |ctx: &mut dyn PassContext| {
                     ctx.draw(3, 0);
                     ctx.present(backbuffer);
-                }
-            });
+                },
+            );
         });
 
         let compiler = graph.compile();

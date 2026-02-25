@@ -9,24 +9,33 @@ pub struct LightCullPushConstants {
     pub light_count: u32,       // 4 bytes -> total 80 bytes
 }
 
-pub fn record_light_cull_pass(
-    builder: &mut PassBuilder,
-    pipeline: PipelineHandle,
-    cluster_aabbs: BufferHandle,
-    lights: BufferHandle,
-    cluster_grid: BufferHandle,
-    cluster_light_indices: BufferHandle,
-    push_constants: &LightCullPushConstants,
-) {
-    let pc = *push_constants;
-    builder.add_node("LightCull", move |pass_node| {
-        pass_node.read_buffer(cluster_aabbs, ResourceUsage::SHADER_READ);
-        pass_node.read_buffer(lights, ResourceUsage::SHADER_READ);
-        pass_node.write_buffer(cluster_grid, ResourceUsage::SHADER_WRITE);
-        pass_node.write_buffer(cluster_light_indices, ResourceUsage::SHADER_WRITE);
+/// Light cull pass struct implementing the RenderPass trait.
+pub struct LightCullPass {
+    pub pipeline: PipelineHandle,
+    pub cluster_aabbs: BufferHandle,
+    pub lights: BufferHandle,
+    pub cluster_grid: BufferHandle,
+    pub cluster_light_indices: BufferHandle,
+    pub push_constants: LightCullPushConstants,
+}
 
-        pass_node.bind_pipeline(pipeline);
-        pass_node.bind_descriptor_set(
+impl RenderPass for LightCullPass {
+    fn name(&self) -> &str {
+        "LightCull"
+    }
+
+    fn domain(&self) -> PassDomain {
+        PassDomain::Compute
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.read_buffer(self.cluster_aabbs, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.lights, ResourceUsage::SHADER_READ);
+        builder.write_buffer(self.cluster_grid, ResourceUsage::SHADER_WRITE);
+        builder.write_buffer(self.cluster_light_indices, ResourceUsage::SHADER_WRITE);
+
+        builder.bind_pipeline(self.pipeline);
+        builder.bind_descriptor_set(
             0,
             vec![
                 i3_gfx::graph::backend::DescriptorWrite {
@@ -34,7 +43,7 @@ pub fn record_light_cull_pass(
                     array_element: 0,
                     descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
                     buffer_info: Some(i3_gfx::graph::backend::DescriptorBufferInfo {
-                        buffer: cluster_aabbs,
+                        buffer: self.cluster_aabbs,
                         offset: 0,
                         range: 0,
                     }),
@@ -45,7 +54,7 @@ pub fn record_light_cull_pass(
                     array_element: 0,
                     descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
                     buffer_info: Some(i3_gfx::graph::backend::DescriptorBufferInfo {
-                        buffer: lights,
+                        buffer: self.lights,
                         offset: 0,
                         range: 0,
                     }),
@@ -56,7 +65,7 @@ pub fn record_light_cull_pass(
                     array_element: 0,
                     descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
                     buffer_info: Some(i3_gfx::graph::backend::DescriptorBufferInfo {
-                        buffer: cluster_grid,
+                        buffer: self.cluster_grid,
                         offset: 0,
                         range: 0,
                     }),
@@ -67,7 +76,7 @@ pub fn record_light_cull_pass(
                     array_element: 0,
                     descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
                     buffer_info: Some(i3_gfx::graph::backend::DescriptorBufferInfo {
-                        buffer: cluster_light_indices,
+                        buffer: self.cluster_light_indices,
                         offset: 0,
                         range: 0,
                     }),
@@ -75,21 +84,19 @@ pub fn record_light_cull_pass(
                 },
             ],
         );
+    }
 
-        move |ctx| {
-            let pc_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &pc as *const _ as *const u8,
-                    std::mem::size_of::<LightCullPushConstants>(),
-                )
-            };
-            ctx.push_constants(
-                i3_gfx::graph::pipeline::ShaderStageFlags::Compute,
-                0,
-                pc_bytes,
-            );
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(
+            i3_gfx::graph::pipeline::ShaderStageFlags::Compute,
+            0,
+            &self.push_constants,
+        );
 
-            ctx.dispatch(pc.grid_size[0], pc.grid_size[1], pc.grid_size[2]);
-        }
-    });
+        ctx.dispatch(
+            self.push_constants.grid_size[0],
+            self.push_constants.grid_size[1],
+            self.push_constants.grid_size[2],
+        );
+    }
 }

@@ -119,7 +119,7 @@ pub trait PassContext {
     // Commands
     fn draw(&mut self, vertex_count: u32, first_vertex: u32);
     fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32);
-    fn push_constants(
+    fn push_bytes(
         &mut self,
         stages: crate::graph::pipeline::ShaderStageFlags,
         offset: u32,
@@ -129,6 +129,24 @@ pub trait PassContext {
     fn clear_buffer(&mut self, buffer: crate::graph::types::BufferHandle, clear_value: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
 }
+
+/// Extension trait for [PassContext] to provide typed helpers.
+pub trait PassContextExt: PassContext {
+    /// Typed helper for push constants.
+    fn push_constant_data<T: Sized>(
+        &mut self,
+        stages: crate::graph::pipeline::ShaderStageFlags,
+        offset: u32,
+        data: &T,
+    ) {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(data as *const T as *const u8, std::mem::size_of::<T>())
+        };
+        self.push_bytes(stages, offset, bytes);
+    }
+}
+
+impl<T: PassContext + ?Sized> PassContextExt for T {}
 
 /// Handle representing a physically allocated descriptor set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,8 +203,7 @@ pub trait RenderBackend {
     fn destroy_buffer(&mut self, handle: BackendBuffer);
     fn destroy_sampler(&mut self, handle: SamplerHandle);
 
-    // --- Data Upload ---
-    /// Upload data to a buffer.
+    /// Upload raw bytes to a buffer.
     fn upload_buffer(
         &mut self,
         handle: BackendBuffer,
@@ -194,6 +211,37 @@ pub trait RenderBackend {
         offset: u64,
     ) -> Result<(), String>;
 }
+
+/// Extension trait for [RenderBackend] to provide typed helpers.
+pub trait RenderBackendExt: RenderBackend {
+    /// Typed helper for uploading a single struct to a buffer.
+    fn upload_buffer_data<T: Sized>(
+        &mut self,
+        handle: BackendBuffer,
+        data: &T,
+        offset: u64,
+    ) -> Result<(), String> {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(data as *const T as *const u8, std::mem::size_of::<T>())
+        };
+        self.upload_buffer(handle, bytes, offset)
+    }
+
+    /// Typed helper for uploading a slice of structs to a buffer.
+    fn upload_buffer_slice<T: Sized>(
+        &mut self,
+        handle: BackendBuffer,
+        data: &[T],
+        offset: u64,
+    ) -> Result<(), String> {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+        };
+        self.upload_buffer(handle, bytes, offset)
+    }
+}
+
+impl<T: RenderBackend + ?Sized> RenderBackendExt for T {}
 
 /// Internal trait consumed by the FrameGraph compiler and pass execution.
 /// Backend implementations must implement this alongside `RenderBackend`.
@@ -222,7 +270,7 @@ pub trait RenderBackendInternal: RenderBackend {
     fn begin_pass(
         &mut self,
         desc: PassDescriptor,
-        f: Box<dyn FnOnce(&mut dyn PassContext) + Send + Sync>,
+        pass: &dyn crate::graph::pass::RenderPass,
     ) -> u64;
 
     // --- Handle Resolution ---

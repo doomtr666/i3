@@ -130,35 +130,36 @@ impl ExampleApp for MandelbrotApp {
         let height = self.height;
 
         let push_data = [self.center.x, self.center.y, self.zoom, 0.0];
-        let push_bytes: Vec<u8> = push_data.iter().flat_map(|f| f.to_ne_bytes()).collect();
 
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
 
-            builder.add_node("MandelbrotPass", move |sub| {
-                sub.bind_pipeline(pipeline);
-                sub.write_image(backbuffer, ResourceUsage::SHADER_WRITE);
-                sub.bind_descriptor_set(
-                    0,
-                    vec![DescriptorWrite {
-                        binding: 0,
-                        array_element: 0,
-                        descriptor_type: BindingType::StorageTexture,
-                        image_info: Some(DescriptorImageInfo {
-                            image: backbuffer,
-                            sampler: None,
-                            image_layout: DescriptorImageLayout::General,
-                        }),
-                        buffer_info: None,
-                    }],
-                );
-
-                move |ctx| {
-                    ctx.push_constants(ShaderStageFlags::Compute, 0, &push_bytes);
+            builder.add_pass_from_closures(
+                "MandelbrotPass",
+                move |sub: &mut PassBuilder| {
+                    sub.bind_pipeline(pipeline);
+                    sub.write_image(backbuffer, ResourceUsage::SHADER_WRITE);
+                    sub.bind_descriptor_set(
+                        0,
+                        vec![DescriptorWrite {
+                            binding: 0,
+                            array_element: 0,
+                            descriptor_type: BindingType::StorageTexture,
+                            image_info: Some(DescriptorImageInfo {
+                                image: backbuffer,
+                                sampler: None,
+                                image_layout: DescriptorImageLayout::General,
+                            }),
+                            buffer_info: None,
+                        }],
+                    );
+                },
+                move |ctx: &mut dyn PassContext| {
+                    ctx.push_constant_data(ShaderStageFlags::Compute, 0, &push_data);
                     ctx.dispatch((width + 15) / 16, (height + 15) / 16, 1);
                     ctx.present(backbuffer);
-                }
-            });
+                },
+            );
         });
 
         let compiled = graph.compile();
