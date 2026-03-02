@@ -2,6 +2,7 @@ use i3_gfx::graph::backend::{
     BackendBuffer, BackendImage, PassContext, PassDescriptor, RenderBackend, RenderBackendInternal,
 };
 use i3_gfx::graph::pass::RenderPass;
+pub mod prelude;
 use std::collections::HashSet;
 use thiserror::Error;
 use tracing::{error, info};

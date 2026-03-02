@@ -114,7 +114,6 @@ impl GBufferPass {
             },
             rasterization_state: RasterizationState {
                 cull_mode: CullMode::Back,
-                front_face: FrontFace::CounterClockwise,
                 ..Default::default()
             },
             depth_stencil_state: DepthStencilState {

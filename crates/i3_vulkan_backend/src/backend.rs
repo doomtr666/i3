@@ -2874,11 +2874,14 @@ impl PassContext for VulkanPassContext {
     }
 
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        // Engine Convention: Vulkan uses Negative Viewport to flip Y-Up → Y-Down.
+        // (see engine_conventions.md §2). The caller passes logical (Y-Up) values;
+        // the backend transparently applies the flip.
         let viewport = vk::Viewport {
             x,
-            y,
+            y: y + height,
             width,
-            height,
+            height: -height,
             min_depth: 0.0,
             max_depth: 1.0,
         };

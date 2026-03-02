@@ -1,10 +1,9 @@
 #![allow(unused_imports)]
 use ash::vk;
 use i3_gfx::graph::pipeline::{
-    BindingType, BlendFactor, BlendOp, ColorComponentFlags, CompareOp, CullMode, FrontFace,
-    IndexType, InputAssemblyState, LogicOp, MipmapMode, MultisampleState, PolygonMode,
-    PrimitiveTopology, RasterizationState, ShaderStageFlags, StencilOp, StencilOpState,
-    VertexFormat, VertexInputRate,
+    BindingType, BlendFactor, BlendOp, ColorComponentFlags, CompareOp, CullMode, IndexType,
+    InputAssemblyState, LogicOp, MipmapMode, MultisampleState, PolygonMode, PrimitiveTopology,
+    RasterizationState, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat, VertexInputRate,
 };
 use i3_gfx::graph::types::{
     AddressMode, BorderColor, BufferUsageFlags, ComponentMapping, ComponentSwizzle, Filter, Format,
@@ -180,13 +179,6 @@ pub fn convert_cull_mode(mode: CullMode) -> vk::CullModeFlags {
         CullMode::None => vk::CullModeFlags::NONE,
         CullMode::Front => vk::CullModeFlags::FRONT,
         CullMode::Back => vk::CullModeFlags::BACK,
-    }
-}
-
-pub fn convert_front_face(face: FrontFace) -> vk::FrontFace {
-    match face {
-        FrontFace::CounterClockwise => vk::FrontFace::COUNTER_CLOCKWISE,
-        FrontFace::Clockwise => vk::FrontFace::CLOCKWISE,
     }
 }
 

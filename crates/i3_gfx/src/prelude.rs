@@ -18,12 +18,11 @@ pub use crate::graph::{
     pass::{PassBuilder, RenderPass},
     pipeline::{
         Binding, BindingType, BlendFactor, BlendOp, BlendState, ColorComponentFlags, CompareOp,
-        ComputePipelineCreateInfo, CullMode, DepthStencilState, FrontFace,
-        GraphicsPipelineCreateInfo, IndexType, InputAssemblyState, LogicOp, MultisampleState,
-        PolygonMode, PrimitiveTopology, PushConstantRange, RasterizationState, RenderTargetInfo,
-        RenderTargetsInfo, ShaderModule, ShaderReflection, ShaderStageFlags, StencilOp,
-        StencilOpState, VertexFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
-        VertexInputState,
+        ComputePipelineCreateInfo, CullMode, DepthStencilState, GraphicsPipelineCreateInfo,
+        IndexType, InputAssemblyState, LogicOp, MultisampleState, PolygonMode, PrimitiveTopology,
+        PushConstantRange, RasterizationState, RenderTargetInfo, RenderTargetsInfo, ShaderModule,
+        ShaderReflection, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat,
+        VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState,
     },
     types::{
         AddressMode, BufferDesc, BufferHandle, BufferUsageFlags, ComponentMapping,

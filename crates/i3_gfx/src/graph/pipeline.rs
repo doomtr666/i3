@@ -148,12 +148,6 @@ pub enum CullMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FrontFace {
-    CounterClockwise,
-    Clockwise,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SampleCount {
     Sample1 = 1,
     Sample2 = 2,
@@ -306,47 +300,14 @@ pub struct RasterizationState {
     pub rasterizer_discard_enable: bool,
     pub polygon_mode: PolygonMode,
     pub cull_mode: CullMode,
-    pub front_face: FrontFace,
+    // FrontFace intentionally NOT exposed — backends handle it transparently
+    // (see engine_conventions.md §2).
     pub depth_bias_enable: bool,
-    pub depth_bias_constant_factor: f32, // Note: f32 not Hash/Eq usually, but we need it here.
+    pub depth_bias_constant_factor: f32,
     pub depth_bias_clamp: f32,
     pub depth_bias_slope_factor: f32,
     pub line_width: f32,
 }
-
-// Implement PartialEq manually for f32 fields or just derive if we accept standard float equality behavior (NaN != NaN)
-// For graphics configs, standard derive is usually fine enough or we wrap ordered float.
-// We'll simplisticly implement or derive. Since user code used derive PartialEq, we will too, but warns about floats.
-// The user legacy code derivation was: #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Wait, f32 does NOT implement Eq. How did legacy code compile?
-// Checking legacy code...
-// Ah, RasterizationState legacy:
-//     pub depth_bias_enable: bool,
-// It did NOT have floats in legacy snippet I read?
-// Wait, looking at `old/crates/i3_vulkan_backend/src/pipeline.rs`:
-// .depth_bias_constant_factor(0.0)
-// It was hardcoded in `pipeline.rs`! The `RasterizationState` struct in `backend.rs` (lines 1090+) only had:
-//     pub cull_mode: CullMode,
-//     pub polygon_mode: PolygonMode,
-//     pub depth_bias_enable: bool,
-
-// I should stick to what was in `backend.rs` legacy to avoid Eq issues, OR expand it if I want full control.
-// The user said "l'ensembe des structures de support".
-// If I look at `old/crates/i3_gfx/src/backend.rs` lines 1091:
-/*
-pub struct RasterizationState {
-    pub cull_mode: CullMode,
-    pub polygon_mode: PolygonMode,
-    pub depth_bias_enable: bool,
-}
-*/
-// It seems the legacy struct was simplified.
-// BUT, I want "rationalized" structure.
-// If I use what represents the Vulkan Pso best, I should probably add the missing fields but handle the float Eq issue.
-// For now, I will stick to the Legacy struct definition to ensure I match what the user provided,
-// AND I will add the missing fields but perhaps use strict types or just `OrderedFloat` later if needed.
-// Actually, `old/crates/i3_vulkan_backend/src/pipeline.rs` sets `line_width(1.0)`.
-// I will keep the simplified Legacy version for now to match the user's "old" code exactly.
 
 impl Default for RasterizationState {
     fn default() -> Self {
@@ -355,7 +316,6 @@ impl Default for RasterizationState {
             rasterizer_discard_enable: false,
             polygon_mode: PolygonMode::Fill,
             cull_mode: CullMode::None,
-            front_face: FrontFace::CounterClockwise,
             depth_bias_enable: false,
             depth_bias_constant_factor: 0.0,
             depth_bias_clamp: 0.0,
