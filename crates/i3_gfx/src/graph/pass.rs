@@ -3,6 +3,7 @@ use crate::graph::types::{
     BufferHandle, ImageDesc, ImageHandle, PassDomain, ResourceUsage, WindowHandle,
 };
 use std::any::{Any, TypeId};
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Context provided to a node during its recording phase.
 /// This is a struct to allow for generic methods (publish/consume).
@@ -151,6 +152,52 @@ pub trait RenderPass: Any + Send + Sync {
 
     /// Record GPU commands (optional for purely grouping nodes).
     fn execute(&self, _ctx: &mut dyn PassContext) {}
+}
+
+impl<T: RenderPass + ?Sized> RenderPass for Arc<Mutex<T>> {
+    fn name(&self) -> &str {
+        // This is a bit unfortunate but we can't get the name without locking.
+        // Usually we lock during record/execute anyway.
+        "Arc<Mutex<RenderPass>>"
+    }
+
+    fn domain(&self) -> PassDomain {
+        self.lock().unwrap().domain()
+    }
+
+    fn init(&mut self, backend: &mut dyn RenderBackend) {
+        self.lock().unwrap().init(backend);
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        self.lock().unwrap().record(builder);
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        self.lock().unwrap().execute(ctx);
+    }
+}
+
+impl<T: RenderPass + ?Sized> RenderPass for Arc<RwLock<T>> {
+    fn name(&self) -> &str {
+        "Arc<RwLock<RenderPass>>"
+    }
+
+    fn domain(&self) -> PassDomain {
+        self.read().unwrap().domain()
+    }
+
+    fn init(&mut self, backend: &mut dyn RenderBackend) {
+        self.write().unwrap().init(backend);
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        self.write().unwrap().record(builder);
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        self.read().unwrap().execute(ctx);
+    }
 }
 
 /// A simple pass implementation that uses closures.

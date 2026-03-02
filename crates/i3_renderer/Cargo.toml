@@ -9,5 +9,6 @@ workspace = true
 
 [dependencies]
 i3_gfx.workspace = true
+i3_slang.workspace = true
 tracing.workspace = true
 nalgebra-glm.workspace = true

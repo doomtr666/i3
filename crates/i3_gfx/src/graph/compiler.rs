@@ -109,7 +109,7 @@ impl RenderPass for PlaceholderPass {
 /// Implementation of the internal PassBuilder trait.
 pub struct PassRecorder<'a> {
     storage: &'a mut NodeStorage,
-    parent_symbols: Option<&'a SymbolTable>,
+    ancestor_symbols: Vec<&'a SymbolTable>,
 }
 
 impl<'a> InternalPassBuilder for PassRecorder<'a> {
@@ -134,7 +134,9 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 .symbols
                 .get_data(id)
                 .expect("Symbol exists but has no data");
-        } else if let Some(parent) = self.parent_symbols {
+        }
+
+        for parent in self.ancestor_symbols.iter().rev() {
             if let Some(id) = parent.resolve(name) {
                 tracing::trace!(name, "Consuming CPU data (inherited)");
                 return parent
@@ -323,9 +325,12 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         );
 
         {
+            let mut ancestors = self.ancestor_symbols.clone();
+            ancestors.push(&self.storage.symbols);
+
             let mut sub_recorder = PassRecorder {
                 storage: &mut child_storage,
-                parent_symbols: Some(&self.storage.symbols),
+                ancestor_symbols: ancestors,
             };
             let mut builder = PassBuilder {
                 inner: &mut sub_recorder,
@@ -382,7 +387,7 @@ impl FrameGraph {
     {
         let mut recorder = PassRecorder {
             storage: &mut self.root,
-            parent_symbols: None,
+            ancestor_symbols: Vec::new(),
         };
 
         let mut builder = PassBuilder {
@@ -414,8 +419,8 @@ impl CompiledGraph {
         let mut transient_buffers = Vec::new();
 
         // 1. Resource Resolution & Allocation
-        self.resolve_resources_recursive(
-            &self._root,
+        Self::resolve_resources_recursive(
+            &mut self._root,
             backend,
             temporal_registry,
             &mut transient_images,
@@ -449,15 +454,14 @@ impl CompiledGraph {
     }
 
     fn resolve_resources_recursive(
-        &self,
-        node: &NodeStorage,
+        node: &mut NodeStorage,
         backend: &mut dyn RenderBackendInternal,
         mut temporal_registry_opt: Option<&mut crate::graph::temporal::TemporalRegistry>,
         transient_images: &mut Vec<BackendImage>,
         transient_buffers: &mut Vec<BackendBuffer>,
     ) {
-        // We might need to split out the reference to temporal_registry so children can use it.
-        // It's technically easier to just use standard Option::as_deref_mut since we only borrow it.
+        // Call pass initialization
+        node.pass.init(backend);
 
         // Resolve symbols in current scope
         for symbol in &node.symbols.symbols {
@@ -517,9 +521,9 @@ impl CompiledGraph {
         }
 
         // Recurse children
-        for child in &node.children {
+        for child in &mut node.children {
             let tr_opt = temporal_registry_opt.as_deref_mut();
-            self.resolve_resources_recursive(
+            Self::resolve_resources_recursive(
                 child,
                 backend,
                 tr_opt,

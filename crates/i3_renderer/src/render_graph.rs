@@ -1,15 +1,11 @@
-use i3_gfx::prelude::*;
-
-use crate::passes::debug_viz::DebugChannel;
-use crate::passes::gbuffer::{self, GBufferPushConstants};
+use crate::groups::{ClusteringGroup, PostProcessGroup};
+use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
+use crate::passes::deferred_resolve::DeferredResolvePass;
+use crate::passes::gbuffer::{self, DrawCommand, GBufferPass};
+use crate::passes::sky::SkyPass;
 use crate::scene::SceneProvider;
-
-/// A single draw command extracted from the scene for the GBuffer pass.
-#[derive(Clone, Copy)]
-pub struct DrawCommand {
-    pub mesh: crate::scene::Mesh,
-    pub push_constants: GBufferPushConstants,
-}
+use i3_gfx::prelude::*;
+use std::sync::{Arc, Mutex};
 
 /// Shared data published to the FrameGraph blackboard.
 #[derive(Debug, Clone, Copy)]
@@ -48,18 +44,17 @@ impl RenderPass for ClearBufferPass {
 
 /// The default render graph for deferred clustered shading.
 ///
-/// Owns pipelines and samplers. Geometry comes from the SceneProvider.
+/// Owns persistent passes and groups. Geometry comes from the SceneProvider.
 pub struct DefaultRenderGraph {
-    gbuffer_pipeline: PipelineHandle,
-    debug_viz_pipeline: PipelineHandle,
-    deferred_resolve_pipeline: PipelineHandle,
-    cluster_build_pipeline: PipelineHandle,
-    light_cull_pipeline: PipelineHandle,
-    histogram_build_pipeline: PipelineHandle,
-    average_luminance_pipeline: PipelineHandle,
-    tonemap_pipeline: PipelineHandle,
-    sky_pipeline: PipelineHandle,
-    sampler: SamplerHandle,
+    // Persistent Passes
+    pub gbuffer_pass: Arc<Mutex<GBufferPass>>,
+    pub sky_pass: Arc<Mutex<SkyPass>>,
+    pub clustering_group: Arc<Mutex<ClusteringGroup>>,
+    pub deferred_resolve_pass: Arc<Mutex<DeferredResolvePass>>,
+    pub post_process_group: Arc<Mutex<PostProcessGroup>>,
+    pub debug_viz_pass: Arc<Mutex<DebugVizPass>>,
+
+    pub sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
     pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
@@ -72,265 +67,98 @@ pub struct RenderConfig {
 }
 
 impl DefaultRenderGraph {
-    /// Creates the render graph resources (pipelines only, no geometry).
-    pub fn new(
-        backend: &mut dyn RenderBackend,
-        gbuffer_shader: ShaderModule,
-        debug_viz_shader: ShaderModule,
-        deferred_resolve_shader: ShaderModule,
-        cluster_build_shader: ShaderModule,
-        light_cull_shader: ShaderModule,
-        histogram_build_shader: ShaderModule,
-        average_luminance_shader: ShaderModule,
-        tonemap_shader: ShaderModule,
-        sky_shader: ShaderModule,
-        config: &RenderConfig,
-    ) -> Self {
-        // ... (truncated)
-        // Create GBuffer pipeline (4 MRT + depth)
-        let gbuffer_pipeline_info = GraphicsPipelineCreateInfo {
-            shader_module: gbuffer_shader,
-            vertex_input: VertexInputState {
-                bindings: vec![VertexInputBinding {
-                    binding: 0,
-                    stride: std::mem::size_of::<gbuffer::GBufferVertex>() as u32,
-                    input_rate: VertexInputRate::Vertex,
-                }],
-                attributes: vec![
-                    VertexInputAttribute {
-                        location: 0,
-                        binding: 0,
-                        format: VertexFormat::Float3,
-                        offset: 0,
-                    },
-                    VertexInputAttribute {
-                        location: 1,
-                        binding: 0,
-                        format: VertexFormat::Float3,
-                        offset: 12,
-                    },
-                    VertexInputAttribute {
-                        location: 2,
-                        binding: 0,
-                        format: VertexFormat::Float3,
-                        offset: 24,
-                    },
-                ],
-            },
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![
-                    RenderTargetInfo {
-                        format: Format::R8G8B8A8_SRGB,
-                        ..Default::default()
-                    },
-                    RenderTargetInfo {
-                        format: Format::R16G16_SFLOAT,
-                        ..Default::default()
-                    },
-                    RenderTargetInfo {
-                        format: Format::R8G8_UNORM,
-                        ..Default::default()
-                    },
-                    RenderTargetInfo {
-                        format: Format::R11G11B10_UFLOAT,
-                        ..Default::default()
-                    },
-                ],
-                depth_stencil_format: Some(Format::D32_FLOAT),
-                logic_op: None,
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::Back,
-                front_face: FrontFace::CounterClockwise,
-                ..Default::default()
-            },
-            depth_stencil_state: DepthStencilState {
-                depth_test_enable: true,
-                depth_write_enable: true,
-                depth_compare_op: CompareOp::Less,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let backend_gbuffer = backend.create_graphics_pipeline(&gbuffer_pipeline_info);
-        let gbuffer_pipeline = PipelineHandle(SymbolId(backend_gbuffer.0));
-
-        // Create debug viz pipeline (fullscreen, no vertex input, 1 color target)
-        let debug_viz_pipeline_info = GraphicsPipelineCreateInfo {
-            shader_module: debug_viz_shader,
-            vertex_input: VertexInputState::default(),
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![RenderTargetInfo {
-                    format: Format::B8G8R8A8_SRGB,
-                    ..Default::default()
-                }],
-                depth_stencil_format: None,
-                logic_op: None,
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::None,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let backend_debug = backend.create_graphics_pipeline(&debug_viz_pipeline_info);
-        let debug_viz_pipeline = PipelineHandle(SymbolId(backend_debug.0));
-
-        let deferred_resolve_pipeline_info = GraphicsPipelineCreateInfo {
-            shader_module: deferred_resolve_shader,
-            vertex_input: VertexInputState::default(),
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![RenderTargetInfo {
-                    format: Format::R16G16B16A16_SFLOAT,
-                    ..Default::default()
-                }],
-                depth_stencil_format: Some(Format::D32_FLOAT),
-                logic_op: None,
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::None,
-                ..Default::default()
-            },
-            depth_stencil_state: DepthStencilState {
-                depth_test_enable: false,
-                depth_write_enable: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let backend_deferred_resolve =
-            backend.create_graphics_pipeline(&deferred_resolve_pipeline_info);
-        let deferred_resolve_pipeline = PipelineHandle(SymbolId(backend_deferred_resolve.0));
-
-        // Create Sky graphics pipeline
-        let sky_pipeline_info = GraphicsPipelineCreateInfo {
-            shader_module: sky_shader,
-            vertex_input: VertexInputState::default(),
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![RenderTargetInfo {
-                    format: Format::R16G16B16A16_SFLOAT,
-                    ..Default::default()
-                }],
-                depth_stencil_format: Some(Format::D32_FLOAT),
-                logic_op: None,
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::None,
-                ..Default::default()
-            },
-            depth_stencil_state: DepthStencilState {
-                depth_test_enable: true,
-                depth_write_enable: false,
-                depth_compare_op: CompareOp::Equal,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let backend_sky = backend.create_graphics_pipeline(&sky_pipeline_info);
-        let sky_pipeline = PipelineHandle(SymbolId(backend_sky.0));
-
-        // Create cluster build compute pipeline
-        let cluster_build_info = ComputePipelineCreateInfo {
-            shader_module: cluster_build_shader,
-        };
-        let backend_cluster = backend.create_compute_pipeline(&cluster_build_info);
-        let cluster_build_pipeline = PipelineHandle(SymbolId(backend_cluster.0));
-
-        // Create light cull compute pipeline
-        let light_cull_info = ComputePipelineCreateInfo {
-            shader_module: light_cull_shader,
-        };
-        let backend_light_cull = backend.create_compute_pipeline(&light_cull_info);
-        let light_cull_pipeline = PipelineHandle(SymbolId(backend_light_cull.0));
-
-        // Create histogram build compute pipeline
-        let histogram_build_info = ComputePipelineCreateInfo {
-            shader_module: histogram_build_shader,
-        };
-        let backend_histogram_build = backend.create_compute_pipeline(&histogram_build_info);
-        let histogram_build_pipeline = PipelineHandle(SymbolId(backend_histogram_build.0));
-
-        // Create average luminance compute pipeline
-        let average_luminance_info = ComputePipelineCreateInfo {
-            shader_module: average_luminance_shader,
-        };
-        let backend_average_luminance = backend.create_compute_pipeline(&average_luminance_info);
-        let average_luminance_pipeline = PipelineHandle(SymbolId(backend_average_luminance.0));
-
-        // Create tonemap graphics pipeline
-        let tonemap_pipeline_info = GraphicsPipelineCreateInfo {
-            shader_module: tonemap_shader,
-            vertex_input: VertexInputState {
-                bindings: vec![],
-                attributes: vec![],
-            },
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![RenderTargetInfo {
-                    format: Format::B8G8R8A8_SRGB,
-                    blend: None,
-                    write_mask: ColorComponentFlags::RGBA,
-                }],
-                depth_stencil_format: None,
-                logic_op: None,
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::None,
-                ..Default::default()
-            },
-            depth_stencil_state: DepthStencilState {
-                depth_test_enable: false,
-                depth_write_enable: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let backend_tonemap = backend.create_graphics_pipeline(&tonemap_pipeline_info);
-        let tonemap_pipeline = PipelineHandle(SymbolId(backend_tonemap.0));
-
-        // Nearest-neighbor sampler for pixel-accurate GBuffer inspection
-        let sampler = backend.create_sampler(&SamplerDesc {
-            min_filter: Filter::Nearest,
-            mag_filter: Filter::Nearest,
+    /// Creates the render graph resources (passes and groups).
+    pub fn new(_backend: &mut dyn RenderBackend, _config: &RenderConfig) -> Self {
+        // Create shared sampler
+        let sampler = _backend.create_sampler(&SamplerDesc {
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
             ..Default::default()
         });
 
-        let _ = config; // Will be used when we add resize support
-        let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(backend);
+        // Mock handles for initialization (will be declared properly in record)
+        let dummy_image = ImageHandle(SymbolId(0));
+        let dummy_buffer = BufferHandle(SymbolId(0));
+
+        let gbuffer_pass = Arc::new(Mutex::new(GBufferPass::new(
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_image,
+        )));
+
+        let sky_pass = Arc::new(Mutex::new(SkyPass::new(dummy_image, dummy_image)));
+
+        let clustering_group = Arc::new(Mutex::new(ClusteringGroup::new(
+            dummy_buffer,
+            dummy_buffer,
+            dummy_buffer,
+            dummy_buffer,
+            [1, 1, 1],
+        )));
+
+        let deferred_resolve_pass = Arc::new(Mutex::new(DeferredResolvePass::new(
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_buffer,
+            dummy_buffer,
+            dummy_buffer,
+            sampler,
+            dummy_buffer,
+        )));
+
+        let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(
+            dummy_image,
+            dummy_image,
+            dummy_buffer,
+            dummy_buffer,
+            sampler,
+        )));
+
+        let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            dummy_image,
+            sampler,
+            DebugChannel::Lit,
+        )));
 
         Self {
-            gbuffer_pipeline,
-            debug_viz_pipeline,
-            deferred_resolve_pipeline,
-            cluster_build_pipeline,
-            light_cull_pipeline,
-            histogram_build_pipeline,
-            average_luminance_pipeline,
-            tonemap_pipeline,
-            sky_pipeline,
+            gbuffer_pass,
+            sky_pass,
+            clustering_group,
+            deferred_resolve_pass,
+            post_process_group,
+            debug_viz_pass,
             sampler,
             debug_channel: DebugChannel::Lit,
-            gpu_buffers,
+            gpu_buffers: crate::gpu_buffers::GpuBuffers::allocate(_backend),
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
         }
     }
+}
 
-    /// Synchronizes scene data (lights, materials, etc.) to persistent GPU buffers.
-    /// Should be called once per frame before recording the graph.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GpuLightData {
+    position: [f32; 3],
+    radius: f32,
+    color: [f32; 3],
+    intensity: f32,
+    direction: [f32; 3],
+    light_type: u32,
+}
+
+impl DefaultRenderGraph {
     pub fn sync(&mut self, backend: &mut dyn RenderBackend, scene: &dyn SceneProvider) {
         self.temporal_registry.advance_frame();
-
-        #[repr(C)]
-        #[derive(Clone, Copy)]
-        struct GpuLightData {
-            position: [f32; 3],
-            radius: f32,
-            color: [f32; 3],
-            intensity: f32,
-            direction: [f32; 3],
-            light_type: u32,
-        }
 
         let mut gpu_lights = Vec::with_capacity(1024);
         for (_, light) in scene.iter_lights() {
@@ -401,32 +229,34 @@ impl DefaultRenderGraph {
             buffer: cluster_light_indices,
         });
 
-        builder.add_pass(crate::passes::cluster_build::ClusterBuildPass {
-            pipeline: self.cluster_build_pipeline,
-            cluster_aabbs,
-            push_constants: crate::passes::cluster_build::ClusterBuildPushConstants {
+        // Update persistent clustering group with current handles and logic
+        {
+            let group = self.clustering_group.lock().unwrap();
+
+            let mut build = group.cluster_build_pass.lock().unwrap();
+            build.cluster_aabbs = cluster_aabbs;
+            build.push_constants = crate::passes::cluster_build::ClusterBuildPushConstants {
                 inv_projection: common.inv_projection,
                 grid_size: [grid_x, grid_y, grid_z],
                 near_plane: common.near_plane,
                 far_plane: common.far_plane,
                 screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
                 pad: 0,
-            },
-        });
+            };
 
-        // Light Cull Pass
-        builder.add_pass(crate::passes::light_cull::LightCullPass {
-            pipeline: self.light_cull_pipeline,
-            cluster_aabbs,
-            lights: light_buffer,
-            cluster_grid,
-            cluster_light_indices,
-            push_constants: crate::passes::light_cull::LightCullPushConstants {
+            let mut cull = group.light_cull_pass.lock().unwrap();
+            cull.cluster_aabbs = cluster_aabbs;
+            cull.lights = light_buffer;
+            cull.cluster_grid = cluster_grid;
+            cull.cluster_light_indices = cluster_light_indices;
+            cull.push_constants = crate::passes::light_cull::LightCullPushConstants {
                 view_matrix: common.view,
                 grid_size: [grid_x, grid_y, grid_z],
                 light_count: common.light_count,
-            },
-        });
+            };
+        }
+
+        builder.add_pass(self.clustering_group.clone());
 
         (
             cluster_aabbs,
@@ -441,7 +271,6 @@ impl DefaultRenderGraph {
     fn record_gbuffer(
         &self,
         builder: &mut PassBuilder,
-        draw_commands: &[DrawCommand],
     ) -> (
         ImageHandle,
         ImageHandle,
@@ -498,15 +327,16 @@ impl DefaultRenderGraph {
             },
         );
 
-        builder.add_pass(crate::passes::gbuffer::GBufferPass {
-            pipeline: self.gbuffer_pipeline,
-            depth_buffer: depth,
-            gbuffer_albedo: albedo,
-            gbuffer_normal: normal,
-            gbuffer_roughmetal: roughmetal,
-            gbuffer_emissive: emissive,
-            draw_commands: draw_commands.to_vec(),
-        });
+        {
+            let mut pass = self.gbuffer_pass.lock().unwrap();
+            pass.depth_buffer = depth;
+            pass.gbuffer_albedo = albedo;
+            pass.gbuffer_normal = normal;
+            pass.gbuffer_roughmetal = roughmetal;
+            pass.gbuffer_emissive = emissive;
+        }
+
+        builder.add_pass(self.gbuffer_pass.clone());
 
         (albedo, normal, roughmetal, emissive, depth)
     }
@@ -558,7 +388,7 @@ impl DefaultRenderGraph {
                 let mesh = *scene.mesh(obj.mesh_id);
                 DrawCommand {
                     mesh,
-                    push_constants: GBufferPushConstants {
+                    push_constants: gbuffer::GBufferPushConstants {
                         view_projection,
                         model: obj.world_transform,
                     },
@@ -568,7 +398,6 @@ impl DefaultRenderGraph {
 
         let channel = self.debug_channel;
         let light_buffer_physical = self.gpu_buffers.light_buffer;
-        let sampler = self.sampler;
 
         let (sun_dir, sun_int, sun_col) = scene
             .iter_lights()
@@ -582,12 +411,21 @@ impl DefaultRenderGraph {
 
         graph.record(move |builder| {
             builder.publish("Common", common);
+            builder.publish("GBufferCommands", draw_commands);
+            builder.publish("SunDirection", sun_dir);
+            builder.publish("SunIntensity", sun_int);
+            builder.publish("SunColor", sun_col);
+            builder.publish("TimeDelta", dt);
+
             let backbuffer = builder.acquire_backbuffer(window);
             let light_buffer = builder.import_buffer("LightBuffer", light_buffer_physical);
 
             // 1. Clustering & Culling
             let (_cluster_aabbs, cluster_grid, cluster_light_indices, grid_x, grid_y, grid_z) =
                 self.record_clustering(builder, light_buffer);
+
+            builder.publish("ClusterGridSize", [grid_x, grid_y, grid_z]);
+            builder.publish("DebugChannel", channel as u32);
 
             // 2. GBuffer Generation
             let (
@@ -596,30 +434,19 @@ impl DefaultRenderGraph {
                 gbuffer_roughmetal,
                 gbuffer_emissive,
                 depth_buffer,
-            ) = self.record_gbuffer(builder, &draw_commands);
+            ) = self.record_gbuffer(builder);
 
             let hdr_target = builder.declare_image(
                 "HDR_Target",
                 ImageDesc::new(screen_width, screen_height, Format::R16G16B16A16_SFLOAT),
             );
 
-            // 3. Sky Pass
-            builder.add_pass(crate::passes::sky::SkyPass {
-                pipeline: self.sky_pipeline,
-                hdr_target,
-                depth_buffer,
-                push_constants: crate::passes::sky::SkyPushConstants {
-                    inv_view_proj: view_projection
-                        .try_inverse()
-                        .unwrap_or_else(nalgebra_glm::identity),
-                    camera_pos,
-                    _pad0: 0.0,
-                    sun_direction: sun_dir,
-                    sun_intensity: sun_int,
-                    sun_color: sun_col,
-                    _pad1: 0.0,
-                },
-            });
+            {
+                let mut pass = self.sky_pass.lock().unwrap();
+                pass.hdr_target = hdr_target;
+                pass.depth_buffer = depth_buffer;
+            }
+            builder.add_pass(self.sky_pass.clone());
 
             let exposure_buffer = builder.declare_buffer_history(
                 "ExposureBuffer",
@@ -643,64 +470,80 @@ impl DefaultRenderGraph {
                 || channel == DebugChannel::LightDensity
                 || channel == DebugChannel::ClusterGrid
             {
-                let debug_mode = match channel {
-                    DebugChannel::Lit => 0,
-                    DebugChannel::LightDensity => 1,
-                    DebugChannel::ClusterGrid => 2,
-                    _ => 0,
-                };
-
-                // 4. Deferred Shading
-                builder.add_pass(crate::passes::deferred_resolve::DeferredResolvePass {
-                    pipeline: self.deferred_resolve_pipeline,
+                // 4. Deferred Lighting
+                let hdr_final = self.record_lighting(
+                    builder,
                     hdr_target,
+                    exposure_buffer,
                     gbuffer_albedo,
                     gbuffer_normal,
                     gbuffer_roughmetal,
                     gbuffer_emissive,
                     depth_buffer,
-                    lights: light_buffer,
+                    light_buffer,
                     cluster_grid,
                     cluster_light_indices,
-                    sampler,
-                    exposure_buffer,
-                    push_constants: crate::passes::deferred_resolve::DeferredResolvePushConstants {
-                        inv_view_proj: view_projection
-                            .try_inverse()
-                            .unwrap_or_else(nalgebra_glm::identity),
-                        inv_projection,
-                        camera_pos,
-                        near_plane,
-                        grid_size: [grid_x, grid_y, grid_z],
-                        far_plane,
-                        screen_dimensions: [screen_width as f32, screen_height as f32],
-                        debug_mode,
-                        _pad: 0,
-                    },
-                });
+                );
+
+                // Use the exposure buffer from record_lighting?
+                // Wait, record_lighting declarations might conflict.
+                // I'll update record_lighting to take them as params or resolve them.
 
                 // 5. Post Processing
                 self.record_post_process(
                     builder,
-                    hdr_target,
+                    hdr_final,
                     backbuffer,
                     exposure_buffer,
                     histogram_buffer,
                     dt,
                 );
             } else {
-                builder.add_pass(crate::passes::debug_viz::DebugVizPass {
-                    pipeline: self.debug_viz_pipeline,
-                    backbuffer,
-                    gbuffer_albedo,
-                    gbuffer_normal,
-                    gbuffer_roughmetal,
-                    gbuffer_emissive,
-                    sampler,
-                    channel,
-                });
+                {
+                    let mut pass = self.debug_viz_pass.lock().unwrap();
+                    pass.backbuffer = backbuffer;
+                    pass.gbuffer_albedo = gbuffer_albedo;
+                    pass.gbuffer_normal = gbuffer_normal;
+                    pass.gbuffer_roughmetal = gbuffer_roughmetal;
+                    pass.gbuffer_emissive = gbuffer_emissive;
+                    pass.channel = channel;
+                }
+                builder.add_pass(self.debug_viz_pass.clone());
             }
         });
+    }
+
+    fn record_lighting(
+        &self,
+        builder: &mut PassBuilder,
+        hdr_target: ImageHandle,
+        exposure_buffer: BufferHandle,
+        gbuffer_albedo: ImageHandle,
+        gbuffer_normal: ImageHandle,
+        gbuffer_roughmetal: ImageHandle,
+        gbuffer_emissive: ImageHandle,
+        depth_buffer: ImageHandle,
+        lights: BufferHandle,
+        cluster_grid: BufferHandle,
+        cluster_light_indices: BufferHandle,
+    ) -> ImageHandle {
+        {
+            let mut pass = self.deferred_resolve_pass.lock().unwrap();
+            pass.hdr_target = hdr_target;
+            pass.gbuffer_albedo = gbuffer_albedo;
+            pass.gbuffer_normal = gbuffer_normal;
+            pass.gbuffer_roughmetal = gbuffer_roughmetal;
+            pass.gbuffer_emissive = gbuffer_emissive;
+            pass.depth_buffer = depth_buffer;
+            pass.lights = lights;
+            pass.cluster_grid = cluster_grid;
+            pass.cluster_light_indices = cluster_light_indices;
+            pass.exposure_buffer = exposure_buffer;
+        }
+
+        builder.add_pass(self.deferred_resolve_pass.clone());
+
+        hdr_target
     }
 
     fn record_post_process(
@@ -710,58 +553,31 @@ impl DefaultRenderGraph {
         backbuffer: ImageHandle,
         exposure_buffer: BufferHandle,
         histogram_buffer: BufferHandle,
-        dt: f32,
+        _dt: f32,
     ) {
-        let common = *builder.consume::<CommonData>("Common");
-
         builder.add_pass(ClearBufferPass {
             name: "ClearHistogram".to_string(),
             buffer: histogram_buffer,
         });
 
-        builder.add_pass(crate::passes::histogram_build::HistogramBuildPass {
-            pipeline: self.histogram_build_pipeline,
-            hdr_image: hdr_target,
-            histogram_buffer,
-            exposure_buffer,
-            width: common.screen_width,
-            height: common.screen_height,
-            push_constants: crate::passes::histogram_build::HistogramPushConstants {
-                min_log_lum: -10.0,
-                max_log_lum: 10.0,
-                time_delta: dt,
-                pad: 0,
-            },
-        });
+        {
+            let group = self.post_process_group.lock().unwrap();
 
-        builder.add_pass(crate::passes::average_luminance::AverageLuminancePass {
-            pipeline: self.average_luminance_pipeline,
-            histogram_buffer,
-            exposure_buffer,
-            push_constants: crate::passes::average_luminance::AverageLuminancePushConstants {
-                min_log_lum: -10.0,
-                max_log_lum: 10.0,
-                time_delta: dt,
-                adaptation_rate: 2.0,
-                pixel_count: (common.screen_width * common.screen_height) as f32,
-                pad0: 0,
-                pad1: 0,
-                pad2: 0,
-            },
-        });
+            let mut hist = group.histogram_build_pass.lock().unwrap();
+            hist.hdr_image = hdr_target;
+            hist.histogram_buffer = histogram_buffer;
+            hist.exposure_buffer = exposure_buffer;
 
-        builder.add_pass(crate::passes::tonemap::TonemapPass {
-            pipeline: self.tonemap_pipeline,
-            backbuffer,
-            hdr_target,
-            exposure_buffer,
-            sampler: self.sampler,
-            push_constants: crate::passes::tonemap::ToneMapPushConstants {
-                debug_mode: 0,
-                pad0: 0,
-                pad1: 0,
-                pad2: 0,
-            },
-        });
+            let mut avg = group.average_luminance_pass.lock().unwrap();
+            avg.histogram_buffer = histogram_buffer;
+            avg.exposure_buffer = exposure_buffer;
+
+            let mut tone = group.tonemap_pass.lock().unwrap();
+            tone.backbuffer = backbuffer;
+            tone.hdr_target = hdr_target;
+            tone.exposure_buffer = exposure_buffer;
+        }
+
+        builder.add_pass(self.post_process_group.clone());
     }
 }

@@ -1,4 +1,5 @@
 use i3_gfx::prelude::*;
+use i3_slang::prelude::*;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -11,30 +12,46 @@ pub struct ToneMapPushConstants {
 
 /// Tonemap pass struct implementing the RenderPass trait.
 pub struct TonemapPass {
-    pub pipeline: PipelineHandle,
     pub backbuffer: ImageHandle,
     pub hdr_target: ImageHandle,
     pub exposure_buffer: BufferHandle,
     pub sampler: SamplerHandle,
-    pub push_constants: ToneMapPushConstants,
+
+    // Persistence
+    shader: Option<ShaderModule>,
+    pipeline: Option<BackendPipeline>,
+    push_constants: Option<ToneMapPushConstants>,
 }
 
 impl TonemapPass {
     pub fn new(
-        pipeline: PipelineHandle,
         backbuffer: ImageHandle,
         hdr_target: ImageHandle,
         exposure_buffer: BufferHandle,
         sampler: SamplerHandle,
-        push_constants: ToneMapPushConstants,
     ) -> Self {
         Self {
-            pipeline,
             backbuffer,
             hdr_target,
             exposure_buffer,
             sampler,
-            push_constants,
+            shader: None,
+            pipeline: None,
+            push_constants: None,
+        }
+    }
+
+    pub fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
+        GraphicsPipelineCreateInfo {
+            shader_module: self.shader.clone().expect("Shader not compiled"),
+            render_targets: RenderTargetsInfo {
+                color_targets: vec![RenderTargetInfo {
+                    format: Format::B8G8R8A8_SRGB, // Backbuffer format
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 }
@@ -44,8 +61,33 @@ impl RenderPass for TonemapPass {
         "ToneMapPass"
     }
 
+    fn init(&mut self, backend: &mut dyn RenderBackend) {
+        if self.pipeline.is_some() {
+            return;
+        }
+
+        // 1. Compile Shader
+        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
+        let shader_dir = "crates/i3_renderer/shaders";
+
+        self.shader = Some(
+            slang
+                .compile_file("tonemap", ShaderTarget::Spirv, &[shader_dir])
+                .expect("Failed to compile Tonemap shader"),
+        );
+
+        // 2. Create Pipeline
+        let info = self.create_pipeline_info();
+        self.pipeline = Some(backend.create_graphics_pipeline(&info));
+    }
+
     fn record(&mut self, builder: &mut PassBuilder) {
-        builder.bind_pipeline(self.pipeline);
+        self.push_constants = Some(ToneMapPushConstants {
+            debug_mode: 0,
+            pad0: 0,
+            pad1: 0,
+            pad2: 0,
+        });
 
         // Read HDR target & ExposureBuffer
         builder.read_image(self.hdr_target, ResourceUsage::SHADER_READ);
@@ -84,14 +126,19 @@ impl RenderPass for TonemapPass {
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
-        ctx.push_constant_data(
-            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-            0,
-            &self.push_constants,
-        );
-        ctx.draw(3, 0); // Fullscreen triangle
+        let pipeline = self.pipeline.expect("TonemapPass pipeline not initialized");
+        ctx.bind_pipeline_raw(pipeline);
 
-        // This is the final pass targeting the backbuffer, so we must present it here.
-        ctx.present(self.backbuffer);
+        if let Some(constants) = self.push_constants {
+            ctx.push_constant_data(
+                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+                0,
+                &constants,
+            );
+            ctx.draw(3, 0); // Fullscreen triangle
+
+            // This is the final pass targeting the backbuffer, so we must present it here.
+            ctx.present(self.backbuffer);
+        }
     }
 }

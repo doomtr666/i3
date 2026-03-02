@@ -1,4 +1,5 @@
 use i3_gfx::prelude::*;
+use i3_slang::prelude::*;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -15,10 +16,31 @@ pub struct AverageLuminancePushConstants {
 
 /// Average luminance pass struct implementing the RenderPass trait.
 pub struct AverageLuminancePass {
-    pub pipeline: PipelineHandle,
     pub histogram_buffer: BufferHandle,
     pub exposure_buffer: BufferHandle,
-    pub push_constants: AverageLuminancePushConstants,
+
+    // Persistence
+    shader: Option<ShaderModule>,
+    pipeline: Option<BackendPipeline>,
+    push_constants: Option<AverageLuminancePushConstants>,
+}
+
+impl AverageLuminancePass {
+    pub fn new(histogram_buffer: BufferHandle, exposure_buffer: BufferHandle) -> Self {
+        Self {
+            histogram_buffer,
+            exposure_buffer,
+            shader: None,
+            pipeline: None,
+            push_constants: None,
+        }
+    }
+
+    pub fn create_pipeline_info(&self) -> ComputePipelineCreateInfo {
+        ComputePipelineCreateInfo {
+            shader_module: self.shader.clone().expect("Shader not compiled"),
+        }
+    }
 }
 
 impl RenderPass for AverageLuminancePass {
@@ -30,8 +52,40 @@ impl RenderPass for AverageLuminancePass {
         PassDomain::Compute
     }
 
+    fn init(&mut self, backend: &mut dyn RenderBackend) {
+        if self.pipeline.is_some() {
+            return;
+        }
+
+        // 1. Compile Shader
+        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
+        let shader_dir = "crates/i3_renderer/shaders";
+
+        self.shader = Some(
+            slang
+                .compile_file("average_luminance", ShaderTarget::Spirv, &[shader_dir])
+                .expect("Failed to compile AverageLuminance shader"),
+        );
+
+        // 2. Create Pipeline
+        let info = self.create_pipeline_info();
+        self.pipeline = Some(backend.create_compute_pipeline(&info));
+    }
+
     fn record(&mut self, builder: &mut PassBuilder) {
-        builder.bind_pipeline(self.pipeline);
+        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
+        let dt = *builder.consume::<f32>("TimeDelta");
+
+        self.push_constants = Some(AverageLuminancePushConstants {
+            min_log_lum: -10.0,
+            max_log_lum: 10.0,
+            time_delta: dt,
+            adaptation_rate: 2.0,
+            pixel_count: (common.screen_width * common.screen_height) as f32,
+            pad0: 0,
+            pad1: 0,
+            pad2: 0,
+        });
 
         // Read histogram, read/write exposure
         builder.read_buffer(self.histogram_buffer, ResourceUsage::SHADER_READ);
@@ -67,9 +121,15 @@ impl RenderPass for AverageLuminancePass {
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
-        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_constants);
+        let pipeline = self
+            .pipeline
+            .expect("AverageLuminancePass pipeline not initialized");
+        ctx.bind_pipeline_raw(pipeline);
+        if let Some(constants) = self.push_constants {
+            ctx.push_constant_data(ShaderStageFlags::Compute, 0, &constants);
 
-        // Only 1 workgroup needed to process the 256-bin histogram
-        ctx.dispatch(1, 1, 1);
+            // Only 1 workgroup needed to process the 256-bin histogram
+            ctx.dispatch(1, 1, 1);
+        }
     }
 }

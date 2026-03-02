@@ -203,6 +203,7 @@ pub struct PhysicalPipeline {
     pub bind_point: vk::PipelineBindPoint,
     pub set_layouts: Vec<vk::DescriptorSetLayout>,
     pub pushable_sets_mask: u32,
+    pub physical_id: u64,
 }
 
 pub struct VulkanBackend {
@@ -1414,9 +1415,14 @@ impl RenderBackend for VulkanBackend {
             bind_point: vk::PipelineBindPoint::GRAPHICS,
             set_layouts: descriptor_set_layouts,
             pushable_sets_mask,
+            physical_id: 0,
         };
 
         let physical_handle = self.pipeline_resources.insert(physical);
+        self.pipeline_resources
+            .get_mut(physical_handle)
+            .unwrap()
+            .physical_id = physical_handle;
         BackendPipeline(physical_handle)
     }
 
@@ -1534,9 +1540,11 @@ impl RenderBackend for VulkanBackend {
             bind_point: vk::PipelineBindPoint::COMPUTE,
             set_layouts: descriptor_set_layouts,
             pushable_sets_mask,
+            physical_id: 0,
         };
 
         let handle = self.pipeline_resources.insert(physical);
+        self.pipeline_resources.get_mut(handle).unwrap().physical_id = handle;
         BackendPipeline(handle)
     }
 
@@ -1995,187 +2003,12 @@ impl RenderBackendInternal for VulkanBackend {
             .descriptor_pool,
             current_pipeline_layout: vk::PipelineLayout::null(),
             current_bind_point: vk::PipelineBindPoint::GRAPHICS,
+            pending_descriptor_sets: desc.descriptor_sets.to_vec(),
         };
 
         // If pipeline is set, determine bind point and bind it
         if let Some(pipe_handle) = desc.pipeline {
-            if let Some(pipe) = self.pipeline_resources.get(pipe_handle.0.0).cloned() {
-                unsafe {
-                    device
-                        .handle
-                        .cmd_bind_pipeline(cmd, pipe.bind_point, pipe.handle);
-                }
-                ctx.pipeline = Some(pipe.clone());
-                ctx.current_pipeline_layout = pipe.layout;
-                ctx.current_bind_point = pipe.bind_point;
-
-                // Bind Declarative Descriptor Sets
-                for (set_index, writes) in desc.descriptor_sets {
-                    let set_index = *set_index;
-                    if (pipe.pushable_sets_mask & (1 << set_index)) != 0 {
-                        // Push Descriptor Path
-                        let mut buffer_infos = Vec::with_capacity(writes.len());
-                        let mut image_infos = Vec::with_capacity(writes.len());
-
-                        // Pass 1: Resolve and collect infos
-                        for write in writes.iter() {
-                            match write.descriptor_type {
-                                i3_gfx::graph::pipeline::BindingType::UniformBuffer
-                                | i3_gfx::graph::pipeline::BindingType::StorageBuffer
-                                | i3_gfx::graph::pipeline::BindingType::RawBuffer
-                                | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
-                                    if let Some(info) = &write.buffer_info {
-                                        let pid = self.resolve_buffer(info.buffer).0;
-                                        if let Some(buf) = self.buffers.get(pid) {
-                                            buffer_infos.push(vk::DescriptorBufferInfo {
-                                                buffer: buf.buffer,
-                                                offset: info.offset,
-                                                range: if info.range == 0 {
-                                                    vk::WHOLE_SIZE
-                                                } else {
-                                                    info.range
-                                                },
-                                            });
-                                        }
-                                    }
-                                }
-                                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler
-                                | i3_gfx::graph::pipeline::BindingType::Texture
-                                | i3_gfx::graph::pipeline::BindingType::StorageTexture
-                                | i3_gfx::graph::pipeline::BindingType::Sampler => {
-                                    if let Some(info) = &write.image_info {
-                                        let pid = self.resolve_image(info.image).0;
-                                        if let Some(img) = self.images.get(pid) {
-                                            let layout = match info.image_layout {
-                                                i3_gfx::graph::backend::DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
-                                                i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                                            };
-                                            let vk_sampler =
-                                                if let Some(sampler_handle) = info.sampler {
-                                                    self.samplers
-                                                        .get(sampler_handle.0)
-                                                        .cloned()
-                                                        .unwrap_or(vk::Sampler::null())
-                                                } else {
-                                                    vk::Sampler::null()
-                                                };
-                                            image_infos.push(vk::DescriptorImageInfo {
-                                                sampler: vk_sampler,
-                                                image_view: img.view,
-                                                image_layout: layout,
-                                            });
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        // Pass 2: Build writes (using collected infos)
-                        let mut descriptor_writes = Vec::with_capacity(writes.len());
-                        let mut buf_ptr = 0;
-                        let mut img_ptr = 0;
-
-                        for write in writes.iter() {
-                            let mut vk_write = vk::WriteDescriptorSet::default()
-                                .dst_binding(write.binding)
-                                .dst_array_element(write.array_element)
-                                .descriptor_count(1);
-
-                            match write.descriptor_type {
-                                i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
-                                    if buf_ptr < buffer_infos.len() {
-                                        vk_write = vk_write
-                                            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                                            .buffer_info(std::slice::from_ref(
-                                                &buffer_infos[buf_ptr],
-                                            ));
-                                        buf_ptr += 1;
-                                        descriptor_writes.push(vk_write);
-                                    }
-                                }
-                                i3_gfx::graph::pipeline::BindingType::StorageBuffer
-                                | i3_gfx::graph::pipeline::BindingType::RawBuffer
-                                | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
-                                    if buf_ptr < buffer_infos.len() {
-                                        vk_write = vk_write
-                                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                                            .buffer_info(std::slice::from_ref(
-                                                &buffer_infos[buf_ptr],
-                                            ));
-                                        buf_ptr += 1;
-                                        descriptor_writes.push(vk_write);
-                                    }
-                                }
-                                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
-                                    if img_ptr < image_infos.len() {
-                                        vk_write = vk_write
-                                            .descriptor_type(
-                                                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                                            )
-                                            .image_info(std::slice::from_ref(
-                                                &image_infos[img_ptr],
-                                            ));
-                                        img_ptr += 1;
-                                        descriptor_writes.push(vk_write);
-                                    }
-                                }
-                                i3_gfx::graph::pipeline::BindingType::Texture => {
-                                    if img_ptr < image_infos.len() {
-                                        vk_write = vk_write
-                                            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                            .image_info(std::slice::from_ref(
-                                                &image_infos[img_ptr],
-                                            ));
-                                        img_ptr += 1;
-                                        descriptor_writes.push(vk_write);
-                                    }
-                                }
-                                i3_gfx::graph::pipeline::BindingType::Sampler => {
-                                    if img_ptr < image_infos.len() {
-                                        vk_write = vk_write
-                                            .descriptor_type(vk::DescriptorType::SAMPLER)
-                                            .image_info(std::slice::from_ref(
-                                                &image_infos[img_ptr],
-                                            ));
-                                        img_ptr += 1;
-                                        descriptor_writes.push(vk_write);
-                                    }
-                                }
-                                i3_gfx::graph::pipeline::BindingType::StorageTexture => {
-                                    if img_ptr < image_infos.len() {
-                                        vk_write = vk_write
-                                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                            .image_info(std::slice::from_ref(
-                                                &image_infos[img_ptr],
-                                            ));
-                                        img_ptr += 1;
-                                        descriptor_writes.push(vk_write);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        unsafe {
-                            device.push_descriptor.cmd_push_descriptor_set(
-                                cmd,
-                                pipe.bind_point,
-                                pipe.layout,
-                                set_index,
-                                &descriptor_writes,
-                            );
-                        }
-                    } else {
-                        // Pool Path (Static allocation from frame pool)
-                        let set_handle = self
-                            .allocate_descriptor_set(pipe_handle, set_index)
-                            .unwrap();
-                        self.update_descriptor_set(set_handle, writes);
-                        ctx.bind_descriptor_set(set_index, set_handle);
-                    }
-                }
-            }
+            ctx.bind_pipeline(pipe_handle);
         }
 
         // Dynamic Viewport/Scissor setup (Use resolved extent)
@@ -2742,6 +2575,7 @@ pub struct VulkanPassContext {
     pub descriptor_pool: vk::DescriptorPool,
     pub current_pipeline_layout: vk::PipelineLayout,
     pub current_bind_point: vk::PipelineBindPoint,
+    pub pending_descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
 }
 
 impl VulkanPassContext {
@@ -2751,6 +2585,181 @@ impl VulkanPassContext {
 
     pub fn backend_mut(&mut self) -> &mut VulkanBackend {
         unsafe { &mut *self.backend }
+    }
+
+    pub fn flush_descriptors(&mut self) {
+        if self.pending_descriptor_sets.is_empty() {
+            return;
+        }
+
+        let pipe = if let Some(p) = &self.pipeline {
+            p.clone()
+        } else {
+            return;
+        };
+
+        let sets = std::mem::take(&mut self.pending_descriptor_sets);
+        let cmd = self.cmd;
+
+        for (set_index, writes) in sets {
+            if (pipe.pushable_sets_mask & (1 << set_index)) != 0 {
+                // Push Descriptor Path
+                let mut buffer_infos = Vec::with_capacity(writes.len());
+                let mut image_infos = Vec::with_capacity(writes.len());
+
+                // Pass 1: Resolve and collect infos
+                for write in writes.iter() {
+                    match write.descriptor_type {
+                        i3_gfx::graph::pipeline::BindingType::UniformBuffer
+                        | i3_gfx::graph::pipeline::BindingType::StorageBuffer
+                        | i3_gfx::graph::pipeline::BindingType::RawBuffer
+                        | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
+                            if let Some(info) = &write.buffer_info {
+                                let pid = self.backend().resolve_buffer(info.buffer).0;
+                                if let Some(buf) = self.backend().buffers.get(pid) {
+                                    buffer_infos.push(vk::DescriptorBufferInfo {
+                                        buffer: buf.buffer,
+                                        offset: info.offset,
+                                        range: if info.range == 0 {
+                                            vk::WHOLE_SIZE
+                                        } else {
+                                            info.range
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                        i3_gfx::graph::pipeline::BindingType::CombinedImageSampler
+                        | i3_gfx::graph::pipeline::BindingType::Texture
+                        | i3_gfx::graph::pipeline::BindingType::StorageTexture
+                        | i3_gfx::graph::pipeline::BindingType::Sampler => {
+                            if let Some(info) = &write.image_info {
+                                let pid = self.backend().resolve_image(info.image).0;
+                                if let Some(img) = self.backend().images.get(pid) {
+                                    let layout = match info.image_layout {
+                                        i3_gfx::graph::backend::DescriptorImageLayout::General => {
+                                            vk::ImageLayout::GENERAL
+                                        }
+                                        i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => {
+                                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                                        }
+                                    };
+                                    let vk_sampler = if let Some(sampler_handle) = info.sampler {
+                                        self.backend()
+                                            .samplers
+                                            .get(sampler_handle.0)
+                                            .cloned()
+                                            .unwrap_or(vk::Sampler::null())
+                                    } else {
+                                        vk::Sampler::null()
+                                    };
+                                    image_infos.push(vk::DescriptorImageInfo {
+                                        sampler: vk_sampler,
+                                        image_view: img.view,
+                                        image_layout: layout,
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Pass 2: Build writes
+                let mut descriptor_writes = Vec::with_capacity(writes.len());
+                let mut buf_ptr = 0;
+                let mut img_ptr = 0;
+
+                for write in writes.iter() {
+                    let mut vk_write = vk::WriteDescriptorSet::default()
+                        .dst_binding(write.binding)
+                        .dst_array_element(write.array_element)
+                        .descriptor_count(1);
+
+                    match write.descriptor_type {
+                        i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
+                            if buf_ptr < buffer_infos.len() {
+                                vk_write = vk_write
+                                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                                    .buffer_info(std::slice::from_ref(&buffer_infos[buf_ptr]));
+                                buf_ptr += 1;
+                                descriptor_writes.push(vk_write);
+                            }
+                        }
+                        i3_gfx::graph::pipeline::BindingType::StorageBuffer
+                        | i3_gfx::graph::pipeline::BindingType::RawBuffer
+                        | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
+                            if buf_ptr < buffer_infos.len() {
+                                vk_write = vk_write
+                                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                    .buffer_info(std::slice::from_ref(&buffer_infos[buf_ptr]));
+                                buf_ptr += 1;
+                                descriptor_writes.push(vk_write);
+                            }
+                        }
+                        i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
+                            if img_ptr < image_infos.len() {
+                                vk_write = vk_write
+                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
+                                img_ptr += 1;
+                                descriptor_writes.push(vk_write);
+                            }
+                        }
+                        i3_gfx::graph::pipeline::BindingType::Texture => {
+                            if img_ptr < image_infos.len() {
+                                vk_write = vk_write
+                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
+                                img_ptr += 1;
+                                descriptor_writes.push(vk_write);
+                            }
+                        }
+                        i3_gfx::graph::pipeline::BindingType::Sampler => {
+                            if img_ptr < image_infos.len() {
+                                vk_write = vk_write
+                                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
+                                img_ptr += 1;
+                                descriptor_writes.push(vk_write);
+                            }
+                        }
+                        i3_gfx::graph::pipeline::BindingType::StorageTexture => {
+                            if img_ptr < image_infos.len() {
+                                vk_write = vk_write
+                                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
+                                img_ptr += 1;
+                                descriptor_writes.push(vk_write);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                unsafe {
+                    self.device.push_descriptor.cmd_push_descriptor_set(
+                        cmd,
+                        pipe.bind_point,
+                        pipe.layout,
+                        set_index,
+                        &descriptor_writes,
+                    );
+                }
+            } else {
+                // Pool Path
+                let set_handle = self
+                    .backend_mut()
+                    .allocate_descriptor_set(
+                        PipelineHandle(i3_gfx::graph::types::SymbolId(pipe.physical_id)),
+                        set_index,
+                    )
+                    .unwrap();
+                self.backend_mut()
+                    .update_descriptor_set(set_handle, &writes);
+                self.bind_descriptor_set(set_index, set_handle);
+            }
+        }
     }
 }
 
@@ -2802,6 +2811,27 @@ impl PassContext for VulkanPassContext {
         self.pipeline = Some(p.clone());
         self.current_pipeline_layout = p.layout;
         self.current_bind_point = p.bind_point;
+
+        self.flush_descriptors();
+    }
+
+    fn bind_pipeline_raw(&mut self, pipeline: BackendPipeline) {
+        let p = if let Some(p) = self.backend().pipeline_resources.get(pipeline.0) {
+            p.clone()
+        } else {
+            return;
+        };
+
+        unsafe {
+            self.device
+                .handle
+                .cmd_bind_pipeline(self.cmd, p.bind_point, p.handle);
+        }
+        self.pipeline = Some(p.clone());
+        self.current_pipeline_layout = p.layout;
+        self.current_bind_point = p.bind_point;
+
+        self.flush_descriptors();
     }
 
     fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {

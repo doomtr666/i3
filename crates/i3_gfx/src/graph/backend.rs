@@ -102,6 +102,10 @@ pub struct PassDescriptor<'a> {
 pub trait PassContext {
     // Pipeline & Binding (Logical interfaces)
     fn bind_pipeline(&mut self, pipeline: crate::graph::types::PipelineHandle);
+
+    /// Binds a raw backend pipeline. Used by passes that manage their own pipelines via `init`.
+    fn bind_pipeline_raw(&mut self, pipeline: BackendPipeline);
+
     fn bind_vertex_buffer(&mut self, binding: u32, handle: crate::graph::types::BufferHandle);
     fn bind_index_buffer(
         &mut self,

@@ -5,7 +5,6 @@ use examples_common::{ExampleApp, init_tracing, main_loop};
 use i3_gfx::prelude::*;
 use i3_renderer::render_graph::{DefaultRenderGraph, RenderConfig};
 use i3_renderer::scene::{LightData, LightType, ObjectData};
-use i3_slang::prelude::*;
 use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
 use std::time::Duration;
@@ -165,46 +164,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         light_type: LightType::Directional,
     });
 
-    // 4. Compile Shaders
-    let slang = SlangCompiler::new()?;
-    let shader_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("crates/i3_renderer/shaders");
-    let shader_path = shader_dir.to_str().unwrap();
-
-    let gbuffer_shader = slang.compile_file("gbuffer", ShaderTarget::Spirv, &[shader_path])?;
-    let debug_viz_shader = slang.compile_file("debug_viz", ShaderTarget::Spirv, &[shader_path])?;
-    let cluster_build_shader =
-        slang.compile_file("cluster_build", ShaderTarget::Spirv, &[shader_path])?;
-    let light_cull_shader =
-        slang.compile_file("light_cull", ShaderTarget::Spirv, &[shader_path])?;
-    let histogram_build_shader =
-        slang.compile_file("histogram_build", ShaderTarget::Spirv, &[shader_path])?;
-    let average_luminance_shader =
-        slang.compile_file("average_luminance", ShaderTarget::Spirv, &[shader_path])?;
-    let deferred_resolve_shader =
-        slang.compile_file("deferred_resolve", ShaderTarget::Spirv, &[shader_path])?;
-    let tonemap_shader = slang.compile_file("tonemap", ShaderTarget::Spirv, &[shader_path])?;
-    let sky_shader = slang.compile_file("sky", ShaderTarget::Spirv, &[shader_path])?;
-
-    // 5. Create Render Graph
+    // 4. Create Render Graph
     let config = RenderConfig {
         width: 1280,
         height: 720,
     };
-    let render_graph = DefaultRenderGraph::new(
-        &mut backend,
-        gbuffer_shader,
-        debug_viz_shader,
-        deferred_resolve_shader,
-        cluster_build_shader,
-        light_cull_shader,
-        histogram_build_shader,
-        average_luminance_shader,
-        tonemap_shader,
-        sky_shader,
-        &config,
-    );
+    let render_graph = DefaultRenderGraph::new(&mut backend, &config);
 
     // 6. Run
     let app = DeferredStressApp {

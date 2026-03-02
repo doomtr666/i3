@@ -1,4 +1,5 @@
 use i3_gfx::prelude::*;
+use i3_slang::prelude::*;
 use nalgebra_glm as glm;
 
 #[repr(C)]
@@ -17,7 +18,6 @@ pub struct DeferredResolvePushConstants {
 
 /// Deferred resolve pass struct implementing the RenderPass trait.
 pub struct DeferredResolvePass {
-    pub pipeline: PipelineHandle,
     pub hdr_target: ImageHandle,
     pub gbuffer_albedo: ImageHandle,
     pub gbuffer_normal: ImageHandle,
@@ -29,12 +29,15 @@ pub struct DeferredResolvePass {
     pub cluster_light_indices: BufferHandle,
     pub sampler: SamplerHandle,
     pub exposure_buffer: BufferHandle,
-    pub push_constants: DeferredResolvePushConstants,
+
+    // Persistence
+    shader: Option<ShaderModule>,
+    pipeline: Option<BackendPipeline>,
+    push_constants: Option<DeferredResolvePushConstants>,
 }
 
 impl DeferredResolvePass {
     pub fn new(
-        pipeline: PipelineHandle,
         hdr_target: ImageHandle,
         gbuffer_albedo: ImageHandle,
         gbuffer_normal: ImageHandle,
@@ -46,10 +49,8 @@ impl DeferredResolvePass {
         cluster_light_indices: BufferHandle,
         sampler: SamplerHandle,
         exposure_buffer: BufferHandle,
-        push_constants: DeferredResolvePushConstants,
     ) -> Self {
         Self {
-            pipeline,
             hdr_target,
             gbuffer_albedo,
             gbuffer_normal,
@@ -61,7 +62,23 @@ impl DeferredResolvePass {
             cluster_light_indices,
             sampler,
             exposure_buffer,
-            push_constants,
+            shader: None,
+            pipeline: None,
+            push_constants: None,
+        }
+    }
+
+    pub fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
+        GraphicsPipelineCreateInfo {
+            shader_module: self.shader.clone().expect("Shader not compiled"),
+            render_targets: RenderTargetsInfo {
+                color_targets: vec![RenderTargetInfo {
+                    format: Format::R16G16B16A16_SFLOAT,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 }
@@ -71,8 +88,45 @@ impl RenderPass for DeferredResolvePass {
         "DeferredResolvePass"
     }
 
+    fn init(&mut self, backend: &mut dyn RenderBackend) {
+        if self.pipeline.is_some() {
+            return;
+        }
+
+        // 1. Compile Shader
+        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
+        let shader_dir = "crates/i3_renderer/shaders";
+
+        self.shader = Some(
+            slang
+                .compile_file("deferred_resolve", ShaderTarget::Spirv, &[shader_dir])
+                .expect("Failed to compile DeferredResolve shader"),
+        );
+
+        // 2. Create Pipeline
+        let info = self.create_pipeline_info();
+        self.pipeline = Some(backend.create_graphics_pipeline(&info));
+    }
+
     fn record(&mut self, builder: &mut PassBuilder) {
-        builder.bind_pipeline(self.pipeline);
+        let (common, grid_size, debug_mode) = {
+            let c = *builder.consume::<crate::render_graph::CommonData>("Common");
+            let g = *builder.consume::<[u32; 3]>("ClusterGridSize");
+            let d = *builder.consume::<u32>("DebugChannel");
+            (c, g, d)
+        };
+
+        self.push_constants = Some(DeferredResolvePushConstants {
+            inv_view_proj: common.view_projection.try_inverse().unwrap_or_default(),
+            inv_projection: common.inv_projection,
+            camera_pos: common.camera_pos,
+            near_plane: common.near_plane,
+            grid_size,
+            far_plane: common.far_plane,
+            screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
+            debug_mode,
+            _pad: 0,
+        });
 
         // Read GBuffers and buffers
         builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
@@ -196,11 +250,18 @@ impl RenderPass for DeferredResolvePass {
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
-        ctx.push_constant_data(
-            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-            0,
-            &self.push_constants,
-        );
-        ctx.draw(3, 0); // Fullscreen triangle
+        let pipeline = self
+            .pipeline
+            .expect("DeferredResolvePass pipeline not initialized");
+        ctx.bind_pipeline_raw(pipeline);
+
+        if let Some(constants) = self.push_constants {
+            ctx.push_constant_data(
+                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+                0,
+                &constants,
+            );
+            ctx.draw(3, 0); // Fullscreen triangle
+        }
     }
 }

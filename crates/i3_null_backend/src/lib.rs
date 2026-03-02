@@ -326,6 +326,13 @@ impl<'a> PassContext for NullPassContext<'a> {
         }
     }
 
+    fn bind_pipeline_raw(&mut self, pipeline: i3_gfx::graph::backend::BackendPipeline) {
+        info!(pass = %self.pass_name, ?pipeline, "BIND_PIPELINE_RAW");
+        if !self.allocated_pipelines.contains(&pipeline.0) {
+            self.report_error(ValidationError::ResourceNotFound(pipeline.0));
+        }
+    }
+
     fn bind_vertex_buffer(&mut self, binding: u32, handle: i3_gfx::graph::types::BufferHandle) {
         info!(pass = %self.pass_name, binding, ?handle, "BIND_VERTEX_BUFFER");
         if !self.allocated_buffers.contains(&handle.0.0) {
