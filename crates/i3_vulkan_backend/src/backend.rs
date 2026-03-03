@@ -1982,15 +1982,15 @@ impl RenderBackendInternal for VulkanBackend {
                 .begin_command_buffer(cmd, &begin_info)
                 .unwrap()
         };
-        let is_compute = desc.domain != i3_gfx::graph::types::PassDomain::Graphics
-            || if let Some(h) = desc.pipeline {
-                self.pipeline_resources
-                    .get(h.0.0)
-                    .map(|p| p.bind_point == vk::PipelineBindPoint::COMPUTE)
-                    .unwrap_or(false)
-            } else {
-                false
-            };
+        // Infer domain from pipeline bind point (no user-declared domain)
+        let is_compute = if let Some(h) = desc.pipeline {
+            self.pipeline_resources
+                .get(h.0.0)
+                .map(|p| p.bind_point == vk::PipelineBindPoint::COMPUTE)
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
         let mut ctx = VulkanPassContext {
             cmd,

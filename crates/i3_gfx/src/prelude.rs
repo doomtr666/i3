@@ -27,7 +27,7 @@ pub use crate::graph::{
     types::{
         AddressMode, BufferDesc, BufferHandle, BufferUsageFlags, ComponentMapping,
         ComponentSwizzle, Filter, Format, GraphError, ImageDesc, ImageHandle, ImageUsageFlags,
-        ImageViewType, MemoryType, MipmapMode, PassDomain, PipelineHandle, ResourceUsage,
-        SamplerDesc, SwapChainImageHandle, SymbolId, WindowHandle,
+        ImageViewType, MemoryType, MipmapMode, PipelineHandle, ResourceUsage, SamplerDesc,
+        SwapChainImageHandle, SymbolId, WindowHandle,
     },
 };

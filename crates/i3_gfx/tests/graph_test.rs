@@ -203,3 +203,304 @@ fn test_modular_resource_lifecycle() {
     let compiled = graph.compile();
     compiled.execute(&mut backend, None).unwrap();
 }
+
+// ============================================================
+// DAG dependency ordering tests
+// ============================================================
+
+/// Helper: records which order passes executed in using a shared atomic sequence counter.
+fn make_order_pass(
+    name: &str,
+    seq: Arc<AtomicU32>,
+    slot: Arc<AtomicU32>,
+    record_fn: impl FnMut(&mut PassBuilder) + Send + Sync + 'static,
+) -> TestPass<
+    impl FnMut(&mut PassBuilder) + Send + Sync + 'static,
+    impl Fn(&mut dyn PassContext) + Send + Sync + 'static,
+> {
+    TestPass {
+        name: name.to_string(),
+        record: record_fn,
+        execute: move |_ctx: &mut dyn PassContext| {
+            let order = seq.fetch_add(1, Ordering::SeqCst);
+            slot.store(order, Ordering::SeqCst);
+        },
+    }
+}
+
+/// Diamond: A writes img → B reads img, A writes img → C reads img, B+C write img2 → D reads img2.
+/// D must execute after both B and C.
+#[test]
+fn test_diamond_dependency_ordering() {
+    common::init_test_tracing();
+    let mut backend = NullBackend::new();
+    let mut graph = FrameGraph::new();
+
+    let seq = Arc::new(AtomicU32::new(0));
+    let order_a = Arc::new(AtomicU32::new(u32::MAX));
+    let order_b = Arc::new(AtomicU32::new(u32::MAX));
+    let order_c = Arc::new(AtomicU32::new(u32::MAX));
+    let order_d = Arc::new(AtomicU32::new(u32::MAX));
+
+    let (s, oa, ob, oc, od) = (
+        seq.clone(),
+        order_a.clone(),
+        order_b.clone(),
+        order_c.clone(),
+        order_d.clone(),
+    );
+
+    graph.record(move |builder| {
+        let img = builder.declare_image("Shared", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
+        let img2 = builder.declare_image("Shared2", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
+
+        builder.add_pass(make_order_pass(
+            "A",
+            s.clone(),
+            oa.clone(),
+            move |b: &mut PassBuilder| {
+                b.write_image(img, ResourceUsage::COLOR_ATTACHMENT);
+            },
+        ));
+        builder.add_pass(make_order_pass(
+            "B",
+            s.clone(),
+            ob.clone(),
+            move |b: &mut PassBuilder| {
+                b.read_image(img, ResourceUsage::SHADER_READ);
+                b.write_image(img2, ResourceUsage::COLOR_ATTACHMENT);
+            },
+        ));
+        builder.add_pass(make_order_pass(
+            "C",
+            s.clone(),
+            oc.clone(),
+            move |b: &mut PassBuilder| {
+                b.read_image(img, ResourceUsage::SHADER_READ);
+                b.write_image(img2, ResourceUsage::COLOR_ATTACHMENT);
+            },
+        ));
+        builder.add_pass(make_order_pass(
+            "D",
+            s.clone(),
+            od.clone(),
+            move |b: &mut PassBuilder| {
+                b.read_image(img2, ResourceUsage::SHADER_READ);
+            },
+        ));
+    });
+
+    let compiled = graph.compile();
+    compiled.execute(&mut backend, None).unwrap();
+
+    let a = order_a.load(Ordering::SeqCst);
+    let b = order_b.load(Ordering::SeqCst);
+    let c = order_c.load(Ordering::SeqCst);
+    let d = order_d.load(Ordering::SeqCst);
+
+    assert!(a < b, "A({a}) must execute before B({b})");
+    assert!(a < c, "A({a}) must execute before C({c})");
+    assert!(b < d, "B({b}) must execute before D({d})");
+    assert!(c < d, "C({c}) must execute before D({d})");
+}
+
+/// Two independent passes with no shared resources — both must execute.
+#[test]
+fn test_independent_passes_both_execute() {
+    common::init_test_tracing();
+    let mut backend = NullBackend::new();
+    let mut graph = FrameGraph::new();
+
+    let exec_a = Arc::new(AtomicU32::new(0));
+    let exec_b = Arc::new(AtomicU32::new(0));
+    let ea = exec_a.clone();
+    let eb = exec_b.clone();
+
+    graph.record(move |builder| {
+        let img_a = builder.declare_image("ImgA", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
+        let img_b = builder.declare_image("ImgB", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
+
+        builder.add_pass(TestPass {
+            name: "PassA".to_string(),
+            record: move |b: &mut PassBuilder| {
+                b.write_image(img_a, ResourceUsage::COLOR_ATTACHMENT);
+            },
+            execute: move |_: &mut dyn PassContext| {
+                ea.fetch_add(1, Ordering::SeqCst);
+            },
+        });
+        builder.add_pass(TestPass {
+            name: "PassB".to_string(),
+            record: move |b: &mut PassBuilder| {
+                b.write_image(img_b, ResourceUsage::COLOR_ATTACHMENT);
+            },
+            execute: move |_: &mut dyn PassContext| {
+                eb.fetch_add(1, Ordering::SeqCst);
+            },
+        });
+    });
+
+    let compiled = graph.compile();
+    compiled.execute(&mut backend, None).unwrap();
+
+    assert_eq!(exec_a.load(Ordering::SeqCst), 1, "PassA must execute");
+    assert_eq!(exec_b.load(Ordering::SeqCst), 1, "PassB must execute");
+}
+
+/// WAR: Pass B writes to a resource that Pass A reads.
+/// B must execute after A (Write-After-Read hazard).
+#[test]
+fn test_war_dependency() {
+    common::init_test_tracing();
+    let mut backend = NullBackend::new();
+    let mut graph = FrameGraph::new();
+
+    let seq = Arc::new(AtomicU32::new(0));
+    let order_reader = Arc::new(AtomicU32::new(u32::MAX));
+    let order_writer = Arc::new(AtomicU32::new(u32::MAX));
+    let (s, or, ow) = (seq.clone(), order_reader.clone(), order_writer.clone());
+
+    graph.record(move |builder| {
+        let buf = builder.declare_buffer(
+            "SharedBuf",
+            BufferDesc {
+                size: 256,
+                usage: BufferUsageFlags::STORAGE_BUFFER,
+                memory: MemoryType::GpuOnly,
+            },
+        );
+
+        // A reads the buffer first
+        builder.add_pass(make_order_pass(
+            "Reader",
+            s.clone(),
+            or.clone(),
+            move |b: &mut PassBuilder| {
+                b.read_buffer(buf, ResourceUsage::SHADER_READ);
+            },
+        ));
+        // B writes to the same buffer — WAR dependency
+        builder.add_pass(make_order_pass(
+            "Writer",
+            s.clone(),
+            ow.clone(),
+            move |b: &mut PassBuilder| {
+                b.write_buffer(buf, ResourceUsage::SHADER_WRITE);
+            },
+        ));
+    });
+
+    let compiled = graph.compile();
+    compiled.execute(&mut backend, None).unwrap();
+
+    let r = order_reader.load(Ordering::SeqCst);
+    let w = order_writer.load(Ordering::SeqCst);
+    assert!(
+        r < w,
+        "Reader({r}) must execute before Writer({w}) — WAR hazard"
+    );
+}
+
+/// WAW: Two passes write to the same resource.  
+/// Second writer must execute after first writer.
+#[test]
+fn test_waw_dependency() {
+    common::init_test_tracing();
+    let mut backend = NullBackend::new();
+    let mut graph = FrameGraph::new();
+
+    let seq = Arc::new(AtomicU32::new(0));
+    let order_w1 = Arc::new(AtomicU32::new(u32::MAX));
+    let order_w2 = Arc::new(AtomicU32::new(u32::MAX));
+    let (s, o1, o2) = (seq.clone(), order_w1.clone(), order_w2.clone());
+
+    graph.record(move |builder| {
+        let img = builder.declare_image("Target", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
+
+        builder.add_pass(make_order_pass(
+            "Writer1",
+            s.clone(),
+            o1.clone(),
+            move |b: &mut PassBuilder| {
+                b.write_image(img, ResourceUsage::COLOR_ATTACHMENT);
+            },
+        ));
+        builder.add_pass(make_order_pass(
+            "Writer2",
+            s.clone(),
+            o2.clone(),
+            move |b: &mut PassBuilder| {
+                b.write_image(img, ResourceUsage::COLOR_ATTACHMENT);
+            },
+        ));
+    });
+
+    let compiled = graph.compile();
+    compiled.execute(&mut backend, None).unwrap();
+
+    let w1 = order_w1.load(Ordering::SeqCst);
+    let w2 = order_w2.load(Ordering::SeqCst);
+    assert!(
+        w1 < w2,
+        "Writer1({w1}) must execute before Writer2({w2}) — WAW hazard"
+    );
+}
+
+/// Linear chain: A→B→C with strict sequential ordering.
+#[test]
+fn test_linear_chain_ordering() {
+    common::init_test_tracing();
+    let mut backend = NullBackend::new();
+    let mut graph = FrameGraph::new();
+
+    let seq = Arc::new(AtomicU32::new(0));
+    let order_a = Arc::new(AtomicU32::new(u32::MAX));
+    let order_b = Arc::new(AtomicU32::new(u32::MAX));
+    let order_c = Arc::new(AtomicU32::new(u32::MAX));
+    let (s, oa, ob, oc) = (
+        seq.clone(),
+        order_a.clone(),
+        order_b.clone(),
+        order_c.clone(),
+    );
+
+    graph.record(move |builder| {
+        let img1 = builder.declare_image("Stage1", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
+        let img2 = builder.declare_image("Stage2", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
+
+        builder.add_pass(make_order_pass(
+            "A",
+            s.clone(),
+            oa.clone(),
+            move |b: &mut PassBuilder| {
+                b.write_image(img1, ResourceUsage::COLOR_ATTACHMENT);
+            },
+        ));
+        builder.add_pass(make_order_pass(
+            "B",
+            s.clone(),
+            ob.clone(),
+            move |b: &mut PassBuilder| {
+                b.read_image(img1, ResourceUsage::SHADER_READ);
+                b.write_image(img2, ResourceUsage::COLOR_ATTACHMENT);
+            },
+        ));
+        builder.add_pass(make_order_pass(
+            "C",
+            s.clone(),
+            oc.clone(),
+            move |b: &mut PassBuilder| {
+                b.read_image(img2, ResourceUsage::SHADER_READ);
+            },
+        ));
+    });
+
+    let compiled = graph.compile();
+    compiled.execute(&mut backend, None).unwrap();
+
+    let a = order_a.load(Ordering::SeqCst);
+    let b = order_b.load(Ordering::SeqCst);
+    let c = order_c.load(Ordering::SeqCst);
+    assert!(a < b, "A({a}) must execute before B({b})");
+    assert!(b < c, "B({b}) must execute before C({c})");
+}

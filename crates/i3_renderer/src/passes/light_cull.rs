@@ -48,10 +48,6 @@ impl RenderPass for LightCullPass {
         "LightCull"
     }
 
-    fn domain(&self) -> PassDomain {
-        PassDomain::Compute
-    }
-
     fn init(&mut self, backend: &mut dyn RenderBackend) {
         if self.pipeline.is_some() {
             return;

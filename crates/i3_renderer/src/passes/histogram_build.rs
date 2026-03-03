@@ -54,10 +54,6 @@ impl RenderPass for HistogramBuildPass {
         "HistogramBuildPass"
     }
 
-    fn domain(&self) -> PassDomain {
-        PassDomain::Compute
-    }
-
     fn init(&mut self, backend: &mut dyn RenderBackend) {
         if self.pipeline.is_some() {
             return;

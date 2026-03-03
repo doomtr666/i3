@@ -5,6 +5,9 @@ use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::types::*;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Metadata and data for an entry in the symbol table.
 pub struct Symbol {
@@ -60,8 +63,8 @@ impl SymbolTable {
 
 /// Storage for a specific node and its children.
 pub struct NodeStorage {
+    pub node_id: u64,
     pub name: String,
-    pub domain: PassDomain,
     pub symbols: SymbolTable,
     pub children: Vec<NodeStorage>,
     pub pass: Box<dyn RenderPass>,
@@ -84,7 +87,6 @@ impl std::fmt::Debug for NodeStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NodeStorage")
             .field("name", &self.name)
-            .field("domain", &self.domain)
             .field("symbols", &self.symbols)
             .field("children", &self.children)
             .field("image_reads", &self.image_reads)
@@ -301,8 +303,8 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         tracing::trace!(name = node.name(), "Adding sub-node");
 
         let mut child_storage = NodeStorage {
+            node_id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             name: node.name().to_string(),
-            domain: node.domain(),
             symbols: SymbolTable::new(),
             children: Vec::new(),
             pass: node, // Temporary take, will record into it
@@ -341,14 +343,6 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         // Put the real pass back
         child_storage.pass = pass;
 
-        // Infer domain for simple utility passes
-        if child_storage.pipeline.is_none()
-            && child_storage.image_writes.is_empty()
-            && child_storage.image_reads.is_empty()
-        {
-            child_storage.domain = PassDomain::Transfer;
-        }
-
         self.storage.children.push(child_storage);
     }
 }
@@ -362,8 +356,8 @@ impl FrameGraph {
     pub fn new() -> Self {
         Self {
             root: NodeStorage {
+                node_id: 0,
                 name: "root".to_string(),
-                domain: PassDomain::Graphics,
                 symbols: SymbolTable::new(),
                 children: Vec::new(),
                 pass: Box::new(PlaceholderPass),
@@ -398,12 +392,193 @@ impl FrameGraph {
 
     pub fn compile(self) -> CompiledGraph {
         tracing::debug!("Compiling hierarchical frame graph");
-        CompiledGraph { _root: self.root }
+
+        // 1. Flatten the tree into a linear pass list
+        let mut flat_passes = Vec::new();
+        Self::flatten_recursive(&self.root, &mut flat_passes);
+
+        // 2. Build dependency DAG from resource read/write overlaps
+        let adj = Self::build_dependency_dag(&flat_passes);
+
+        // 3. Topological sort with level assignment (Kahn's algorithm)
+        let (order, levels) = Self::topological_sort_levels(&flat_passes, &adj);
+
+        let max_level = levels.iter().copied().max().unwrap_or(0);
+        tracing::debug!(
+            passes = flat_passes.len(),
+            levels = max_level + 1,
+            "Compiled graph: {} passes across {} levels",
+            flat_passes.len(),
+            max_level + 1,
+        );
+
+        CompiledGraph {
+            _root: self.root,
+            flat_passes,
+            execution_order: order,
+            levels,
+        }
     }
+
+    /// Recursively flatten the node tree into leaf passes.
+    /// Groups contribute their children but are not themselves execution units.
+    fn flatten_recursive(node: &NodeStorage, flat_passes: &mut Vec<FlatPass>) {
+        // A leaf node: has resource intents or a pipeline (i.e., it does actual work)
+        let is_leaf = !node.image_reads.is_empty()
+            || !node.image_writes.is_empty()
+            || !node.buffer_reads.is_empty()
+            || !node.buffer_writes.is_empty()
+            || node.pipeline.is_some()
+            || node.name == "root"; // root is never a leaf
+
+        if node.name != "root" && (is_leaf || node.children.is_empty()) {
+            flat_passes.push(FlatPass {
+                node_id: node.node_id,
+                name: node.name.clone(),
+                _pipeline: node.pipeline,
+                image_reads: node.image_reads.clone(),
+                image_writes: node.image_writes.clone(),
+                buffer_reads: node.buffer_reads.clone(),
+                buffer_writes: node.buffer_writes.clone(),
+            });
+        }
+
+        for child in &node.children {
+            Self::flatten_recursive(child, flat_passes);
+        }
+    }
+
+    /// Build a dependency DAG. For each pair (i, j) where j > i in declaration order:
+    /// - RAW: j reads what i writes
+    /// - WAR: j writes what i reads
+    /// - WAW: j writes what i writes
+    fn build_dependency_dag(passes: &[FlatPass]) -> Vec<Vec<usize>> {
+        let n = passes.len();
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for j in 0..n {
+            for i in 0..j {
+                if Self::has_dependency(&passes[i], &passes[j]) {
+                    adj[i].push(j);
+                }
+            }
+        }
+
+        adj
+    }
+
+    /// Check if pass `b` depends on pass `a` (a must execute before b).
+    fn has_dependency(a: &FlatPass, b: &FlatPass) -> bool {
+        // RAW: b reads an image/buffer that a writes
+        for (h, _) in &a.image_writes {
+            if b.image_reads.iter().any(|(rh, _)| rh.0 == h.0) {
+                return true;
+            }
+        }
+        for (h, _) in &a.buffer_writes {
+            if b.buffer_reads.iter().any(|(rh, _)| rh.0 == h.0) {
+                return true;
+            }
+        }
+        // WAW: b writes an image/buffer that a writes
+        for (h, _) in &a.image_writes {
+            if b.image_writes.iter().any(|(wh, _)| wh.0 == h.0) {
+                return true;
+            }
+        }
+        for (h, _) in &a.buffer_writes {
+            if b.buffer_writes.iter().any(|(wh, _)| wh.0 == h.0) {
+                return true;
+            }
+        }
+        // WAR: b writes an image/buffer that a reads
+        for (h, _) in &a.image_reads {
+            if b.image_writes.iter().any(|(wh, _)| wh.0 == h.0) {
+                return true;
+            }
+        }
+        for (h, _) in &a.buffer_reads {
+            if b.buffer_writes.iter().any(|(wh, _)| wh.0 == h.0) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Topological sort with level assignment using Kahn's algorithm.
+    /// Returns (execution_order, per_pass_level).
+    fn topological_sort_levels(
+        passes: &[FlatPass],
+        adj: &[Vec<usize>],
+    ) -> (Vec<usize>, Vec<usize>) {
+        let n = passes.len();
+        let mut in_degree = vec![0usize; n];
+        for edges in adj {
+            for &to in edges {
+                in_degree[to] += 1;
+            }
+        }
+
+        // Seed with zero-indegree nodes
+        let mut queue: std::collections::VecDeque<usize> = in_degree
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d == 0)
+            .map(|(i, _)| i)
+            .collect();
+
+        let mut order = Vec::with_capacity(n);
+        let mut levels = vec![0usize; n];
+
+        while let Some(node) = queue.pop_front() {
+            order.push(node);
+            for &next in &adj[node] {
+                in_degree[next] -= 1;
+                // Level = max(level of all predecessors) + 1
+                levels[next] = levels[next].max(levels[node] + 1);
+                if in_degree[next] == 0 {
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        if order.len() != n {
+            tracing::error!(
+                expected = n,
+                got = order.len(),
+                "Cycle detected in dependency graph! Some passes will not execute."
+            );
+        }
+
+        for i in &order {
+            tracing::trace!(
+                pass = %passes[*i].name,
+                level = levels[*i],
+                "Pass scheduled"
+            );
+        }
+
+        (order, levels)
+    }
+}
+
+/// A flattened pass extracted from the node tree.
+#[derive(Debug)]
+struct FlatPass {
+    node_id: u64,
+    name: String,
+    _pipeline: Option<PipelineHandle>,
+    image_reads: Vec<(ImageHandle, ResourceUsage)>,
+    image_writes: Vec<(ImageHandle, ResourceUsage)>,
+    buffer_reads: Vec<(BufferHandle, ResourceUsage)>,
+    buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
 }
 
 pub struct CompiledGraph {
     _root: NodeStorage,
+    flat_passes: Vec<FlatPass>,
+    execution_order: Vec<usize>,
+    levels: Vec<usize>,
 }
 
 impl CompiledGraph {
@@ -412,13 +587,14 @@ impl CompiledGraph {
         backend: &mut dyn RenderBackendInternal,
         temporal_registry: Option<&mut crate::graph::temporal::TemporalRegistry>,
     ) -> Result<Option<u64>, GraphError> {
-        tracing::debug!("Executing hierarchical frame graph");
+        tracing::debug!(
+            passes = self.flat_passes.len(),
+            "Executing compiled frame graph"
+        );
 
-        // Track transient resources for cleanup
+        // 1. Resource Resolution & Allocation (still tree-based)
         let mut transient_images = Vec::new();
         let mut transient_buffers = Vec::new();
-
-        // 1. Resource Resolution & Allocation
         Self::resolve_resources_recursive(
             &mut self._root,
             backend,
@@ -427,22 +603,73 @@ impl CompiledGraph {
             &mut transient_buffers,
         );
 
-        // 2. Execution
+        // 2. Begin frame (resets per-frame state, waits on timeline)
         backend.begin_frame();
-        // Use a simple Vec for inactive images - usually 0 or 1, much faster than HashSet
-        let mut inactive_images = Vec::with_capacity(2);
-        // Create transient resources and resolve symbols
-        let last_sem =
-            Self::execute_node_recursive(&mut self._root, backend, &mut inactive_images)?;
 
-        // Final Submission (Phase 0: pure submission of recorded commands)
+        // 3. Swapchain acquire + external resource registration (must be after begin_frame)
+        let mut inactive_images: Vec<u64> = Vec::with_capacity(2);
+        Self::process_externals_recursive(&mut self._root, backend, &mut inactive_images)?;
+
+        // 4. Build node_id → &mut NodeStorage index for O(1) lookup
+        //    We collect raw pointers during a single tree traversal, then use them.
+        //    This is safe because we never alias: each node_id maps to exactly one node.
+        let mut node_map: HashMap<u64, *mut NodeStorage> = HashMap::new();
+        Self::collect_node_map(&mut self._root, &mut node_map);
+
+        // 5. Execute passes in topological order
+        let mut last_sem = None;
+        for &pass_idx in &self.execution_order {
+            let flat = &self.flat_passes[pass_idx];
+
+            // Skip if any write target is inactive (minimized window)
+            let is_inactive = if inactive_images.is_empty() {
+                false
+            } else {
+                flat.image_writes
+                    .iter()
+                    .any(|(h, _)| inactive_images.contains(&h.0.0))
+            };
+
+            if is_inactive {
+                tracing::debug!(pass = %flat.name, "Skipping pass (targets inactive image)");
+                continue;
+            }
+
+            if let Some(&node_ptr) = node_map.get(&flat.node_id) {
+                // SAFETY: Each node_id maps to a unique node, and we don't alias.
+                let node = unsafe { &mut *node_ptr };
+                let desc = PassDescriptor {
+                    name: &node.name,
+                    pipeline: node.pipeline,
+                    image_reads: &node.image_reads,
+                    image_writes: &node.image_writes,
+                    buffer_reads: &node.buffer_reads,
+                    buffer_writes: &node.buffer_writes,
+                    descriptor_sets: &node.descriptor_sets,
+                };
+                tracing::debug!(
+                    pass = %desc.name,
+                    level = self.levels[pass_idx],
+                    "Executing pass"
+                );
+                last_sem = Some(backend.begin_pass(desc, node.pass.as_ref()));
+            } else {
+                tracing::error!(
+                    pass = %flat.name,
+                    node_id = flat.node_id,
+                    "Node not found in tree during execution!"
+                );
+            }
+        }
+
+        // 6. Final submission
         let _ = backend
             .submit(crate::graph::backend::CommandBatch::default(), &[], &[])
             .map_err(|e| GraphError::BackendError(e))?;
 
         backend.end_frame();
 
-        // Release transient resources
+        // 7. Release transient resources
         for image in transient_images {
             backend.release_transient_image(image);
         }
@@ -451,6 +678,51 @@ impl CompiledGraph {
         }
 
         Ok(last_sem)
+    }
+
+    /// Collect all nodes into a map by node_id for O(1) lookup during execution.
+    fn collect_node_map(node: &mut NodeStorage, map: &mut HashMap<u64, *mut NodeStorage>) {
+        map.insert(node.node_id, node as *mut NodeStorage);
+        for child in &mut node.children {
+            Self::collect_node_map(child, map);
+        }
+    }
+
+    /// Process swapchain requests and external resources from the tree.
+    fn process_externals_recursive(
+        node: &mut NodeStorage,
+        backend: &mut dyn RenderBackendInternal,
+        inactive_images: &mut Vec<u64>,
+    ) -> Result<(), GraphError> {
+        for (handle, window) in &node.swapchain_requests {
+            match backend
+                .acquire_swapchain_image(*window)
+                .map_err(|e| GraphError::BackendError(e))?
+            {
+                Some((physical, _sem, _idx)) => {
+                    backend.register_external_image(*handle, physical);
+                }
+                None => {
+                    tracing::debug!(
+                        window = ?window.0,
+                        "Window is minimized, skipping associated passes"
+                    );
+                    inactive_images.push(handle.0.0);
+                }
+            }
+        }
+
+        for (virtual_handle, physical) in &node.external_images {
+            backend.register_external_image(*virtual_handle, *physical);
+        }
+        for (virtual_handle, physical) in &node.external_buffers {
+            backend.register_external_buffer(*virtual_handle, *physical);
+        }
+
+        for child in &mut node.children {
+            Self::process_externals_recursive(child, backend, inactive_images)?;
+        }
+        Ok(())
     }
 
     fn resolve_resources_recursive(
@@ -531,77 +803,5 @@ impl CompiledGraph {
                 transient_buffers,
             );
         }
-    }
-
-    fn execute_node_recursive(
-        node: &mut NodeStorage,
-        backend: &mut dyn RenderBackendInternal,
-        inactive_images: &mut Vec<u64>,
-    ) -> Result<Option<u64>, GraphError> {
-        // 0. Process Swapchain Requests (Automatic Acquire)
-        for (handle, window) in &node.swapchain_requests {
-            match backend
-                .acquire_swapchain_image(*window)
-                .map_err(|e| GraphError::BackendError(e))?
-            {
-                Some((physical, _sem, _idx)) => {
-                    // Register automatically
-                    backend.register_external_image(*handle, physical);
-                }
-                None => {
-                    // Mark this handle as inactive (minimized)
-                    tracing::debug!(window = ?window.0, "Window is minimized, skipping associated passes");
-                    inactive_images.push(handle.0.0);
-                }
-            }
-        }
-
-        // Register external resources first
-        for (virtual_handle, physical) in &node.external_images {
-            backend.register_external_image(*virtual_handle, *physical);
-        }
-        for (virtual_handle, physical) in &node.external_buffers {
-            backend.register_external_buffer(*virtual_handle, *physical);
-        }
-
-        let mut last_sem = None;
-
-        // Execute this node
-        {
-            // Check if any write target is inactive first to avoid heavy descriptor allocation
-            let is_inactive = if inactive_images.is_empty() {
-                false
-            } else {
-                node.image_writes
-                    .iter()
-                    .any(|(h, _)| inactive_images.contains(&h.0.0))
-            };
-
-            if !is_inactive {
-                let desc = PassDescriptor {
-                    name: &node.name,
-                    domain: node.domain,
-                    pipeline: node.pipeline,
-                    image_reads: &node.image_reads,
-                    image_writes: &node.image_writes,
-                    buffer_reads: &node.buffer_reads,
-                    buffer_writes: &node.buffer_writes,
-                    descriptor_sets: &node.descriptor_sets,
-                };
-                tracing::debug!(pass = %desc.name, writes = ?desc.image_writes.len(), "Executing pass");
-                last_sem = Some(backend.begin_pass(desc, node.pass.as_ref()));
-            } else {
-                tracing::debug!(pass = %node.name, "Skipping pass (targets inactive image)");
-            }
-        }
-
-        // Execute children
-        for child in &mut node.children {
-            if let Some(sem) = Self::execute_node_recursive(child, backend, inactive_images)? {
-                last_sem = Some(sem);
-            }
-        }
-
-        Ok(last_sem)
     }
 }

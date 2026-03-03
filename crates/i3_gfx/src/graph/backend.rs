@@ -89,7 +89,6 @@ use crate::graph::types::{BufferHandle, ImageHandle, PipelineHandle};
 #[derive(Debug, Clone)]
 pub struct PassDescriptor<'a> {
     pub name: &'a str,
-    pub domain: crate::graph::types::PassDomain,
     pub pipeline: Option<PipelineHandle>,
     pub image_reads: &'a [(ImageHandle, ResourceUsage)],
     pub image_writes: &'a [(ImageHandle, ResourceUsage)],

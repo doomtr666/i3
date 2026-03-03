@@ -1,7 +1,5 @@
 use crate::graph::backend::{DescriptorWrite, PassContext, RenderBackend};
-use crate::graph::types::{
-    BufferHandle, ImageDesc, ImageHandle, PassDomain, ResourceUsage, WindowHandle,
-};
+use crate::graph::types::{BufferHandle, ImageDesc, ImageHandle, ResourceUsage, WindowHandle};
 use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -139,11 +137,6 @@ pub trait RenderPass: Any + Send + Sync {
     /// Name of the pass (used for debugging/profiling).
     fn name(&self) -> &str;
 
-    /// Optional domain (Defaults to Graphics).
-    fn domain(&self) -> PassDomain {
-        PassDomain::Graphics
-    }
-
     /// Called once after the graph is built, for creating pipelines/resources.
     fn init(&mut self, _backend: &mut dyn RenderBackend) {}
 
@@ -159,10 +152,6 @@ impl<T: RenderPass + ?Sized> RenderPass for Arc<Mutex<T>> {
         // This is a bit unfortunate but we can't get the name without locking.
         // Usually we lock during record/execute anyway.
         "Arc<Mutex<RenderPass>>"
-    }
-
-    fn domain(&self) -> PassDomain {
-        self.lock().unwrap().domain()
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend) {
@@ -181,10 +170,6 @@ impl<T: RenderPass + ?Sized> RenderPass for Arc<Mutex<T>> {
 impl<T: RenderPass + ?Sized> RenderPass for Arc<RwLock<T>> {
     fn name(&self) -> &str {
         "Arc<RwLock<RenderPass>>"
-    }
-
-    fn domain(&self) -> PassDomain {
-        self.read().unwrap().domain()
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend) {
