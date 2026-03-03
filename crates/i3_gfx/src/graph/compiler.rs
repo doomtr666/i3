@@ -404,19 +404,37 @@ impl FrameGraph {
         let (order, levels) = Self::topological_sort_levels(&flat_passes, &adj);
 
         let max_level = levels.iter().copied().max().unwrap_or(0);
+
+        // 4. Group passes by level into ExecutionSteps
+        let mut steps = Vec::new();
+        for level in 0..=max_level {
+            let passes_in_level: Vec<usize> = order
+                .iter()
+                .copied()
+                .filter(|&idx| levels[idx] == level)
+                .collect();
+
+            match passes_in_level.len() {
+                0 => {}
+                1 => steps.push(ExecutionStep::Execute(passes_in_level[0])),
+                _ => steps.push(ExecutionStep::ExecuteParallel(passes_in_level)),
+            }
+        }
+
         tracing::debug!(
             passes = flat_passes.len(),
             levels = max_level + 1,
-            "Compiled graph: {} passes across {} levels",
+            steps = steps.len(),
+            "Compiled graph: {} passes, {} levels, {} steps",
             flat_passes.len(),
             max_level + 1,
+            steps.len(),
         );
 
         CompiledGraph {
             _root: self.root,
             flat_passes,
-            execution_order: order,
-            levels,
+            steps,
         }
     }
 
@@ -574,11 +592,19 @@ struct FlatPass {
     buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
 }
 
+/// A discrete step in the compiled execution plan.
+#[derive(Debug)]
+enum ExecutionStep {
+    /// Execute a single pass.
+    Execute(usize),
+    /// Execute multiple independent passes (parallel-ready, sequential for now).
+    ExecuteParallel(Vec<usize>),
+}
+
 pub struct CompiledGraph {
     _root: NodeStorage,
     flat_passes: Vec<FlatPass>,
-    execution_order: Vec<usize>,
-    levels: Vec<usize>,
+    steps: Vec<ExecutionStep>,
 }
 
 impl CompiledGraph {
@@ -589,6 +615,7 @@ impl CompiledGraph {
     ) -> Result<Option<u64>, GraphError> {
         tracing::debug!(
             passes = self.flat_passes.len(),
+            steps = self.steps.len(),
             "Executing compiled frame graph"
         );
 
@@ -610,55 +637,31 @@ impl CompiledGraph {
         let mut inactive_images: Vec<u64> = Vec::with_capacity(2);
         Self::process_externals_recursive(&mut self._root, backend, &mut inactive_images)?;
 
-        // 4. Build node_id → &mut NodeStorage index for O(1) lookup
-        //    We collect raw pointers during a single tree traversal, then use them.
-        //    This is safe because we never alias: each node_id maps to exactly one node.
+        // 4. Build node_id → NodeStorage pointer map for O(1) lookup
         let mut node_map: HashMap<u64, *mut NodeStorage> = HashMap::new();
         Self::collect_node_map(&mut self._root, &mut node_map);
 
-        // 5. Execute passes in topological order
+        // 5. Execute steps
         let mut last_sem = None;
-        for &pass_idx in &self.execution_order {
-            let flat = &self.flat_passes[pass_idx];
-
-            // Skip if any write target is inactive (minimized window)
-            let is_inactive = if inactive_images.is_empty() {
-                false
-            } else {
-                flat.image_writes
-                    .iter()
-                    .any(|(h, _)| inactive_images.contains(&h.0.0))
-            };
-
-            if is_inactive {
-                tracing::debug!(pass = %flat.name, "Skipping pass (targets inactive image)");
-                continue;
-            }
-
-            if let Some(&node_ptr) = node_map.get(&flat.node_id) {
-                // SAFETY: Each node_id maps to a unique node, and we don't alias.
-                let node = unsafe { &mut *node_ptr };
-                let desc = PassDescriptor {
-                    name: &node.name,
-                    pipeline: node.pipeline,
-                    image_reads: &node.image_reads,
-                    image_writes: &node.image_writes,
-                    buffer_reads: &node.buffer_reads,
-                    buffer_writes: &node.buffer_writes,
-                    descriptor_sets: &node.descriptor_sets,
-                };
-                tracing::debug!(
-                    pass = %desc.name,
-                    level = self.levels[pass_idx],
-                    "Executing pass"
-                );
-                last_sem = Some(backend.begin_pass(desc, node.pass.as_ref()));
-            } else {
-                tracing::error!(
-                    pass = %flat.name,
-                    node_id = flat.node_id,
-                    "Node not found in tree during execution!"
-                );
+        for step in &self.steps {
+            match step {
+                ExecutionStep::Execute(pass_idx) => {
+                    if let Some(sem) =
+                        self.execute_pass(*pass_idx, backend, &node_map, &inactive_images)
+                    {
+                        last_sem = Some(sem);
+                    }
+                }
+                ExecutionStep::ExecuteParallel(pass_indices) => {
+                    // Phase 2 TODO: rayon::scope here
+                    for &pass_idx in pass_indices {
+                        if let Some(sem) =
+                            self.execute_pass(pass_idx, backend, &node_map, &inactive_images)
+                        {
+                            last_sem = Some(sem);
+                        }
+                    }
+                }
             }
         }
 
@@ -678,6 +681,51 @@ impl CompiledGraph {
         }
 
         Ok(last_sem)
+    }
+
+    /// Execute a single pass by index. Returns semaphore value if pass executed.
+    fn execute_pass(
+        &self,
+        pass_idx: usize,
+        backend: &mut dyn RenderBackendInternal,
+        node_map: &HashMap<u64, *mut NodeStorage>,
+        inactive_images: &[u64],
+    ) -> Option<u64> {
+        let flat = &self.flat_passes[pass_idx];
+
+        // Skip if any write target is inactive (minimized window)
+        if !inactive_images.is_empty()
+            && flat
+                .image_writes
+                .iter()
+                .any(|(h, _)| inactive_images.contains(&h.0.0))
+        {
+            tracing::debug!(pass = %flat.name, "Skipping pass (targets inactive image)");
+            return None;
+        }
+
+        if let Some(&node_ptr) = node_map.get(&flat.node_id) {
+            // SAFETY: Each node_id maps to a unique node, and we don't alias.
+            let node = unsafe { &mut *node_ptr };
+            let desc = PassDescriptor {
+                name: &node.name,
+                pipeline: node.pipeline,
+                image_reads: &node.image_reads,
+                image_writes: &node.image_writes,
+                buffer_reads: &node.buffer_reads,
+                buffer_writes: &node.buffer_writes,
+                descriptor_sets: &node.descriptor_sets,
+            };
+            tracing::debug!(pass = %desc.name, "Executing pass");
+            Some(backend.begin_pass(desc, node.pass.as_ref()))
+        } else {
+            tracing::error!(
+                pass = %flat.name,
+                node_id = flat.node_id,
+                "Node not found in tree during execution!"
+            );
+            None
+        }
     }
 
     /// Collect all nodes into a map by node_id for O(1) lookup during execution.
