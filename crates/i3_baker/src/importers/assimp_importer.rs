@@ -106,6 +106,7 @@ impl Importer for AssimpImporter {
                 russimp::scene::PostProcess::JoinIdenticalVertices,
                 russimp::scene::PostProcess::SortByPrimitiveType,
                 russimp::scene::PostProcess::FlipUVs,
+                russimp::scene::PostProcess::FlipWindingOrder,
             ],
         )
         .map_err(|e| crate::BakerError::Plugin(format!("Assimp import error: {:?}", e)))?;
@@ -146,59 +147,40 @@ fn extract_meshes(scene: &russimp::scene::Scene) -> Vec<ExtractedMesh> {
             let has_uvs = !mesh.texture_coords.is_empty() && mesh.texture_coords[0].is_some();
             let has_colors = !mesh.colors.is_empty() && mesh.colors[0].is_some();
 
-            // Build vertex data
+            // Build vertex data: Always Position(3) + Normal(3) + Color/UV(3) = 36 bytes (9 floats)
             let vertex_count = mesh.vertices.len();
-            let floats_per_vertex = 3 // position
-                + if has_normals { 3 } else { 0 }
-                + if has_uvs { 2 } else { 0 }
-                + if has_colors { 3 } else { 0 };
-
-            let mut vertices = Vec::with_capacity(vertex_count * floats_per_vertex);
+            let mut vertices = Vec::with_capacity(vertex_count * 9);
 
             for i in 0..vertex_count {
-                // Position
+                // 1. Position (0-2)
                 vertices.push(mesh.vertices[i].x);
                 vertices.push(mesh.vertices[i].y);
                 vertices.push(mesh.vertices[i].z);
 
-                // Normal
+                // 2. Normal (3-5)
                 if has_normals {
-                    if let Some(n) = mesh.normals.get(i) {
-                        vertices.push(n.x);
-                        vertices.push(n.y);
-                        vertices.push(n.z);
-                    } else {
-                        vertices.extend_from_slice(&[0.0, 0.0, 0.0]);
-                    }
+                    let n = &mesh.normals[i];
+                    vertices.push(n.x);
+                    vertices.push(n.y);
+                    vertices.push(n.z);
+                } else {
+                    vertices.push(0.0);
+                    vertices.push(0.0);
+                    vertices.push(1.0);
                 }
 
-                // UV
-                if has_uvs {
-                    if let Some(ref coords) = mesh.texture_coords[0] {
-                        if let Some(uv) = coords.get(i) {
-                            vertices.push(uv.x);
-                            vertices.push(uv.y);
-                        } else {
-                            vertices.extend_from_slice(&[0.0, 0.0]);
-                        }
-                    } else {
-                        vertices.extend_from_slice(&[0.0, 0.0]);
-                    }
-                }
-
-                // Color
+                // 3. Color (6-8)
                 if has_colors {
-                    if let Some(ref colors) = mesh.colors[0] {
-                        if let Some(c) = colors.get(i) {
-                            vertices.push(c.r);
-                            vertices.push(c.g);
-                            vertices.push(c.b);
-                        } else {
-                            vertices.extend_from_slice(&[1.0, 1.0, 1.0]);
-                        }
-                    } else {
-                        vertices.extend_from_slice(&[1.0, 1.0, 1.0]);
-                    }
+                    let colors = mesh.colors[0].as_ref().unwrap();
+                    let c = &colors[i];
+                    vertices.push(c.r);
+                    vertices.push(c.g);
+                    vertices.push(c.b);
+                } else {
+                    // Default white
+                    vertices.push(1.0);
+                    vertices.push(1.0);
+                    vertices.push(1.0);
                 }
             }
 
@@ -258,18 +240,20 @@ fn build_mesh_output(
     mesh_idx: usize,
     source_path: &Path,
 ) -> Result<BakeOutput> {
-    // Determine vertex format
-    let (vertex_format, stride) = if mesh.has_normals && mesh.has_uvs {
-        (
-            VertexFormat::POSITION_NORMAL_UV,
-            VertexFormat::POSITION_NORMAL_UV.stride(),
-        )
-    } else {
-        (
-            VertexFormat::POSITION_NORMAL_COLOR,
-            VertexFormat::POSITION_NORMAL_COLOR.stride(),
-        )
-    };
+    // Generate deterministic UUID for this mesh
+    let namespace = uuid::Uuid::NAMESPACE_OID;
+    let name = format!(
+        "{}_mesh_{}",
+        source_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy(),
+        mesh_idx
+    );
+    let asset_id = uuid::Uuid::new_v5(&namespace, name.as_bytes());
+    // Determine vertex format: Phase 1 renderer only supports POSITION_NORMAL_COLOR
+    let vertex_format = VertexFormat::POSITION_NORMAL_COLOR;
+    let stride = vertex_format.stride();
 
     // Convert vertices to bytes
     let vertex_data: Vec<u8> = mesh.vertices.iter().flat_map(|f| f.to_ne_bytes()).collect();
@@ -306,10 +290,9 @@ fn build_mesh_output(
         index_format,
         vertex_format,
         vertex_offset: std::mem::size_of::<MeshHeader>() as u32,
-        index_offset: std::mem::size_of::<MeshHeader>() as u32 + vertex_data.len() as u32,
-        bounds_offset: std::mem::size_of::<MeshHeader>() as u32
-            + vertex_data.len() as u32
-            + index_data.len() as u32,
+        index_offset: (std::mem::size_of::<MeshHeader>() + vertex_data.len()) as u32,
+        bounds_offset: (std::mem::size_of::<MeshHeader>() + vertex_data.len() + index_data.len())
+            as u32,
         skeleton_id: [0u8; 16],
         _reserved: [0u8; 16],
     };
@@ -320,16 +303,6 @@ fn build_mesh_output(
     data.extend_from_slice(&vertex_data);
     data.extend_from_slice(&index_data);
     data.extend_from_slice(bytes_of(&bounds));
-
-    let asset_id = Uuid::new_v4();
-    let name = format!(
-        "{}_mesh_{}",
-        source_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy(),
-        mesh_idx
-    );
 
     Ok(BakeOutput {
         asset_id,
@@ -397,9 +370,20 @@ fn build_scene_output(data: &AssimpScene) -> Result<BakeOutput> {
     let mut mesh_refs: Vec<Uuid> = Vec::new();
     let mut string_table = Vec::new();
 
+    let namespace = uuid::Uuid::NAMESPACE_OID;
+    let file_stem = data
+        .source_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+
+    let mut scene_bounds = BoundingBox::empty();
+
     // Create one object per mesh with identity transform
     for mesh_idx in 0..data.meshes.len() {
-        let mesh_id = Uuid::new_v4();
+        // Use the same deterministic UUID logic as MeshExtractor
+        let mesh_name = format!("{}_mesh_{}", file_stem, mesh_idx);
+        let mesh_id = uuid::Uuid::new_v5(&namespace, mesh_name.as_bytes());
         let mesh_ref_index = mesh_refs.len() as u32;
         mesh_refs.push(mesh_id);
 
@@ -415,6 +399,12 @@ fn build_scene_output(data: &AssimpScene) -> Result<BakeOutput> {
             name_offset,
             _reserved: [0u32; 3],
         });
+
+        // Compute instance bounds and merge into scene bounds
+        let mesh_data = &data.meshes[mesh_idx];
+        let stride = VertexFormat::POSITION_NORMAL_COLOR.stride();
+        let mesh_bounds = calculate_bounds(&mesh_data.vertices, stride as usize / 4);
+        scene_bounds.merge(&mesh_bounds); // Identity transform for now in this loop
     }
 
     // Build header
@@ -433,7 +423,8 @@ fn build_scene_output(data: &AssimpScene) -> Result<BakeOutput> {
             + (objects.len() * std::mem::size_of::<ObjectInstance>()) as u32
             + (mesh_refs.len() * 16) as u32,
         strings_size: string_table.len() as u32,
-        _reserved: [0u8; 24],
+        bounds: scene_bounds,
+        _reserved: [0u8; 16],
     };
 
     // Assemble binary
@@ -448,16 +439,11 @@ fn build_scene_output(data: &AssimpScene) -> Result<BakeOutput> {
     }
     binary.extend_from_slice(&string_table);
 
-    let name = format!(
-        "{}_scene",
-        data.source_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-    );
+    let name = format!("{}_scene", file_stem);
+    let asset_id = uuid::Uuid::new_v5(&namespace, name.as_bytes());
 
     Ok(BakeOutput {
-        asset_id: Uuid::new_v4(),
+        asset_id,
         asset_type: SCENE_TYPE_UUID,
         data: binary,
         name,

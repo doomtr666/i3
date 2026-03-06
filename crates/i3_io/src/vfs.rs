@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{CatalogEntry, Result};
 use std::io::{Read, Seek};
 use std::path::Path;
 use std::sync::Arc;
@@ -10,8 +10,11 @@ pub trait VfsFile: Read + Seek + Send + Sync {
 }
 
 pub trait VfsBackend: Send + Sync {
-    fn open(&self, path: &Path) -> Result<Box<dyn VfsFile>>;
     fn exists(&self, path: &Path) -> bool;
+    fn open(&self, path: &Path) -> Result<Box<dyn VfsFile>>;
+    fn open_by_uuid(&self, _uuid: &uuid::Uuid) -> Option<Result<Box<dyn VfsFile>>> {
+        None
+    }
 }
 
 pub struct Vfs {
@@ -29,6 +32,11 @@ impl Vfs {
         self.backends.push(backend);
     }
 
+    pub fn exists(&self, path: impl AsRef<Path>) -> bool {
+        let path = path.as_ref();
+        self.backends.iter().any(|b| b.exists(path))
+    }
+
     pub fn open(&self, path: impl AsRef<Path>) -> Result<Box<dyn VfsFile>> {
         let path = path.as_ref();
         for backend in &self.backends {
@@ -37,6 +45,18 @@ impl Vfs {
             }
         }
         Err(crate::error::IoError::NotFound(path.to_path_buf()))
+    }
+
+    pub fn open_by_uuid(&self, uuid: &uuid::Uuid) -> Result<Box<dyn VfsFile>> {
+        for backend in &self.backends {
+            if let Some(result) = backend.open_by_uuid(uuid) {
+                return result;
+            }
+        }
+        Err(crate::error::IoError::Generic(format!(
+            "Asset UUID {} not found in any backend",
+            uuid
+        )))
     }
 }
 
@@ -88,7 +108,7 @@ impl VfsBackend for PhysicalBackend {
         let full_path = self.root.join(path);
         let file = std::fs::File::open(&full_path).map_err(|e| crate::error::IoError::Os {
             path: full_path.clone(),
-            source: e,
+            message: e.to_string(),
         })?;
 
         let mmap = unsafe { memmap2::Mmap::map(&file).ok() };
@@ -149,63 +169,81 @@ impl VfsFile for BundleFile {
 }
 
 pub struct BundleBackend {
-    catalog: std::collections::HashMap<String, crate::CatalogEntry>,
+    by_name: std::collections::HashMap<String, CatalogEntry>,
+    by_uuid: std::collections::HashMap<uuid::Uuid, CatalogEntry>,
     blob_mmap: Arc<memmap2::Mmap>,
 }
 
 impl BundleBackend {
     pub fn mount(catalog_path: impl AsRef<Path>, blob_path: impl AsRef<Path>) -> Result<Self> {
-        let catalog_data = std::fs::read(&catalog_path).map_err(|e| crate::error::IoError::Os {
-            path: catalog_path.as_ref().to_path_buf(),
-            source: e,
-        })?;
+        let catalog_file =
+            std::fs::File::open(&catalog_path).map_err(|e| crate::error::IoError::Os {
+                path: catalog_path.as_ref().to_path_buf(),
+                message: e.to_string(),
+            })?;
 
-        let catalog: std::collections::HashMap<String, crate::CatalogEntry> =
-            bincode::deserialize(&catalog_data)
-                .map_err(|e| crate::error::IoError::CatalogError(e.to_string()))?;
+        let catalog_mmap = unsafe {
+            memmap2::Mmap::map(&catalog_file).map_err(|e| crate::error::IoError::Os {
+                path: catalog_path.as_ref().to_path_buf(),
+                message: e.to_string(),
+            })?
+        };
+
+        let header_size = std::mem::size_of::<crate::CatalogHeader>();
+        if catalog_mmap.len() < header_size {
+            return Err(crate::error::IoError::InvalidData {
+                message: "Catalog too small for header".to_string(),
+            });
+        }
+
+        let header: &crate::CatalogHeader = bytemuck::from_bytes(&catalog_mmap[..header_size]);
+        if header.magic != crate::CatalogHeader::MAGIC {
+            return Err(crate::error::IoError::InvalidData {
+                message: "Invalid catalog magic".to_string(),
+            });
+        }
+
+        let entries_size = header.count as usize * std::mem::size_of::<CatalogEntry>();
+        if catalog_mmap.len() < header_size + entries_size {
+            return Err(crate::error::IoError::InvalidData {
+                message: "Catalog truncated".to_string(),
+            });
+        }
+
+        let entries: &[CatalogEntry] =
+            bytemuck::cast_slice(&catalog_mmap[header_size..header_size + entries_size]);
+
+        let mut by_name = std::collections::HashMap::with_capacity(header.count as usize);
+        let mut by_uuid = std::collections::HashMap::with_capacity(header.count as usize);
+
+        for entry in entries {
+            by_name.insert(entry.name().to_string(), *entry);
+            by_uuid.insert(uuid::Uuid::from_bytes(entry.asset_id), *entry);
+        }
 
         let blob_file = std::fs::File::open(&blob_path).map_err(|e| crate::error::IoError::Os {
             path: blob_path.as_ref().to_path_buf(),
-            source: e,
+            message: e.to_string(),
         })?;
 
-        let mmap = unsafe {
+        let blob_mmap = unsafe {
             memmap2::Mmap::map(&blob_file).map_err(|e| crate::error::IoError::Os {
                 path: blob_path.as_ref().to_path_buf(),
-                source: e,
+                message: e.to_string(),
             })?
         };
 
         Ok(Self {
-            catalog,
-            blob_mmap: Arc::new(mmap),
+            by_name,
+            by_uuid,
+            blob_mmap: Arc::new(blob_mmap),
         })
     }
-}
 
-impl VfsBackend for BundleBackend {
-    fn exists(&self, path: &Path) -> bool {
-        let path_str = path.to_string_lossy();
-        self.catalog.contains_key(path_str.as_ref())
-    }
-
-    fn open(&self, path: &Path) -> Result<Box<dyn VfsFile>> {
-        let path_str = path.to_string_lossy();
-        let entry = self
-            .catalog
-            .get(path_str.as_ref())
-            .ok_or_else(|| crate::error::IoError::NotFound(path.to_path_buf()))?;
-
-        // Architectural Invariant: 64KB Alignment check in debug
-        #[cfg(debug_assertions)]
-        {
-            if entry.offset % 65536 != 0 && entry.size > 65536 {
-                tracing::warn!(
-                    "Asset {} is heavy but NOT 64KB aligned! Performance may suffer.",
-                    path.display()
-                );
-            }
-        }
+    pub fn open_by_uuid(&self, id: &uuid::Uuid) -> Result<Box<dyn crate::vfs::VfsFile>> {
+        let entry = self.by_uuid.get(id).ok_or_else(|| {
+            crate::error::IoError::Generic(format!("Asset UUID {} not found", id))
+        })?;
 
         Ok(Box::new(BundleFile {
             mmap: self.blob_mmap.clone(),
@@ -213,5 +251,39 @@ impl VfsBackend for BundleBackend {
             size: entry.size,
             pos: 0,
         }))
+    }
+}
+
+impl VfsBackend for BundleBackend {
+    fn exists(&self, path: &Path) -> bool {
+        let path_str = path.to_string_lossy();
+        self.by_name.contains_key(path_str.as_ref())
+    }
+
+    fn open(&self, path: &Path) -> Result<Box<dyn VfsFile>> {
+        let path_str = path.to_string_lossy();
+        let entry = self
+            .by_name
+            .get(path_str.as_ref())
+            .ok_or_else(|| crate::error::IoError::NotFound(path.to_path_buf()))?;
+
+        Ok(Box::new(BundleFile {
+            mmap: self.blob_mmap.clone(),
+            offset: entry.offset,
+            size: entry.size,
+            pos: 0,
+        }))
+    }
+
+    fn open_by_uuid(&self, id: &uuid::Uuid) -> Option<Result<Box<dyn VfsFile>>> {
+        match self.by_uuid.get(id) {
+            Some(entry) => Some(Ok(Box::new(BundleFile {
+                mmap: self.blob_mmap.clone(),
+                offset: entry.offset,
+                size: entry.size,
+                pos: 0,
+            }))),
+            None => None,
+        }
     }
 }

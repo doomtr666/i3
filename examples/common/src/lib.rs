@@ -1,6 +1,5 @@
 pub mod basic_scene;
 pub mod camera_controller;
-pub mod gltf_loader;
 
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -15,8 +14,8 @@ pub fn init_tracing(file_name: &str) -> tracing_appender::non_blocking::WorkerGu
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(format!(
-            "info,i3_vulkan_backend={},i3_gfx={},i3_null_backend=warn",
-            level, level
+            "info,i3_vulkan_backend={},i3_gfx={},i3_io={},i3_baker={},i3_renderer={},viewer={}",
+            level, level, level, level, level, level
         ))
     });
 

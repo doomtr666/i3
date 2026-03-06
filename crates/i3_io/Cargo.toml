@@ -11,8 +11,5 @@ workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 memmap2.workspace = true
-rayon.workspace = true
-serde.workspace = true
-bincode.workspace = true
 uuid.workspace = true
-bytemuck.workspace = true
+bytemuck = { workspace = true, features = ["derive"] }

@@ -7,8 +7,8 @@ use crate::{AssetHeader, Result};
 use bytemuck::{Pod, Zeroable};
 use uuid::{Uuid, uuid};
 
-/// UUID for mesh assets: "i3mesh"
-pub const MESH_ASSET_TYPE: Uuid = uuid!("5969336d-6573-6800-0000-000000000000");
+/// UUID for mesh assets
+pub const MESH_ASSET_TYPE: Uuid = uuid!("936da01f-9abd-4d9d-80c7-02af85c822a6");
 
 /// Mesh header (64 bytes, repr C).
 /// Describes the layout of vertex and index data following the header.
@@ -91,6 +91,71 @@ pub struct BoundingBox {
     pub min: [f32; 3],
     /// Maximum corner (x, y, z).
     pub max: [f32; 3],
+}
+
+impl BoundingBox {
+    pub fn empty() -> Self {
+        Self {
+            min: [f32::INFINITY; 3],
+            max: [f32::NEG_INFINITY; 3],
+        }
+    }
+
+    pub fn diagonal(&self) -> [f32; 3] {
+        [
+            self.max[0] - self.min[0],
+            self.max[1] - self.min[1],
+            self.max[2] - self.min[2],
+        ]
+    }
+
+    pub fn diagonal_length(&self) -> f32 {
+        let d = self.diagonal();
+        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+    }
+
+    pub fn center(&self) -> [f32; 3] {
+        [
+            (self.min[0] + self.max[0]) * 0.5,
+            (self.min[1] + self.max[1]) * 0.5,
+            (self.min[2] + self.max[2]) * 0.5,
+        ]
+    }
+
+    pub fn merge(&mut self, other: &BoundingBox) {
+        for i in 0..3 {
+            self.min[i] = self.min[i].min(other.min[i]);
+            self.max[i] = self.max[i].max(other.max[i]);
+        }
+    }
+
+    pub fn transform(&self, matrix: &[[f32; 4]; 4]) -> Self {
+        let mut new_bounds = Self::empty();
+        let corners = [
+            [self.min[0], self.min[1], self.min[2]],
+            [self.max[0], self.min[1], self.min[2]],
+            [self.min[0], self.max[1], self.min[2]],
+            [self.max[0], self.max[1], self.min[2]],
+            [self.min[0], self.min[1], self.max[2]],
+            [self.max[0], self.min[1], self.max[2]],
+            [self.min[0], self.max[1], self.max[2]],
+            [self.max[0], self.max[1], self.max[2]],
+        ];
+
+        for c in corners {
+            let x = c[0] * matrix[0][0] + c[1] * matrix[1][0] + c[2] * matrix[2][0] + matrix[3][0];
+            let y = c[0] * matrix[0][1] + c[1] * matrix[1][1] + c[2] * matrix[2][1] + matrix[3][1];
+            let z = c[0] * matrix[0][2] + c[1] * matrix[1][2] + c[2] * matrix[2][2] + matrix[3][2];
+            let w = c[0] * matrix[0][3] + c[1] * matrix[1][3] + c[2] * matrix[2][3] + matrix[3][3];
+
+            let p = [x / w, y / w, z / w];
+            for i in 0..3 {
+                new_bounds.min[i] = new_bounds.min[i].min(p[i]);
+                new_bounds.max[i] = new_bounds.max[i].max(p[i]);
+            }
+        }
+        new_bounds
+    }
 }
 
 /// Baked mesh asset loaded from a bundle.

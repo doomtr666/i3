@@ -8,8 +8,8 @@ use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use uuid::{Uuid, uuid};
 
-/// UUID for scene assets: "i3scene"
-pub const SCENE_ASSET_TYPE: Uuid = uuid!("59693373-6365-6e65-0000-000000000000");
+/// UUID for scene assets
+pub const SCENE_ASSET_TYPE: Uuid = uuid!("b2a5e4f1-9686-4f54-91be-547f89e62901");
 
 /// Scene header (64 bytes, repr C).
 /// Describes the counts and offsets for scene data.
@@ -36,8 +36,10 @@ pub struct SceneHeader {
     pub strings_offset: u32,
     /// Total string table size in bytes.
     pub strings_size: u32,
+    /// Scene-wide bounding box.
+    pub bounds: crate::mesh::BoundingBox,
     /// Reserved for future use.
-    pub _reserved: [u8; 24],
+    pub _reserved: [u8; 16],
 }
 
 /// Object instance in a scene.
@@ -98,6 +100,7 @@ impl LightType {
 /// Baked scene asset loaded from a bundle.
 pub struct SceneAsset {
     pub header: SceneHeader,
+    pub bounds: crate::mesh::BoundingBox,
     pub objects: Vec<ObjectInstance>,
     pub lights: Vec<LightInstance>,
     pub mesh_refs: Vec<Uuid>,
@@ -268,6 +271,7 @@ impl Asset for SceneAsset {
 
         Ok(SceneAsset {
             header: scene_header,
+            bounds: scene_header.bounds,
             objects,
             lights,
             mesh_refs,

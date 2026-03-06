@@ -6,7 +6,6 @@ use i3_gfx::graph::pass::RenderPass;
 use i3_gfx::graph::pipeline::*;
 use i3_gfx::graph::types::*;
 
-use rayon;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info};
@@ -733,7 +732,9 @@ impl RenderBackend for VulkanBackend {
             .pool_sizes(&pool_sizes)
             .max_sets(1000);
 
-        let num_threads = rayon::current_num_threads();
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         for _ in 0..3 {
             unsafe {
                 let pool = device
@@ -2202,7 +2203,7 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         let device = self.get_device().clone();
-        let thread_idx = rayon::current_thread_index().unwrap_or(0);
+        let thread_idx = 0;
         let frame_ctx = &self.frame_contexts[self.global_frame_index];
         let mut tp = frame_ctx.per_thread_pools[thread_idx].lock().unwrap();
 
@@ -2264,7 +2265,7 @@ impl RenderBackendInternal for VulkanBackend {
     ) {
         let device = self.get_device().clone();
 
-        let thread_idx = rayon::current_thread_index().unwrap_or(0);
+        let thread_idx = 0;
         let frame_ctx = &self.frame_contexts[self.global_frame_index];
         let mut tp = frame_ctx.per_thread_pools[thread_idx].lock().unwrap();
 

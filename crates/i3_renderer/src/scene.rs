@@ -1,3 +1,4 @@
+use i3_gfx::prelude::IndexType;
 use nalgebra_glm::Mat4;
 
 /// Unique identifier for a renderable object in the scene.
@@ -45,6 +46,7 @@ pub struct Mesh {
     pub vertex_buffer: i3_gfx::prelude::BackendBuffer,
     pub index_buffer: i3_gfx::prelude::BackendBuffer,
     pub index_count: u32,
+    pub index_type: IndexType,
 }
 
 /// Trait that the application (or ECS bridge) implements to feed

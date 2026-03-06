@@ -1,6 +1,6 @@
 use crate::{AssetHeader, Result};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use uuid::Uuid;
 
 pub const ASSET_STATE_UNLOADED: u8 = 0;
 pub const ASSET_STATE_LOADING: u8 = 1;
@@ -13,8 +13,8 @@ pub trait Asset: Sized + Send + Sync + 'static {
 }
 
 pub struct AssetInner<T> {
-    pub state: AtomicU8,
-    pub asset: Option<T>,
+    pub sync: std::sync::Mutex<(u8, Option<std::result::Result<T, crate::IoError>>)>,
+    pub condvar: std::sync::Condvar,
 }
 
 pub struct AssetHandle<T> {
@@ -33,14 +33,14 @@ impl<T> AssetHandle<T> {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(AssetInner {
-                state: AtomicU8::new(ASSET_STATE_UNLOADED),
-                asset: None,
+                sync: std::sync::Mutex::new((ASSET_STATE_UNLOADED, None)),
+                condvar: std::sync::Condvar::new(),
             }),
         }
     }
 
     pub fn state(&self) -> u8 {
-        self.inner.state.load(Ordering::Acquire)
+        self.inner.sync.lock().unwrap().0
     }
 
     pub fn is_loaded(&self) -> bool {
@@ -48,10 +48,46 @@ impl<T> AssetHandle<T> {
     }
 
     pub fn get(&self) -> Option<&T> {
-        if self.is_loaded() {
-            self.inner.asset.as_ref()
+        let lock = self.inner.sync.lock().unwrap();
+        if lock.0 == ASSET_STATE_LOADED {
+            match lock.1.as_ref().unwrap() {
+                Ok(asset) => {
+                    let ptr = asset as *const T;
+                    Some(unsafe { &*ptr })
+                }
+                Err(_) => None,
+            }
         } else {
             None
+        }
+    }
+
+    pub fn wait_loaded(&self) -> Result<&T> {
+        let mut lock = self.inner.sync.lock().unwrap();
+        lock = self
+            .inner
+            .condvar
+            .wait_while(lock, |(state, _)| {
+                *state == ASSET_STATE_LOADING || *state == ASSET_STATE_UNLOADED
+            })
+            .unwrap();
+
+        if lock.0 == ASSET_STATE_LOADED {
+            match lock.1.as_ref().unwrap() {
+                Ok(asset) => {
+                    // Safe because the asset is immutable once state is LOADED
+                    let ptr = asset as *const T;
+                    Ok(unsafe { &*ptr })
+                }
+                Err(e) => Err(e.clone()),
+            }
+        } else {
+            match lock.1.as_ref() {
+                Some(Err(e)) => Err(e.clone()),
+                _ => Err(crate::IoError::Generic(
+                    "Asset failed to load (Inconsistent state)".to_string(),
+                )),
+            }
         }
     }
 }
@@ -71,73 +107,118 @@ impl AssetLoader {
         let vfs = self.vfs.clone();
         let handle_clone = handle.clone();
 
-        rayon::spawn(move || {
-            handle_clone
-                .inner
-                .state
-                .store(ASSET_STATE_LOADING, Ordering::Release);
+        let start_time = std::time::Instant::now();
+        std::thread::spawn(move || {
+            {
+                let mut lock = handle_clone.inner.sync.lock().unwrap();
+                lock.0 = ASSET_STATE_LOADING;
+            }
 
             let result = (|| -> Result<T> {
-                let mut vfs_file = vfs.open(&path)?;
-
-                if let Some(slice) = vfs_file.as_slice() {
-                    // Fast path: Zero-copy via bytemuck
-                    let header_size = std::mem::size_of::<AssetHeader>();
-                    if slice.len() < header_size {
-                        return Err(crate::IoError::InvalidData {
-                            message: "Asset too small for header".to_string(),
-                        });
-                    }
-
-                    let header: &AssetHeader = bytemuck::from_bytes(&slice[..header_size]);
-                    let data = &slice[header_size..];
-
-                    T::load(header, data)
-                } else {
-                    // Fallback: Read to memory
-                    let mut full_data = Vec::new();
-                    vfs_file.read_to_end(&mut full_data).map_err(|e| {
-                        crate::error::IoError::Os {
-                            path: path.clone(),
-                            source: e,
-                        }
-                    })?;
-
-                    let header_size = std::mem::size_of::<AssetHeader>();
-                    if full_data.len() < header_size {
-                        return Err(crate::IoError::InvalidData {
-                            message: "Asset too small for header".to_string(),
-                        });
-                    }
-
-                    let header: &AssetHeader = bytemuck::from_bytes(&full_data[..header_size]);
-                    let data = &full_data[header_size..];
-
-                    T::load(header, data)
-                }
+                let vfs_file = vfs.open(&path)?;
+                Self::load_internal(vfs_file)
             })();
 
-            match result {
-                Ok(asset) => {
-                    // Safe because we are the only ones writing to 'asset' while in LOADING state
-                    let inner =
-                        unsafe { &mut *(Arc::as_ptr(&handle_clone.inner) as *mut AssetInner<T>) };
-                    inner.asset = Some(asset);
-                    handle_clone
-                        .inner
-                        .state
-                        .store(ASSET_STATE_LOADED, Ordering::Release);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to load asset {}: {}", path.display(), e);
-                    handle_clone
-                        .inner
-                        .state
-                        .store(ASSET_STATE_ERROR, Ordering::Release);
-                }
-            }
+            Self::finalize_load(handle_clone, result, &path.to_string_lossy(), start_time);
         });
 
         handle
+    }
+
+    pub fn load_by_uuid<T: Asset>(&self, uuid: &Uuid) -> Result<AssetHandle<T>> {
+        let handle = AssetHandle::new();
+        let vfs = self.vfs.clone();
+        let handle_clone = handle.clone();
+        let uuid = *uuid;
+        let start_time = std::time::Instant::now();
+
+        std::thread::spawn(move || {
+            {
+                let mut lock = handle_clone.inner.sync.lock().unwrap();
+                lock.0 = ASSET_STATE_LOADING;
+            }
+
+            let result = (|| -> Result<T> {
+                let vfs_file = vfs.open_by_uuid(&uuid)?;
+                Self::load_internal(vfs_file)
+            })();
+
+            Self::finalize_load(handle_clone, result, &uuid.to_string(), start_time);
+        });
+
+        Ok(handle)
+    }
+
+    fn load_internal<T: Asset>(mut vfs_file: Box<dyn crate::vfs::VfsFile>) -> Result<T> {
+        if let Some(slice) = vfs_file.as_slice() {
+            // Fast path: Zero-copy via bytemuck
+            let header_size = std::mem::size_of::<AssetHeader>();
+            if slice.len() < header_size {
+                return Err(crate::IoError::InvalidData {
+                    message: "Asset too small for header".to_string(),
+                });
+            }
+
+            let header: &AssetHeader = bytemuck::from_bytes(&slice[..header_size]);
+            let data = &slice[header_size..];
+
+            T::load(header, data)
+        } else {
+            // Fallback: Read to memory
+            let mut full_data = Vec::new();
+            if let Err(e) = vfs_file.read_to_end(&mut full_data) {
+                return Err(crate::error::IoError::Generic(format!(
+                    "Failed to read asset data: {}",
+                    e
+                )));
+            }
+
+            let header_size = std::mem::size_of::<AssetHeader>();
+            if full_data.len() < header_size {
+                return Err(crate::IoError::InvalidData {
+                    message: "Asset too small for header".to_string(),
+                });
+            }
+
+            let header: &AssetHeader = bytemuck::from_bytes(&full_data[..header_size]);
+            let data = &full_data[header_size..];
+
+            T::load(header, data)
+        }
+    }
+
+    fn finalize_load<T>(
+        handle: AssetHandle<T>,
+        result: Result<T>,
+        identity: &str,
+        start_time: std::time::Instant,
+    ) {
+        let (new_state, log_err) = match &result {
+            Ok(_) => {
+                let duration = start_time.elapsed();
+                tracing::debug!(
+                    "Loaded asset {} in {}ms",
+                    identity,
+                    duration.as_secs_f32() * 1000.0
+                );
+                (ASSET_STATE_LOADED, None)
+            }
+            Err(e) => (
+                ASSET_STATE_ERROR,
+                Some(format!("Failed to load asset {}: {}", identity, e)),
+            ),
+        };
+
+        {
+            let mut lock = handle.inner.sync.lock().unwrap();
+            lock.0 = new_state;
+            lock.1 = Some(result);
+        }
+
+        handle.inner.condvar.notify_all();
+
+        if let Some(err) = log_err {
+            tracing::error!("{}", err);
+        }
     }
 }

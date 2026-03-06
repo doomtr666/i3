@@ -4,13 +4,14 @@ members = [
     "crates/i3_vulkan_backend",
     "crates/i3_null_backend",
     "crates/i3_slang",
+    "crates/i3_bundle",
     "examples/draw_triangle",
     "examples/common",
     "examples/compute_mandelbrot",
     "tools/rust_diagnostics",
     "tools/vulkan_diagnostics", "crates/i3_baker", "crates/i3_io",
     "crates/i3_renderer",
-    "examples/deferred_gltf",
+    "examples/viewer",
     "examples/deferred_stress",
 ]
 resolver = "2"
@@ -39,7 +40,7 @@ memmap2 = "0.9"
 rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
-uuid = { version = "1.10", features = ["v4", "serde"] }
+uuid = { version = "1.10", features = ["v4"] }
 bytemuck = { version = "1.18", features = ["derive"] }
 sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -22,11 +22,7 @@ impl<T> Copy for SyncPtr<T> {}
 unsafe impl<T> Send for SyncPtr<T> {}
 unsafe impl<T> Sync for SyncPtr<T> {}
 
-impl<T> SyncPtr<T> {
-    pub fn get(&self) -> *mut T {
-        self.0
-    }
-}
+impl<T> SyncPtr<T> {}
 
 /// Metadata and data for an entry in the symbol table.
 pub struct Symbol {
@@ -835,30 +831,20 @@ impl CompiledGraph {
                     }
                 }
                 ExecutionStep::ExecuteParallel(pass_indices) => {
-                    use rayon::prelude::*;
-
-                    let results: Vec<_> = pass_indices
-                        .par_iter()
-                        .map(|&pass_idx| {
-                            if let Some(prepared) = &prepared_passes[pass_idx] {
-                                let flat = &self.flat_passes[pass_idx];
-                                if let Some(node_ptr) = node_map.get(&flat.node_id) {
-                                    let node = unsafe { &mut *node_ptr.get() };
-                                    let (_sem, cb, present_req) =
-                                        backend.record_pass(prepared, node.pass.as_ref());
-                                    return (cb, present_req);
+                    for &pass_idx in pass_indices {
+                        if let Some(prepared) = &prepared_passes[pass_idx] {
+                            let flat = &self.flat_passes[pass_idx];
+                            if let Some(node_ptr) = node_map.get(&flat.node_id) {
+                                let node = unsafe { &mut *node_ptr.0 };
+                                let (_sem, cb, present_req) =
+                                    backend.record_pass(prepared, node.pass.as_ref());
+                                if let Some(c) = cb {
+                                    all_command_buffers.push(c);
+                                }
+                                if let Some(h) = present_req {
+                                    backend.mark_image_as_presented(h);
                                 }
                             }
-                            (None, None)
-                        })
-                        .collect();
-
-                    for (cb, present_req) in results {
-                        if let Some(c) = cb {
-                            all_command_buffers.push(c);
-                        }
-                        if let Some(h) = present_req {
-                            backend.mark_image_as_presented(h);
                         }
                     }
                 }

@@ -22,6 +22,7 @@ pub struct BasicScene {
     dirty: HashSet<ObjectId>,
     next_object_id: u64,
     next_light_id: u64,
+    bounds: i3_io::mesh::BoundingBox,
 }
 
 impl BasicScene {
@@ -34,7 +35,12 @@ impl BasicScene {
             dirty: HashSet::new(),
             next_object_id: 0,
             next_light_id: 0,
+            bounds: i3_io::mesh::BoundingBox::empty(),
         }
+    }
+
+    pub fn bounds(&self) -> &i3_io::mesh::BoundingBox {
+        &self.bounds
     }
 
     /// Uploads a mesh to the GPU and returns its ID.
@@ -77,6 +83,7 @@ impl BasicScene {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
+            index_type: IndexType::Uint16,
         });
 
         let _ = vertex_count; // Reserved for future validation
@@ -197,10 +204,17 @@ impl BasicScene {
             .expect("Failed to upload baked mesh indices");
 
         let id = self.meshes.len() as u32;
+        let index_type = match mesh.header.index_format {
+            i3_io::mesh::IndexFormat::U16 => IndexType::Uint16,
+            i3_io::mesh::IndexFormat::U32 => IndexType::Uint32,
+            _ => IndexType::Uint16,
+        };
+
         self.meshes.push(Mesh {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: mesh.header.index_count,
+            index_type,
         });
 
         // Register UUID mapping
@@ -216,6 +230,7 @@ impl BasicScene {
     ///
     /// Returns the number of objects added.
     pub fn load_baked_scene(&mut self, scene: &SceneAsset) -> usize {
+        self.bounds = scene.bounds;
         let object_count = scene.objects.len();
 
         // Add objects

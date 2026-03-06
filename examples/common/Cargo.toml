@@ -15,6 +15,5 @@ i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }
 i3_renderer = { path = "../../crates/i3_renderer" }
 i3_io = { path = "../../crates/i3_io" }
 nalgebra-glm = { workspace = true }
-gltf = { workspace = true }
 uuid = { workspace = true }
 tracing-appender = "0.2.4"

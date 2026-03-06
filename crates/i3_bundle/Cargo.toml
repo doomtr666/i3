@@ -1,0 +1,12 @@
+[package]
+name = "i3_bundle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+i3_io = { path = "../i3_io" }
+clap = { version = "4.4", features = ["derive"] }
+uuid = { version = "1.6", features = ["serde"] }
+prettytable-rs = "0.10"
+humantime = "2.1"
+bytemuck = { version = "1.18", features = ["derive"] }

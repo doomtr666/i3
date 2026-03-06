@@ -1,14 +1,10 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum IoError {
-    #[error("IO error at {path}: {source}")]
-    Os {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
+    #[error("IO error at {path}: {message}")]
+    Os { path: PathBuf, message: String },
 
     #[error("VFS path not found: {0}")]
     NotFound(PathBuf),

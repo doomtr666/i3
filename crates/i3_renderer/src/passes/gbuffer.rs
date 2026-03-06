@@ -183,7 +183,7 @@ impl RenderPass for GBufferPass {
             let ib = BufferHandle(SymbolId(cmd.mesh.index_buffer.0));
 
             ctx.bind_vertex_buffer(0, vb);
-            ctx.bind_index_buffer(ib, IndexType::Uint16);
+            ctx.bind_index_buffer(ib, cmd.mesh.index_type);
             ctx.draw_indexed(cmd.mesh.index_count, 0, 0);
         }
     }
