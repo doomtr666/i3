@@ -1,10 +1,13 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use i3_gfx::prelude::*;
+use i3_io::mesh::MeshAsset;
+use i3_io::scene_asset::{LightType as AssetLightType, SceneAsset};
 use i3_renderer::scene::{
     LightData, LightId, LightType, Mesh, ObjectData, ObjectId, SceneProvider,
 };
 use nalgebra_glm as glm;
+use uuid::Uuid;
 
 /// A simple in-memory scene for examples and integration tests.
 ///
@@ -12,6 +15,8 @@ use nalgebra_glm as glm;
 /// Implements `SceneProvider` so it can be passed directly to the renderer.
 pub struct BasicScene {
     meshes: Vec<Mesh>,
+    /// Mapping from mesh UUID to local mesh index.
+    mesh_uuid_to_index: HashMap<Uuid, u32>,
     objects: Vec<(ObjectId, ObjectData)>,
     lights: Vec<(LightId, LightData)>,
     dirty: HashSet<ObjectId>,
@@ -23,6 +28,7 @@ impl BasicScene {
     pub fn new() -> Self {
         Self {
             meshes: Vec::new(),
+            mesh_uuid_to_index: HashMap::new(),
             objects: Vec::new(),
             lights: Vec::new(),
             dirty: HashSet::new(),
@@ -159,6 +165,105 @@ impl BasicScene {
             light_type: LightType::Directional,
         });
     }
+
+    /// Uploads a baked mesh asset to the GPU and registers it by UUID.
+    ///
+    /// Returns the local mesh index. The mesh can later be referenced by its UUID
+    /// when loading a baked scene.
+    pub fn add_baked_mesh(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        mesh: &MeshAsset,
+        mesh_uuid: Uuid,
+    ) -> u32 {
+        // Create vertex buffer
+        let vb = backend.create_buffer(&BufferDesc {
+            size: mesh.vertex_data.len() as u64,
+            usage: BufferUsageFlags::VERTEX_BUFFER,
+            memory: MemoryType::CpuToGpu,
+        });
+        backend
+            .upload_buffer(vb, &mesh.vertex_data, 0)
+            .expect("Failed to upload baked mesh vertices");
+
+        // Create index buffer
+        let ib = backend.create_buffer(&BufferDesc {
+            size: mesh.index_data.len() as u64,
+            usage: BufferUsageFlags::INDEX_BUFFER,
+            memory: MemoryType::CpuToGpu,
+        });
+        backend
+            .upload_buffer(ib, &mesh.index_data, 0)
+            .expect("Failed to upload baked mesh indices");
+
+        let id = self.meshes.len() as u32;
+        self.meshes.push(Mesh {
+            vertex_buffer: vb,
+            index_buffer: ib,
+            index_count: mesh.header.index_count,
+        });
+
+        // Register UUID mapping
+        self.mesh_uuid_to_index.insert(mesh_uuid, id);
+
+        id
+    }
+
+    /// Loads a baked scene asset, creating objects and lights.
+    ///
+    /// Meshes must be loaded first via `add_baked_mesh`. Objects reference meshes
+    /// by UUID, which is resolved to the local mesh index.
+    ///
+    /// Returns the number of objects added.
+    pub fn load_baked_scene(&mut self, scene: &SceneAsset) -> usize {
+        let object_count = scene.objects.len();
+
+        // Add objects
+        for obj in &scene.objects {
+            // Resolve mesh UUID to local index
+            let mesh_id = scene
+                .mesh_for_object(obj)
+                .and_then(|uuid| self.mesh_uuid_to_index.get(&uuid).copied())
+                .unwrap_or(0); // Default to first mesh if not found
+
+            // Convert transform from [[f32; 4]; 4] to glm::Mat4
+            let transform = glm::Mat4::from(obj.transform);
+
+            let object_id = self.add_object(ObjectData {
+                world_transform: transform,
+                prev_transform: transform,
+                mesh_id,
+                material_id: 0, // Default material
+            });
+
+            // Set name if available
+            if let Some(name) = scene.object_name(obj) {
+                tracing::debug!("Loaded object '{}' (id={:?})", name, object_id);
+            }
+        }
+
+        // Add lights
+        for light in &scene.lights {
+            let light_type = match AssetLightType(light.light_type) {
+                AssetLightType::POINT => LightType::Point,
+                AssetLightType::DIRECTIONAL => LightType::Directional,
+                AssetLightType::SPOT => LightType::Spot,
+                _ => LightType::Point, // Default fallback
+            };
+
+            self.add_light(LightData {
+                position: glm::vec3(light.position[0], light.position[1], light.position[2]),
+                direction: glm::vec3(light.direction[0], light.direction[1], light.direction[2]),
+                color: glm::vec3(light.color[0], light.color[1], light.color[2]),
+                intensity: light.intensity,
+                radius: light.range,
+                light_type,
+            });
+        }
+
+        object_count
+    }
+
     /// Returns a mutable iterator over all lights.
     pub fn iter_lights_mut(
         &mut self,

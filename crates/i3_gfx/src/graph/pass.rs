@@ -213,7 +213,7 @@ where
 /// Internal trait to hide implementation details from the public PassBuilder API.
 pub(crate) trait InternalPassBuilder {
     fn publish_erased(&mut self, type_id: TypeId, name: &str, data: Box<dyn Any + Send + Sync>);
-    fn consume_erased(&self, type_id: TypeId, name: &str) -> &dyn Any;
+    fn consume_erased(&mut self, type_id: TypeId, name: &str) -> &dyn Any;
 
     fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage);
     fn write_image(&mut self, handle: ImageHandle, usage: ResourceUsage);

@@ -149,6 +149,9 @@ impl RenderBackend for NullBackend {
     }
 }
 
+unsafe impl Send for NullBackend {}
+unsafe impl Sync for NullBackend {}
+
 impl RenderBackendInternal for NullBackend {
     fn begin_frame(&mut self) {
         // No-op for null backend
@@ -199,17 +202,46 @@ impl RenderBackendInternal for NullBackend {
         Ok(0)
     }
 
-    fn begin_pass(&mut self, desc: PassDescriptor<'_>, pass: &dyn RenderPass) -> u64 {
-        info!(name = %desc.name, "Beginning null pass");
+    type PreparedPass = NullPreparedPass;
+
+    fn prepare_pass(&mut self, desc: PassDescriptor<'_>) -> Self::PreparedPass {
+        info!(name = %desc.name, "Preparing null pass");
+        NullPreparedPass {
+            name: desc.name.to_string(),
+        }
+    }
+
+    fn record_barriers(
+        &self,
+        _passes: &[&Self::PreparedPass],
+    ) -> Option<i3_gfx::graph::backend::BackendCommandBuffer> {
+        // Null backend does not need to submit barriers
+        None
+    }
+
+    fn record_pass(
+        &self,
+        prepared: &Self::PreparedPass,
+        pass: &dyn RenderPass,
+    ) -> (
+        Option<u64>,
+        Option<i3_gfx::graph::backend::BackendCommandBuffer>,
+        Option<i3_gfx::graph::types::ImageHandle>,
+    ) {
+        info!(name = %prepared.name, "Recording null pass");
         let mut ctx = NullPassContext::new(
-            &desc.name,
+            &prepared.name,
             &self.allocated_images,
             &self.allocated_buffers,
             &self.allocated_pipelines,
             &self.image_map,
         );
         pass.execute(&mut ctx);
-        0
+        (Some(0), None, None)
+    }
+
+    fn mark_image_as_presented(&mut self, _handle: i3_gfx::graph::types::ImageHandle) {
+        // No-op
     }
 
     fn resolve_image(
@@ -283,12 +315,16 @@ impl RenderBackendInternal for NullBackend {
 }
 
 pub struct NullPassContext<'a> {
-    pass_name: String,
+    pub pass_name: String,
     validation_failures: Vec<ValidationError>,
     allocated_images: &'a HashSet<u64>,
     allocated_buffers: &'a HashSet<u64>,
     allocated_pipelines: &'a HashSet<u64>,
     image_map: &'a std::collections::HashMap<i3_gfx::graph::types::ImageHandle, BackendImage>,
+}
+
+pub struct NullPreparedPass {
+    pub name: String,
 }
 
 impl<'a> NullPassContext<'a> {
@@ -410,11 +446,6 @@ impl<'a> PassContext for NullPassContext<'a> {
         let physical_id = if let Some(physical) = self.image_map.get(&image) {
             physical.0
         } else {
-            // Fallback to checking validity of the handle as direct physical ID (for testing without map)
-            // But for FrameGraph usage, it should be in the map.
-            // If internal handle is 0 (SymbolId::INVALID), we definitely want to look it up.
-            // If the handle IS the physical ID (e.g. direct backend usage), we use it.
-            // But ImageHandle wraps SymbolId.
             image.0.0
         };
 

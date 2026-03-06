@@ -1,5 +1,6 @@
 use crate::graph::backend::{
-    BackendBuffer, BackendImage, DescriptorWrite, PassDescriptor, RenderBackendInternal,
+    BackendBuffer, BackendImage, CommandBatch, DescriptorWrite, PassDescriptor,
+    RenderBackendInternal,
 };
 use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::types::*;
@@ -8,6 +9,24 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
+
+struct SyncPtr<T>(*mut T);
+
+impl<T> Clone for SyncPtr<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for SyncPtr<T> {}
+unsafe impl<T> Send for SyncPtr<T> {}
+unsafe impl<T> Sync for SyncPtr<T> {}
+
+impl<T> SyncPtr<T> {
+    pub fn get(&self) -> *mut T {
+        self.0
+    }
+}
 
 /// Metadata and data for an entry in the symbol table.
 pub struct Symbol {
@@ -77,6 +96,11 @@ pub struct NodeStorage {
     pub buffer_reads: Vec<(BufferHandle, ResourceUsage)>,
     pub buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
 
+    /// CPU data symbols published by this node (write dependency).
+    pub data_writes: Vec<String>,
+    /// CPU data symbols consumed by this node (read dependency).
+    pub data_reads: Vec<String>,
+
     pub external_images: Vec<(ImageHandle, BackendImage)>,
     pub external_buffers: Vec<(BufferHandle, BackendBuffer)>,
     pub swapchain_requests: Vec<(ImageHandle, WindowHandle)>,
@@ -126,9 +150,14 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 data: Some(data),
             },
         );
+        // Track as a data dependency for the DAG
+        self.storage.data_writes.push(name.to_string());
     }
 
-    fn consume_erased(&self, _type_id: TypeId, name: &str) -> &dyn Any {
+    fn consume_erased(&mut self, _type_id: TypeId, name: &str) -> &dyn Any {
+        // Track as a data dependency for the DAG
+        self.storage.data_reads.push(name.to_string());
+
         if let Some(id) = self.storage.symbols.resolve(name) {
             tracing::trace!(name, "Consuming CPU data (local)");
             return self
@@ -307,13 +336,15 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             name: node.name().to_string(),
             symbols: SymbolTable::new(),
             children: Vec::new(),
-            pass: node, // Temporary take, will record into it
+            pass: node,
 
             pipeline: None,
             image_reads: Vec::new(),
             image_writes: Vec::new(),
             buffer_reads: Vec::new(),
             buffer_writes: Vec::new(),
+            data_writes: Vec::new(),
+            data_reads: Vec::new(),
             external_images: Vec::new(),
             external_buffers: Vec::new(),
             swapchain_requests: Vec::new(),
@@ -367,6 +398,8 @@ impl FrameGraph {
                 image_writes: Vec::new(),
                 buffer_reads: Vec::new(),
                 buffer_writes: Vec::new(),
+                data_writes: Vec::new(),
+                data_reads: Vec::new(),
                 external_images: Vec::new(),
                 external_buffers: Vec::new(),
                 swapchain_requests: Vec::new(),
@@ -416,8 +449,14 @@ impl FrameGraph {
 
             match passes_in_level.len() {
                 0 => {}
-                1 => steps.push(ExecutionStep::Execute(passes_in_level[0])),
-                _ => steps.push(ExecutionStep::ExecuteParallel(passes_in_level)),
+                1 => {
+                    steps.push(ExecutionStep::Barriers(vec![passes_in_level[0]]));
+                    steps.push(ExecutionStep::Execute(passes_in_level[0]));
+                }
+                _ => {
+                    steps.push(ExecutionStep::Barriers(passes_in_level.clone()));
+                    steps.push(ExecutionStep::ExecuteParallel(passes_in_level));
+                }
             }
         }
 
@@ -441,23 +480,30 @@ impl FrameGraph {
     /// Recursively flatten the node tree into leaf passes.
     /// Groups contribute their children but are not themselves execution units.
     fn flatten_recursive(node: &NodeStorage, flat_passes: &mut Vec<FlatPass>) {
-        // A leaf node: has resource intents or a pipeline (i.e., it does actual work)
+        // A leaf node: has resource intents, data deps, or a pipeline
         let is_leaf = !node.image_reads.is_empty()
             || !node.image_writes.is_empty()
             || !node.buffer_reads.is_empty()
             || !node.buffer_writes.is_empty()
+            || !node.data_reads.is_empty()
+            || !node.data_writes.is_empty()
             || node.pipeline.is_some()
             || node.name == "root"; // root is never a leaf
 
         if node.name != "root" && (is_leaf || node.children.is_empty()) {
+            let domain = FlatPass::infer_domain(node);
+            tracing::trace!(pass = %node.name, ?domain, "Flattened pass");
             flat_passes.push(FlatPass {
                 node_id: node.node_id,
                 name: node.name.clone(),
-                _pipeline: node.pipeline,
+                domain,
+                pipeline: node.pipeline,
                 image_reads: node.image_reads.clone(),
                 image_writes: node.image_writes.clone(),
                 buffer_reads: node.buffer_reads.clone(),
                 buffer_writes: node.buffer_writes.clone(),
+                data_reads: node.data_reads.clone(),
+                data_writes: node.data_writes.clone(),
             });
         }
 
@@ -517,6 +563,24 @@ impl FrameGraph {
         }
         for (h, _) in &a.buffer_reads {
             if b.buffer_writes.iter().any(|(wh, _)| wh.0 == h.0) {
+                return true;
+            }
+        }
+        // CPU data: b reads data that a writes (RAW)
+        for name in &a.data_writes {
+            if b.data_reads.iter().any(|rn| rn == name) {
+                return true;
+            }
+        }
+        // CPU data: b writes data that a reads (WAR)
+        for name in &a.data_reads {
+            if b.data_writes.iter().any(|wn| wn == name) {
+                return true;
+            }
+        }
+        // CPU data: b writes data that a writes (WAW)
+        for name in &a.data_writes {
+            if b.data_writes.iter().any(|wn| wn == name) {
                 return true;
             }
         }
@@ -585,16 +649,69 @@ impl FrameGraph {
 struct FlatPass {
     node_id: u64,
     name: String,
-    _pipeline: Option<PipelineHandle>,
+    domain: PassDomain,
+    pipeline: Option<PipelineHandle>,
     image_reads: Vec<(ImageHandle, ResourceUsage)>,
     image_writes: Vec<(ImageHandle, ResourceUsage)>,
     buffer_reads: Vec<(BufferHandle, ResourceUsage)>,
     buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
+    data_reads: Vec<String>,
+    data_writes: Vec<String>,
+}
+
+impl FlatPass {
+    /// Infer the execution domain from resource usage intents.
+    fn infer_domain(node: &NodeStorage) -> PassDomain {
+        let has_raster = node.image_writes.iter().any(|(_, u)| {
+            u.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL)
+        });
+
+        if has_raster {
+            return PassDomain::Graphics;
+        }
+
+        let has_transfer = node
+            .image_reads
+            .iter()
+            .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_READ))
+            || node
+                .image_writes
+                .iter()
+                .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_WRITE))
+            || node
+                .buffer_reads
+                .iter()
+                .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_READ))
+            || node
+                .buffer_writes
+                .iter()
+                .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_WRITE));
+
+        if has_transfer && node.pipeline.is_none() {
+            return PassDomain::Transfer;
+        }
+
+        let has_gpu_work = node.pipeline.is_some()
+            || !node.image_reads.is_empty()
+            || !node.image_writes.is_empty()
+            || !node.buffer_reads.is_empty()
+            || !node.buffer_writes.is_empty();
+
+        if has_gpu_work {
+            // Has a pipeline but no raster intents → Compute
+            // Has shader read/write but no raster → Compute
+            return PassDomain::Compute;
+        }
+
+        PassDomain::Cpu
+    }
 }
 
 /// A discrete step in the compiled execution plan.
 #[derive(Debug)]
 enum ExecutionStep {
+    /// Emit barriers for a batch of passes.
+    Barriers(Vec<usize>),
     /// Execute a single pass.
     Execute(usize),
     /// Execute multiple independent passes (parallel-ready, sequential for now).
@@ -608,9 +725,9 @@ pub struct CompiledGraph {
 }
 
 impl CompiledGraph {
-    pub fn execute(
+    pub fn execute<B: RenderBackendInternal>(
         mut self,
-        backend: &mut dyn RenderBackendInternal,
+        backend: &mut B,
         temporal_registry: Option<&mut crate::graph::temporal::TemporalRegistry>,
     ) -> Result<Option<u64>, GraphError> {
         tracing::debug!(
@@ -637,28 +754,111 @@ impl CompiledGraph {
         let mut inactive_images: Vec<u64> = Vec::with_capacity(2);
         Self::process_externals_recursive(&mut self._root, backend, &mut inactive_images)?;
 
-        // 4. Build node_id → NodeStorage pointer map for O(1) lookup
-        let mut node_map: HashMap<u64, *mut NodeStorage> = HashMap::new();
-        Self::collect_node_map(&mut self._root, &mut node_map);
+        // 4. Build node_id → NodeStorage SyncPtr map for O(1) lookup
+        let mut node_map: HashMap<u64, SyncPtr<NodeStorage>> = HashMap::new();
+        Self::collect_node_map_sync(&mut self._root, &mut node_map);
+
+        // 4.5 Prepare all active passes sequentially
+        let mut prepared_passes: Vec<Option<B::PreparedPass>> =
+            Vec::with_capacity(self.flat_passes.len());
+        for flat in &self.flat_passes {
+            let is_skipped = !inactive_images.is_empty()
+                && flat
+                    .image_writes
+                    .iter()
+                    .any(|(h, _)| inactive_images.contains(&h.0.0));
+
+            if is_skipped {
+                tracing::debug!(
+                    pass = %flat.name,
+                    "Skipping pass preparation (targets inactive image)"
+                );
+                prepared_passes.push(None);
+                continue;
+            }
+
+            if let Some(node_ptr) = node_map.get(&flat.node_id) {
+                let node = unsafe { &mut *node_ptr.0 };
+                let desc = PassDescriptor {
+                    name: &node.name,
+                    pipeline: flat.pipeline,
+                    image_reads: &node.image_reads,
+                    image_writes: &node.image_writes,
+                    buffer_reads: &node.buffer_reads,
+                    buffer_writes: &node.buffer_writes,
+                    descriptor_sets: &node.descriptor_sets,
+                };
+                prepared_passes.push(Some(backend.prepare_pass(desc)));
+            } else {
+                tracing::error!(
+                    pass = %flat.name,
+                    node_id = flat.node_id,
+                    "Node not found in tree during preparation!"
+                );
+                prepared_passes.push(None);
+            }
+        }
 
         // 5. Execute steps
-        let mut last_sem = None;
+        let mut all_command_buffers = Vec::new();
+
         for step in &self.steps {
             match step {
+                ExecutionStep::Barriers(pass_indices) => {
+                    let mut batch_refs = Vec::with_capacity(pass_indices.len());
+                    for &idx in pass_indices {
+                        if let Some(prepared) = &prepared_passes[idx] {
+                            batch_refs.push(prepared);
+                        }
+                    }
+                    if !batch_refs.is_empty() {
+                        if let Some(cb) = backend.record_barriers(&batch_refs) {
+                            all_command_buffers.push(cb);
+                        }
+                    }
+                }
                 ExecutionStep::Execute(pass_idx) => {
-                    if let Some(sem) =
-                        self.execute_pass(*pass_idx, backend, &node_map, &inactive_images)
-                    {
-                        last_sem = Some(sem);
+                    if let Some(prepared) = &prepared_passes[*pass_idx] {
+                        let flat = &self.flat_passes[*pass_idx];
+                        if let Some(node_ptr) = node_map.get(&flat.node_id) {
+                            let node = unsafe { &mut *node_ptr.0 };
+                            tracing::debug!(pass = %flat.name, domain = ?flat.domain, "Executing pass");
+                            let (_sem, cb, present_req) =
+                                backend.record_pass(prepared, node.pass.as_ref());
+                            if let Some(c) = cb {
+                                all_command_buffers.push(c);
+                            }
+                            if let Some(h) = present_req {
+                                backend.mark_image_as_presented(h);
+                            }
+                        }
                     }
                 }
                 ExecutionStep::ExecuteParallel(pass_indices) => {
-                    // Phase 2 TODO: rayon::scope here
-                    for &pass_idx in pass_indices {
-                        if let Some(sem) =
-                            self.execute_pass(pass_idx, backend, &node_map, &inactive_images)
-                        {
-                            last_sem = Some(sem);
+                    use rayon::prelude::*;
+
+                    let results: Vec<_> = pass_indices
+                        .par_iter()
+                        .map(|&pass_idx| {
+                            if let Some(prepared) = &prepared_passes[pass_idx] {
+                                let flat = &self.flat_passes[pass_idx];
+                                if let Some(node_ptr) = node_map.get(&flat.node_id) {
+                                    let node = unsafe { &mut *node_ptr.get() };
+                                    let (_sem, cb, present_req) =
+                                        backend.record_pass(prepared, node.pass.as_ref());
+                                    return (cb, present_req);
+                                }
+                            }
+                            (None, None)
+                        })
+                        .collect();
+
+                    for (cb, present_req) in results {
+                        if let Some(c) = cb {
+                            all_command_buffers.push(c);
+                        }
+                        if let Some(h) = present_req {
+                            backend.mark_image_as_presented(h);
                         }
                     }
                 }
@@ -666,8 +866,11 @@ impl CompiledGraph {
         }
 
         // 6. Final submission
-        let _ = backend
-            .submit(crate::graph::backend::CommandBatch::default(), &[], &[])
+        let batch = CommandBatch {
+            command_buffers: all_command_buffers,
+        };
+        let submit_res = backend
+            .submit(batch, &[], &[])
             .map_err(|e| GraphError::BackendError(e))?;
 
         backend.end_frame();
@@ -680,66 +883,21 @@ impl CompiledGraph {
             backend.release_transient_buffer(buffer);
         }
 
-        Ok(last_sem)
-    }
-
-    /// Execute a single pass by index. Returns semaphore value if pass executed.
-    fn execute_pass(
-        &self,
-        pass_idx: usize,
-        backend: &mut dyn RenderBackendInternal,
-        node_map: &HashMap<u64, *mut NodeStorage>,
-        inactive_images: &[u64],
-    ) -> Option<u64> {
-        let flat = &self.flat_passes[pass_idx];
-
-        // Skip if any write target is inactive (minimized window)
-        if !inactive_images.is_empty()
-            && flat
-                .image_writes
-                .iter()
-                .any(|(h, _)| inactive_images.contains(&h.0.0))
-        {
-            tracing::debug!(pass = %flat.name, "Skipping pass (targets inactive image)");
-            return None;
-        }
-
-        if let Some(&node_ptr) = node_map.get(&flat.node_id) {
-            // SAFETY: Each node_id maps to a unique node, and we don't alias.
-            let node = unsafe { &mut *node_ptr };
-            let desc = PassDescriptor {
-                name: &node.name,
-                pipeline: node.pipeline,
-                image_reads: &node.image_reads,
-                image_writes: &node.image_writes,
-                buffer_reads: &node.buffer_reads,
-                buffer_writes: &node.buffer_writes,
-                descriptor_sets: &node.descriptor_sets,
-            };
-            tracing::debug!(pass = %desc.name, "Executing pass");
-            Some(backend.begin_pass(desc, node.pass.as_ref()))
-        } else {
-            tracing::error!(
-                pass = %flat.name,
-                node_id = flat.node_id,
-                "Node not found in tree during execution!"
-            );
-            None
-        }
+        Ok(Some(submit_res))
     }
 
     /// Collect all nodes into a map by node_id for O(1) lookup during execution.
-    fn collect_node_map(node: &mut NodeStorage, map: &mut HashMap<u64, *mut NodeStorage>) {
-        map.insert(node.node_id, node as *mut NodeStorage);
+    fn collect_node_map_sync(node: &mut NodeStorage, map: &mut HashMap<u64, SyncPtr<NodeStorage>>) {
+        map.insert(node.node_id, SyncPtr(node as *mut NodeStorage));
         for child in &mut node.children {
-            Self::collect_node_map(child, map);
+            Self::collect_node_map_sync(child, map);
         }
     }
 
     /// Process swapchain requests and external resources from the tree.
-    fn process_externals_recursive(
+    fn process_externals_recursive<B: RenderBackendInternal>(
         node: &mut NodeStorage,
-        backend: &mut dyn RenderBackendInternal,
+        backend: &mut B,
         inactive_images: &mut Vec<u64>,
     ) -> Result<(), GraphError> {
         for (handle, window) in &node.swapchain_requests {
@@ -773,9 +931,9 @@ impl CompiledGraph {
         Ok(())
     }
 
-    fn resolve_resources_recursive(
+    fn resolve_resources_recursive<B: RenderBackendInternal>(
         node: &mut NodeStorage,
-        backend: &mut dyn RenderBackendInternal,
+        backend: &mut B,
         mut temporal_registry_opt: Option<&mut crate::graph::temporal::TemporalRegistry>,
         transient_images: &mut Vec<BackendImage>,
         transient_buffers: &mut Vec<BackendBuffer>,

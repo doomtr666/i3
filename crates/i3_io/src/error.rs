@@ -31,6 +31,9 @@ pub enum IoError {
     #[error("Memory alignment error: expected 64KB")]
     AlignmentError,
 
+    #[error("Invalid data: {message}")]
+    InvalidData { message: String },
+
     #[error("Generic error: {0}")]
     Generic(String),
 }

@@ -1,7 +1,6 @@
 use crate::{AssetHeader, Result};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use uuid::Uuid;
 
 pub const ASSET_STATE_UNLOADED: u8 = 0;
 pub const ASSET_STATE_LOADING: u8 = 1;
@@ -80,32 +79,42 @@ impl AssetLoader {
 
             let result = (|| -> Result<T> {
                 let mut vfs_file = vfs.open(&path)?;
-                let mut data = Vec::new();
 
                 if let Some(slice) = vfs_file.as_slice() {
-                    // Fast path: Zero-copy
-                    data = slice.to_vec(); // Simplified for now, real implementation would use slices
+                    // Fast path: Zero-copy via bytemuck
+                    let header_size = std::mem::size_of::<AssetHeader>();
+                    if slice.len() < header_size {
+                        return Err(crate::IoError::InvalidData {
+                            message: "Asset too small for header".to_string(),
+                        });
+                    }
+
+                    let header: &AssetHeader = bytemuck::from_bytes(&slice[..header_size]);
+                    let data = &slice[header_size..];
+
+                    T::load(header, data)
                 } else {
-                    vfs_file
-                        .read_to_end(&mut data)
-                        .map_err(|e| crate::error::IoError::Os {
+                    // Fallback: Read to memory
+                    let mut full_data = Vec::new();
+                    vfs_file.read_to_end(&mut full_data).map_err(|e| {
+                        crate::error::IoError::Os {
                             path: path.clone(),
                             source: e,
-                        })?;
+                        }
+                    })?;
+
+                    let header_size = std::mem::size_of::<AssetHeader>();
+                    if full_data.len() < header_size {
+                        return Err(crate::IoError::InvalidData {
+                            message: "Asset too small for header".to_string(),
+                        });
+                    }
+
+                    let header: &AssetHeader = bytemuck::from_bytes(&full_data[..header_size]);
+                    let data = &full_data[header_size..];
+
+                    T::load(header, data)
                 }
-
-                // Header validation would go here
-                // For now, assume raw data is the asset
-                // In a real i3 asset, we'd parse the AssetHeader first
-
-                // Constructing an empty header for the load trait
-                let header = crate::AssetHeader::new(
-                    Uuid::from_bytes(T::ASSET_TYPE_ID),
-                    0,
-                    data.len() as u64,
-                );
-
-                T::load(&header, &data)
             })();
 
             match result {

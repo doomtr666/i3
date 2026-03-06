@@ -36,11 +36,11 @@ impl TemporalRegistry {
     }
 
     /// Retrieve or create a persistent double-buffered physical buffer.
-    pub fn get_or_create_buffer(
+    pub fn get_or_create_buffer<B: RenderBackendInternal>(
         &mut self,
         name: &str,
         desc: &BufferDesc,
-        backend: &mut dyn RenderBackendInternal,
+        backend: &mut B,
     ) -> BackendBuffer {
         let entry = self.buffers.entry(name.to_string()).or_insert_with(|| {
             let buf0 = backend.create_transient_buffer(desc);
@@ -52,11 +52,11 @@ impl TemporalRegistry {
 
     /// Retrieve the history buffer (N-1) for a persistent double-buffered physical buffer.
     /// If it hasn't been created yet, this will also create it.
-    pub fn get_or_create_history_buffer(
+    pub fn get_or_create_history_buffer<B: RenderBackendInternal>(
         &mut self,
         name: &str,
         desc: &BufferDesc,
-        backend: &mut dyn RenderBackendInternal,
+        backend: &mut B,
     ) -> BackendBuffer {
         let entry = self.buffers.entry(name.to_string()).or_insert_with(|| {
             let buf0 = backend.create_transient_buffer(desc);
@@ -67,11 +67,11 @@ impl TemporalRegistry {
     }
 
     /// Retrieve or create a persistent double-buffered physical image.
-    pub fn get_or_create_image(
+    pub fn get_or_create_image<B: RenderBackendInternal>(
         &mut self,
         name: &str,
         desc: &ImageDesc,
-        backend: &mut dyn RenderBackendInternal,
+        backend: &mut B,
     ) -> BackendImage {
         let entry = self.images.entry(name.to_string()).or_insert_with(|| {
             let img0 = backend.create_transient_image(desc);
@@ -82,11 +82,11 @@ impl TemporalRegistry {
     }
 
     /// Retrieve the history image (N-1).
-    pub fn get_or_create_history_image(
+    pub fn get_or_create_history_image<B: RenderBackendInternal>(
         &mut self,
         name: &str,
         desc: &ImageDesc,
-        backend: &mut dyn RenderBackendInternal,
+        backend: &mut B,
     ) -> BackendImage {
         let entry = self.images.entry(name.to_string()).or_insert_with(|| {
             let img0 = backend.create_transient_image(desc);

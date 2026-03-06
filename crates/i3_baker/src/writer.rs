@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::pipeline::BakeOutput;
 use i3_io::{AssetHeader, CatalogEntry};
 use std::collections::HashMap;
 use std::io::Write;
@@ -14,7 +15,7 @@ impl BundleWriter {
     pub fn new(blob_path: impl AsRef<Path>) -> Result<Self> {
         let blob_file =
             std::fs::File::create(blob_path).map_err(|e| crate::error::BakerError::Os {
-                path: Path::new("blob").to_path_buf(), // Placeholder
+                path: Path::new("blob").to_path_buf(),
                 source: e,
             })?;
 
@@ -25,32 +26,37 @@ impl BundleWriter {
         })
     }
 
-    pub fn add_asset(&mut self, id: &str, header: &AssetHeader, data: &[u8]) -> Result<()> {
-        let is_heavy = data.len() > 65536;
+    pub fn add_bake_output(&mut self, output: &BakeOutput) -> Result<()> {
+        let header = AssetHeader::new(output.asset_type, 0, output.data.len() as u64);
+        self.add_asset(&output.name, &header, &output.data)
+    }
 
-        if is_heavy {
-            // Align to 64KB
-            let padding = (65536 - (self.current_offset % 65536)) % 65536;
-            if padding > 0 {
-                let p = vec![0u8; padding as usize];
-                self.blob_file
-                    .write_all(&p)
-                    .map_err(|e| crate::error::BakerError::Os {
-                        path: Path::new("blob").to_path_buf(),
-                        source: e,
-                    })?;
-                self.current_offset += padding;
-            }
+    pub fn add_asset(&mut self, id: &str, header: &AssetHeader, data: &[u8]) -> Result<()> {
+        // Align each asset start on 64KB for DirectStorage/mmap performance
+        let padding = (65536 - (self.current_offset % 65536)) % 65536;
+        if padding > 0 {
+            let p = vec![0u8; padding as usize];
+            self.blob_file
+                .write_all(&p)
+                .map_err(|e| crate::error::BakerError::Os {
+                    path: Path::new("blob").to_path_buf(),
+                    source: e,
+                })?;
+            self.current_offset += padding;
         }
 
         let start_offset = self.current_offset;
 
-        // Write header
-        let header_bytes =
-            bincode::serialize(header).map_err(|e| i3_io::IoError::Generic(e.to_string()))?;
+        // Update header with the correct offset within the blob
+        let mut final_header = *header;
+        final_header.data_offset = start_offset;
+
+        // Write header (binary direct via bytemuck)
+        let header_bytes: &[u8] = bytemuck::bytes_of(&final_header);
+        assert_eq!(header_bytes.len(), 64);
 
         self.blob_file
-            .write_all(&header_bytes)
+            .write_all(header_bytes)
             .map_err(|e| crate::error::BakerError::Os {
                 path: Path::new("blob").to_path_buf(),
                 source: e,
@@ -70,11 +76,11 @@ impl BundleWriter {
         self.catalog.insert(
             id.to_string(),
             CatalogEntry {
-                asset_type: header.asset_type,
+                asset_type: final_header.asset_type,
                 offset: start_offset,
                 size: (self.current_offset - start_offset),
-                compression: header.compression,
-                uncompressed_size: header.uncompressed_size,
+                compression: final_header.compression,
+                uncompressed_size: final_header.uncompressed_size,
             },
         );
 

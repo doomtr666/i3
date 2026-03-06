@@ -111,7 +111,7 @@ fn test_complex_hierarchical_graph() {
 
                 let gbuffer_exec_inner = gbuffer_exec_clone.clone();
                 scene.add_pass(TestPass {
-                    name: "GBufferPass".to_string(),
+                    name: "ConsumerPass".to_string(),
                     record: move |sub: &mut PassBuilder| {
                         sub.write_image(main_target, ResourceUsage::COLOR_ATTACHMENT);
                     },
@@ -169,7 +169,7 @@ fn test_modular_resource_lifecycle() {
             name: "SceneGroup".to_string(),
             record: move |scene: &mut PassBuilder| {
                 scene.add_pass(TestPass {
-                    name: "GBufferPass".to_string(),
+                    name: "ConsumerPass".to_string(),
                     record: move |sub: &mut PassBuilder| {
                         sub.write_image(scene_texture, ResourceUsage::COLOR_ATTACHMENT);
                     },
@@ -503,4 +503,55 @@ fn test_linear_chain_ordering() {
     let c = order_c.load(Ordering::SeqCst);
     assert!(a < b, "A({a}) must execute before B({b})");
     assert!(b < c, "B({b}) must execute before C({c})");
+}
+
+/// Test that CPU data dependencies (publish/consume) create DAG edges.
+/// Two passes write the same data symbol (WAW). B must execute after A
+/// even though they share no GPU resources.
+#[test]
+fn test_cpu_data_dependency_ordering() {
+    let mut backend = NullBackend::new();
+    backend.initialize(0).unwrap();
+
+    let counter = Arc::new(AtomicU32::new(0));
+    let order_a = Arc::new(AtomicU32::new(0));
+    let order_b = Arc::new(AtomicU32::new(0));
+
+    let s = counter.clone();
+    let oa = order_a.clone();
+    let s2 = counter.clone();
+    let ob = order_b.clone();
+
+    let mut graph = FrameGraph::new();
+    graph.record(|builder| {
+        // Pass A: CPU-only, publishes data
+        builder.add_pass(make_order_pass(
+            "ProducerPass",
+            s.clone(),
+            oa.clone(),
+            move |b: &mut PassBuilder| {
+                b.publish("SharedData", 42u64);
+            },
+        ));
+
+        // Pass B: also publishes SharedData (WAW dependency)
+        builder.add_pass(make_order_pass(
+            "ConsumerPass",
+            s2.clone(),
+            ob.clone(),
+            move |b: &mut PassBuilder| {
+                b.publish("SharedData", 99u64);
+            },
+        ));
+    });
+
+    let compiled = graph.compile();
+    compiled.execute(&mut backend, None).unwrap();
+
+    let a = order_a.load(Ordering::SeqCst);
+    let b = order_b.load(Ordering::SeqCst);
+    assert!(
+        a < b,
+        "ProducerPass({a}) must execute before ConsumerPass({b}) — CPU data dependency"
+    );
 }

@@ -10,6 +10,10 @@ pub struct BackendBuffer(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendPipeline(pub u64);
 
+/// Handle representing a command buffer recorded by the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendCommandBuffer(pub u64);
+
 pub use crate::graph::types::{BufferDesc, ImageDesc, ResourceUsage};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -81,7 +85,7 @@ pub struct SwapchainConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandBatch {
-    // This will be refined as we implement the execution engine
+    pub command_buffers: Vec<BackendCommandBuffer>,
 }
 
 use crate::graph::types::{BufferHandle, ImageHandle, PipelineHandle};
@@ -249,7 +253,7 @@ impl<T: RenderBackend + ?Sized> RenderBackendExt for T {}
 /// Internal trait consumed by the FrameGraph compiler and pass execution.
 /// Backend implementations must implement this alongside `RenderBackend`.
 /// User code should not call these methods directly.
-pub trait RenderBackendInternal: RenderBackend {
+pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     // --- Frame Control ---
     fn begin_frame(&mut self);
     fn end_frame(&mut self);
@@ -270,11 +274,26 @@ pub trait RenderBackendInternal: RenderBackend {
         signal_sems: &[u64],
     ) -> Result<u64, String>;
 
-    fn begin_pass(
-        &mut self,
-        desc: PassDescriptor,
+    type PreparedPass: Send + Sync;
+    fn prepare_pass(&mut self, desc: PassDescriptor) -> Self::PreparedPass;
+
+    /// Record barriers for a batch of prepared passes into a command buffer.
+    fn record_barriers(&self, passes: &[&Self::PreparedPass]) -> Option<BackendCommandBuffer>;
+
+    /// Record a pass into a command buffer.
+    fn record_pass(
+        &self,
+        prepared: &Self::PreparedPass,
         pass: &dyn crate::graph::pass::RenderPass,
-    ) -> u64;
+    ) -> (
+        Option<u64>,
+        Option<BackendCommandBuffer>,
+        Option<crate::graph::types::ImageHandle>,
+    );
+
+    /// Forcefully updates an image state to PRESENT_SRC_KHR.
+    /// Used after parallel recording to synchronize backend state.
+    fn mark_image_as_presented(&mut self, handle: crate::graph::types::ImageHandle);
 
     // --- Handle Resolution ---
     fn resolve_image(&self, handle: crate::graph::types::ImageHandle) -> BackendImage;

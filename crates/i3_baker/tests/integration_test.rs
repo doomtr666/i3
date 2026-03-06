@@ -1,67 +1,79 @@
+use i3_baker::importers::AssimpImporter;
+use i3_baker::pipeline::{BakeContext, Importer};
 use i3_baker::writer::BundleWriter;
+use i3_io::AssetHeader;
+use i3_io::asset::Asset;
+use i3_io::mesh::{MESH_ASSET_TYPE, MeshAsset};
+use i3_io::scene_asset::{SCENE_ASSET_TYPE, SceneAsset};
 use i3_io::vfs::{BundleBackend, Vfs};
-use i3_io::{AssetHeader, asset::Asset};
-use uuid::Uuid;
-
-#[allow(dead_code)]
-struct DummyAsset {
-    data: Vec<u8>,
-}
-
-impl Asset for DummyAsset {
-    const ASSET_TYPE_ID: [u8; 16] = [0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    fn load(_header: &AssetHeader, data: &[u8]) -> i3_io::Result<Self> {
-        Ok(Self {
-            data: data.to_vec(),
-        })
-    }
-}
 
 #[test]
-fn test_bundle_alignment_and_loading() {
-    let temp_dir = std::env::temp_dir().join("i3_test_bundle");
-    if !temp_dir.exists() {
-        std::fs::create_dir_all(&temp_dir).unwrap();
+fn test_full_baking_pipeline() {
+    let temp_dir = std::env::temp_dir().join("i3_baker_test_full");
+    if temp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
+    std::fs::create_dir_all(&temp_dir).unwrap();
 
-    let blob_path = temp_dir.join("test.i3b");
-    let catalog_path = temp_dir.join("test.i3c");
+    // Create a minimal valid OBJ file for testing
+    let sample_obj = temp_dir.join("cube.obj");
+    std::fs::write(&sample_obj, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+    let source_path = sample_obj;
 
-    let mut writer = BundleWriter::new(&blob_path).unwrap();
+    let blob_path = temp_dir.join("test_assets.i3b");
+    let catalog_path = temp_dir.join("test_assets.i3c");
 
-    // 1. Small Asset (1KB) - Should NOT trigger 64KB alignment
-    let small_data = vec![1u8; 1024];
-    let type_id = Uuid::from_bytes(DummyAsset::ASSET_TYPE_ID);
-    let small_header = AssetHeader::new(type_id, 0, small_data.len() as u64);
+    // 1. Run Baker Pipeline
+    let importer = AssimpImporter::new();
+    let ctx = BakeContext::new(&source_path, &temp_dir);
+
+    let imported_data = importer.import(&source_path).expect("Failed to import OBJ");
+    let outputs = importer
+        .extract(imported_data.as_ref(), &ctx)
+        .expect("Failed to extract assets");
+
+    assert!(
+        !outputs.is_empty(),
+        "Should have extracted at least one asset"
+    );
+
+    let mut writer = BundleWriter::new(&blob_path).expect("Failed to create BundleWriter");
+    for output in &outputs {
+        writer
+            .add_bake_output(output)
+            .expect("Failed to add bake output");
+    }
     writer
-        .add_asset("small.bin", &small_header, &small_data)
-        .unwrap();
+        .finish(&catalog_path)
+        .expect("Failed to finish bundle");
 
-    // 2. Large Asset (70KB) - Should trigger 64KB alignment
-    let large_data = vec![2u8; 70 * 1024];
-    let large_header = AssetHeader::new(type_id, 0, large_data.len() as u64);
-    writer
-        .add_asset("large.bin", &large_header, &large_data)
-        .unwrap();
-
-    writer.finish(&catalog_path).unwrap();
-
-    // 3. Verify via i3_io
-    let backend = BundleBackend::mount(&catalog_path, &blob_path).unwrap();
+    // 2. Verify with VFS and i3_io
+    let backend = BundleBackend::mount(&catalog_path, &blob_path).expect("Failed to mount bundle");
     let mut vfs = Vfs::new();
     vfs.mount(Box::new(backend));
 
-    let small_file = vfs.open("small.bin").unwrap();
-    assert_eq!(small_file.size(), 1024 + 64); // Header + Data (Header is bincoded, assume 64)
+    let mut mesh_found = false;
+    let mut scene_found = false;
 
-    let large_file = vfs.open("large.bin").unwrap();
-    // Offset should be 64KB aligned
-    // We need to check the entry in the catalog directly or via some debug API
-    // The current BundleBackend doesn't expose the offset, but we can verify the loading.
+    for output in &outputs {
+        let file = vfs.open(&output.name).expect("Failed to open asset in VFS");
+        let data = file.as_slice().expect("Failed to get file slice");
 
-    let large_slice = large_file.as_slice().unwrap();
-    assert_eq!(large_slice.len(), (70 * 1024) + 64);
-    assert_eq!(large_slice[64], 2);
+        let header_size = std::mem::size_of::<AssetHeader>();
+        let header: &AssetHeader = bytemuck::from_bytes(&data[..header_size]);
+        let asset_data = &data[header_size..];
 
-    println!("Test passed: Alignment and Loading verified.");
+        if output.asset_type == MESH_ASSET_TYPE {
+            let mesh = MeshAsset::load(header, asset_data).expect("Failed to load MeshAsset");
+            assert!(mesh.header.vertex_count > 0);
+            mesh_found = true;
+        } else if output.asset_type == SCENE_ASSET_TYPE {
+            let scene = SceneAsset::load(header, asset_data).expect("Failed to load SceneAsset");
+            assert!(scene.header.object_count > 0);
+            scene_found = true;
+        }
+    }
+
+    assert!(mesh_found, "No mesh asset was baked/verified");
+    assert!(scene_found, "No scene asset was baked/verified");
 }
