@@ -74,6 +74,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Mesh"
         } else if asset_type == i3_io::scene_asset::SCENE_ASSET_TYPE {
             "Scene"
+        } else if asset_type == i3_io::material::MATERIAL_ASSET_TYPE {
+            "Material"
+        } else if asset_type == i3_io::texture::TEXTURE_ASSET_TYPE {
+            "Texture"
         } else {
             "Unknown"
         };

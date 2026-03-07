@@ -49,6 +49,19 @@ impl ImageImporter {
             1.055 * v.powf(1.0 / 2.4) - 0.055
         }
     }
+
+    pub fn import_memory(
+        &self,
+        buffer: &[u8],
+        source_path: &Path,
+    ) -> Result<Box<dyn ImportedData>> {
+        let img = image::load_from_memory(buffer)
+            .map_err(|e| crate::BakerError::Plugin(e.to_string()))?;
+        Ok(Box::new(ImageImportedData {
+            img,
+            source_path: source_path.to_path_buf(),
+        }))
+    }
 }
 
 impl Importer for ImageImporter {

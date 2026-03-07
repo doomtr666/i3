@@ -172,7 +172,8 @@ impl BundleBaker {
         }
 
         // Global mtime check for incremental baking
-        let mut needs_bake = !catalog_path.exists() || !blob_path.exists();
+        let mut needs_bake =
+            !catalog_path.exists() || !blob_path.exists() || std::env::var("FORCE_BAKE").is_ok();
         if !needs_bake {
             let output_metadata =
                 std::fs::metadata(&catalog_path).map_err(|e| crate::BakerError::Os {
