@@ -13,9 +13,6 @@ pub enum BakerError {
     #[error("Plugin error: {0}")]
     Plugin(String),
 
-    #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
-
     #[error("i3_io error: {0}")]
     Io(#[from] i3_io::IoError),
 

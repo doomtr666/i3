@@ -1,8 +1,6 @@
 pub mod error;
 pub mod importers;
 pub mod pipeline;
-pub mod registry;
-pub mod scanner;
 pub mod writer;
 
 pub use error::{BakerError, Result};

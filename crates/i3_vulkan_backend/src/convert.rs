@@ -49,6 +49,18 @@ pub fn convert_format(format: Format) -> vk::Format {
         Format::R32G32_SFLOAT => vk::Format::R32G32_SFLOAT,
         Format::R32G32B32_SFLOAT => vk::Format::R32G32B32_SFLOAT,
         Format::R32G32B32A32_SFLOAT => vk::Format::R32G32B32A32_SFLOAT,
+        Format::BC1_RGB_UNORM => vk::Format::BC1_RGB_UNORM_BLOCK,
+        Format::BC1_RGB_SRGB => vk::Format::BC1_RGB_SRGB_BLOCK,
+        Format::BC1_RGBA_UNORM => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        Format::BC1_RGBA_SRGB => vk::Format::BC1_RGBA_SRGB_BLOCK,
+        Format::BC3_UNORM => vk::Format::BC3_UNORM_BLOCK,
+        Format::BC3_SRGB => vk::Format::BC3_SRGB_BLOCK,
+        Format::BC4_UNORM => vk::Format::BC4_UNORM_BLOCK,
+        Format::BC4_SNORM => vk::Format::BC4_SNORM_BLOCK,
+        Format::BC5_UNORM => vk::Format::BC5_UNORM_BLOCK,
+        Format::BC5_SNORM => vk::Format::BC5_SNORM_BLOCK,
+        Format::BC7_UNORM => vk::Format::BC7_UNORM_BLOCK,
+        Format::BC7_SRGB => vk::Format::BC7_SRGB_BLOCK,
     }
 }
 
@@ -366,6 +378,18 @@ pub fn convert_vk_format(format: vk::Format) -> Format {
         vk::Format::R32_SFLOAT => Format::R32_FLOAT,
         vk::Format::R32G32B32A32_SFLOAT => Format::R32G32B32A32_FLOAT,
         vk::Format::D32_SFLOAT => Format::D32_FLOAT,
+        vk::Format::BC1_RGB_UNORM_BLOCK => Format::BC1_RGB_UNORM,
+        vk::Format::BC1_RGB_SRGB_BLOCK => Format::BC1_RGB_SRGB,
+        vk::Format::BC1_RGBA_UNORM_BLOCK => Format::BC1_RGBA_UNORM,
+        vk::Format::BC1_RGBA_SRGB_BLOCK => Format::BC1_RGBA_SRGB,
+        vk::Format::BC3_UNORM_BLOCK => Format::BC3_UNORM,
+        vk::Format::BC3_SRGB_BLOCK => Format::BC3_SRGB,
+        vk::Format::BC4_UNORM_BLOCK => Format::BC4_UNORM,
+        vk::Format::BC4_SNORM_BLOCK => Format::BC4_SNORM,
+        vk::Format::BC5_UNORM_BLOCK => Format::BC5_UNORM,
+        vk::Format::BC5_SNORM_BLOCK => Format::BC5_SNORM,
+        vk::Format::BC7_UNORM_BLOCK => Format::BC7_UNORM,
+        vk::Format::BC7_SRGB_BLOCK => Format::BC7_SRGB,
         _ => Format::Undefined,
     }
 }

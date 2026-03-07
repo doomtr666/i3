@@ -33,8 +33,8 @@ pub struct MeshHeader {
     pub bounds_offset: u32,
     /// UUID of associated skeleton (zero if static mesh).
     pub skeleton_id: [u8; 16],
-    /// Reserved for future use.
-    pub _reserved: [u8; 16],
+    /// UUID of associated material.
+    pub material_id: [u8; 16],
 }
 
 /// Index format for mesh indices.

@@ -5,7 +5,10 @@
 //! - Extractors produce typed outputs from imported data (e.g., MeshExtractor, SceneExtractor)
 
 use crate::Result;
+use crate::writer::BundleWriter;
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use uuid::Uuid;
 
 /// Context passed to importers and extractors during baking.
@@ -95,8 +98,164 @@ pub trait Extractor: Send + Sync {
     fn extract(&self, data: &dyn ImportedData, ctx: &BakeContext) -> Result<Vec<BakeOutput>>;
 }
 
+struct AssetJob {
+    source_path: PathBuf,
+    importer: Box<dyn Importer>,
+}
+
+/// A high-level declarative Baker for asset bundles.
+///
+/// Handles:
+/// - Cargo `rerun-if-changed` tracking.
+/// - Incremental build logic (mtime checks).
+/// - Parallel asset baking using Rayon.
+pub struct BundleBaker {
+    bundle_name: String,
+    output_dir: PathBuf,
+    assets: Vec<AssetJob>,
+}
+
+impl BundleBaker {
+    /// Create a new baker for the specified bundle.
+    /// Derived paths use `CARGO_MANIFEST_DIR` and `OUT_DIR`.
+    pub fn new(bundle_name: impl Into<String>) -> Result<Self> {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .map_err(|_| crate::BakerError::Pipeline("CARGO_MANIFEST_DIR not found".to_string()))?;
+        let _out_dir = std::env::var("OUT_DIR")
+            .map_err(|_| crate::BakerError::Pipeline("OUT_DIR not found".to_string()))?;
+
+        let manifest_path = PathBuf::from(&manifest_dir);
+        let output_dir = manifest_path.join("assets");
+        if !output_dir.exists() {
+            std::fs::create_dir_all(&output_dir).map_err(|e| crate::BakerError::Os {
+                path: output_dir.clone(),
+                source: e,
+            })?;
+        }
+
+        Ok(Self {
+            bundle_name: bundle_name.into(),
+            output_dir,
+            assets: Vec::new(),
+        })
+    }
+
+    /// Register an asset to be baked into the bundle.
+    pub fn add_asset(
+        mut self,
+        source_path: impl AsRef<Path>,
+        importer: impl Importer + 'static,
+    ) -> Self {
+        self.assets.push(AssetJob {
+            source_path: source_path.as_ref().to_path_buf(),
+            importer: Box::new(importer),
+        });
+        self
+    }
+
+    /// Execute the baking process.
+    pub fn execute(self) -> Result<()> {
+        println!("cargo:rerun-if-changed=build.rs");
+        let blob_path = self.output_dir.join(format!("{}.i3b", self.bundle_name));
+        let catalog_path = self.output_dir.join(format!("{}.i3c", self.bundle_name));
+
+        // Track outputs and inputs for Cargo
+        println!("cargo:rerun-if-changed={}", catalog_path.display());
+        for asset in &self.assets {
+            println!("cargo:rerun-if-changed={}", asset.source_path.display());
+            if !asset.source_path.exists() {
+                println!(
+                    "cargo:warning=Asset source NOT FOUND: {:?}",
+                    asset.source_path
+                );
+            }
+        }
+
+        // Global mtime check for incremental baking
+        let mut needs_bake = !catalog_path.exists() || !blob_path.exists();
+        if !needs_bake {
+            let output_metadata =
+                std::fs::metadata(&catalog_path).map_err(|e| crate::BakerError::Os {
+                    path: catalog_path.clone(),
+                    source: e,
+                })?;
+            let output_mtime = output_metadata
+                .modified()
+                .map_err(|e| crate::BakerError::Os {
+                    path: catalog_path.clone(),
+                    source: e,
+                })?;
+
+            for asset in &self.assets {
+                if asset.source_path.exists() {
+                    let metadata = std::fs::metadata(&asset.source_path).map_err(|e| {
+                        crate::BakerError::Os {
+                            path: asset.source_path.clone(),
+                            source: e,
+                        }
+                    })?;
+                    if metadata.modified().map_err(|e| crate::BakerError::Os {
+                        path: asset.source_path.clone(),
+                        source: e,
+                    })? > output_mtime
+                    {
+                        needs_bake = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if needs_bake {
+            println!(
+                "Baking bundle '{}' with {} assets (parallel)...",
+                self.bundle_name,
+                self.assets.len()
+            );
+            let total_start = Instant::now();
+
+            // Parallel bake using Rayon
+            let results: Result<Vec<Vec<BakeOutput>>> = self
+                .assets
+                .into_par_iter()
+                .map(|job| {
+                    let start = Instant::now();
+                    println!("  Baking {:?}...", job.source_path);
+                    let ctx = BakeContext::new(&job.source_path, &self.output_dir);
+                    let imported = job.importer.import(&job.source_path)?;
+                    let outputs = job.importer.extract(imported.as_ref(), &ctx)?;
+                    println!(
+                        "  Finished {:?} in {:.2?}.",
+                        job.source_path,
+                        start.elapsed()
+                    );
+                    Ok(outputs)
+                })
+                .collect();
+
+            let all_outputs = results?;
+
+            // Write results (Writer is not thread-safe, so we collect and write sequentially)
+            let mut writer = BundleWriter::new(&blob_path)?;
+            for outputs in all_outputs {
+                for output in outputs {
+                    writer.add_bake_output(&output)?;
+                }
+            }
+            writer.finish(&catalog_path)?;
+
+            println!(
+                "Bundle '{}' bake complete in {:.2?}.",
+                self.bundle_name,
+                total_start.elapsed()
+            );
+        }
+
+        Ok(())
+    }
+}
+
 /// Legacy trait kept for compatibility during migration.
-/// Will be removed once all plugins are converted to Importer/Extractor.
 #[deprecated(note = "Use Importer and Extractor traits instead")]
 #[allow(deprecated)]
 pub trait AssetPlugin: Send + Sync {

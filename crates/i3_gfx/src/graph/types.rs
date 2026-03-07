@@ -103,6 +103,19 @@ pub enum Format {
     R32G32_SFLOAT,
     R32G32B32_SFLOAT,
     R32G32B32A32_SFLOAT,
+    // BCx Compressed formats
+    BC1_RGB_UNORM,
+    BC1_RGB_SRGB,
+    BC1_RGBA_UNORM,
+    BC1_RGBA_SRGB,
+    BC3_UNORM,
+    BC3_SRGB,
+    BC4_UNORM,
+    BC4_SNORM,
+    BC5_UNORM,
+    BC5_SNORM,
+    BC7_UNORM,
+    BC7_SRGB,
 }
 
 impl Format {
@@ -111,7 +124,15 @@ impl Format {
     }
 
     pub fn is_srgb(&self) -> bool {
-        matches!(self, Format::R8G8B8A8_SRGB | Format::B8G8R8A8_SRGB)
+        matches!(
+            self,
+            Format::R8G8B8A8_SRGB
+                | Format::B8G8R8A8_SRGB
+                | Format::BC1_RGB_SRGB
+                | Format::BC1_RGBA_SRGB
+                | Format::BC3_SRGB
+                | Format::BC7_SRGB
+        )
     }
 
     pub fn aspect_mask(&self) -> ImageAspectFlags {

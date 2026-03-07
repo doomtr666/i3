@@ -2,8 +2,10 @@ use uuid::Uuid;
 
 pub mod asset;
 pub mod error;
+pub mod material;
 pub mod mesh;
 pub mod scene_asset;
+pub mod texture;
 pub mod vfs;
 
 pub use error::{IoError, Result};
