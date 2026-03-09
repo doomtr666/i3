@@ -9,13 +9,34 @@ pub struct ObjectId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LightId(pub u64);
 
-/// GPU-ready data for a single renderable object.
+/// Unique identifier for a material in the scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MaterialId(pub u32);
+
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct ObjectData {
     pub world_transform: Mat4,
     pub prev_transform: Mat4,
     pub material_id: u32,
     pub mesh_id: u32,
+    pub flags: u32,
+    pub _pad: u32,
+}
+
+/// GPU-ready data for a material.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct MaterialData {
+    pub base_color_factor: [f32; 4],
+    pub emissive_factor_and_alpha_cutoff: [f32; 4],
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub albedo_tex_index: i32,
+    pub normal_tex_index: i32,
+    pub rmao_tex_index: i32,
+    pub emissive_tex_index: i32,
+    pub _pad: [u32; 2],
 }
 
 /// Type of light source.
@@ -47,6 +68,7 @@ pub struct Mesh {
     pub index_buffer: i3_gfx::prelude::BackendBuffer,
     pub index_count: u32,
     pub index_type: IndexType,
+    pub stride: u32,
 }
 
 /// Trait that the application (or ECS bridge) implements to feed
@@ -64,8 +86,13 @@ pub trait SceneProvider {
     /// Iterate all objects (full upload, used on first frame or reset).
     fn iter_objects(&self) -> Box<dyn Iterator<Item = (ObjectId, &ObjectData)> + '_>;
 
-    /// Iterate only objects that changed since last frame (delta upload).
     fn iter_dirty_objects(&self) -> Box<dyn Iterator<Item = (ObjectId, &ObjectData)> + '_>;
+
+    /// Total number of materials.
+    fn material_count(&self) -> usize;
+
+    /// Iterate all materials.
+    fn iter_materials(&self) -> Box<dyn Iterator<Item = (MaterialId, &MaterialData)> + '_>;
 
     /// Total number of active lights.
     fn light_count(&self) -> usize;

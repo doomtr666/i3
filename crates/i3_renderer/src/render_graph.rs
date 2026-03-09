@@ -1,4 +1,4 @@
-use crate::groups::{ClusteringGroup, PostProcessGroup};
+use crate::groups::{ClusteringGroup, PostProcessGroup, sync::SyncGroup};
 use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
 use crate::passes::deferred_resolve::DeferredResolvePass;
 use crate::passes::gbuffer::{self, DrawCommand, GBufferPass};
@@ -46,9 +46,9 @@ impl RenderPass for ClearBufferPass {
 ///
 /// Owns persistent passes and groups. Geometry comes from the SceneProvider.
 pub struct DefaultRenderGraph {
-    // Persistent Passes
     pub gbuffer_pass: Arc<Mutex<GBufferPass>>,
     pub sky_pass: Arc<Mutex<SkyPass>>,
+    pub sync_group: Arc<Mutex<SyncGroup>>,
     pub clustering_group: Arc<Mutex<ClusteringGroup>>,
     pub deferred_resolve_pass: Arc<Mutex<DeferredResolvePass>>,
     pub post_process_group: Arc<Mutex<PostProcessGroup>>,
@@ -58,6 +58,7 @@ pub struct DefaultRenderGraph {
     pub debug_channel: DebugChannel,
     pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
+    pub bindless_manager: crate::bindless::BindlessManager,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -130,17 +131,51 @@ impl DefaultRenderGraph {
             DebugChannel::Lit,
         )));
 
+        let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(_backend);
+
+        let sync_group = Arc::new(Mutex::new(SyncGroup::new(
+            BufferHandle(SymbolId(0)), // Will be bound properly in record
+            BufferHandle(SymbolId(0)),
+            1024 * 64, // max_objects approx
+            1024 * 64, // max_materials approx
+        )));
+
+        let mut bindless_manager = crate::bindless::BindlessManager::new(
+            1000, // Capacity for 1000 bindless global textures
+            sampler,
+        );
+        bindless_manager.bindless_set = _backend.get_bindless_set_handle();
+
+        // Register a default 1x1 white texture at index 0
+        let white_image = _backend.create_image(&ImageDesc {
+            width: 1,
+            height: 1,
+            depth: 1,
+            format: Format::R8G8B8A8_UNORM,
+            usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
+            mip_levels: 1,
+            array_layers: 1,
+            view_type: ImageViewType::Type2D,
+            swizzle: Default::default(),
+        });
+        _backend
+            .upload_image(white_image, &[255, 255, 255, 255], 0, 0)
+            .unwrap();
+        bindless_manager.register_physical_texture(_backend, white_image);
+
         Self {
             gbuffer_pass,
             sky_pass,
+            sync_group,
             clustering_group,
             deferred_resolve_pass,
             post_process_group,
             debug_viz_pass,
             sampler,
             debug_channel: DebugChannel::Lit,
-            gpu_buffers: crate::gpu_buffers::GpuBuffers::allocate(_backend),
+            gpu_buffers,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
+            bindless_manager,
         }
     }
 }
@@ -334,6 +369,9 @@ impl DefaultRenderGraph {
             pass.gbuffer_normal = normal;
             pass.gbuffer_roughmetal = roughmetal;
             pass.gbuffer_emissive = emissive;
+            pass.material_buffer =
+                builder.import_buffer("MaterialBuffer", self.gpu_buffers.material_buffer);
+            pass.bindless_set = self.bindless_manager.bindless_set;
         }
 
         builder.add_pass(self.gbuffer_pass.clone());
@@ -391,6 +429,8 @@ impl DefaultRenderGraph {
                     push_constants: gbuffer::GBufferPushConstants {
                         view_projection,
                         model: obj.world_transform,
+                        material_id: obj.material_id,
+                        ..Default::default()
                     },
                 }
             })
@@ -411,6 +451,10 @@ impl DefaultRenderGraph {
 
         graph.record(move |builder| {
             builder.publish("Common", common);
+            // SAFETY: The SceneProvider is owned by the app and lives at least for this frame.
+            // We cast it to a 'static pointer to satisfy the FrameGraph blackboard's T: 'static requirement.
+            let scene_ptr = unsafe { std::mem::transmute::<*const dyn SceneProvider, *const (dyn SceneProvider + 'static)>(scene as *const _) };
+            builder.publish("SceneProvider", crate::passes::sync::ScenePointer(scene_ptr));
             builder.publish("GBufferCommands", draw_commands);
             builder.publish("SunDirection", sun_dir);
             builder.publish("SunIntensity", sun_int);
@@ -419,6 +463,22 @@ impl DefaultRenderGraph {
 
             let backbuffer = builder.acquire_backbuffer(window);
             let light_buffer = builder.import_buffer("LightBuffer", light_buffer_physical);
+
+            let object_buffer_physical = self.gpu_buffers.object_buffer;
+            let object_buffer = builder.import_buffer("ObjectBuffer", object_buffer_physical);
+
+            let material_buffer_physical = self.gpu_buffers.material_buffer;
+            let material_buffer = builder.import_buffer("MaterialBuffer", material_buffer_physical);
+
+            // 0. Sync CPU scene delta to GPU
+            {
+                let group = self.sync_group.lock().unwrap();
+                let mut osync = group.object_sync.lock().unwrap();
+                osync.object_buffer = object_buffer;
+                let mut msync = group.material_sync.lock().unwrap();
+                msync.material_buffer = material_buffer;
+            }
+            builder.add_pass(self.sync_group.clone());
 
             // 1. Clustering & Culling
             let (_cluster_aabbs, cluster_grid, cluster_light_indices, grid_x, grid_y, grid_z) =

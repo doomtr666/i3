@@ -14,7 +14,7 @@ pub struct DrawCommand {
 pub struct GBufferVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
-    pub color: [f32; 3],
+    pub uv: [f32; 2],
 }
 
 /// Push constants for the GBuffer pass.
@@ -23,6 +23,19 @@ pub struct GBufferVertex {
 pub struct GBufferPushConstants {
     pub view_projection: nalgebra_glm::Mat4,
     pub model: nalgebra_glm::Mat4,
+    pub material_id: u32,
+    pub _pad: [u32; 3],
+}
+
+impl Default for GBufferPushConstants {
+    fn default() -> Self {
+        Self {
+            view_projection: nalgebra_glm::identity(),
+            model: nalgebra_glm::identity(),
+            material_id: 0,
+            _pad: [0; 3],
+        }
+    }
 }
 
 /// GBuffer pass struct implementing the RenderPass trait.
@@ -32,6 +45,8 @@ pub struct GBufferPass {
     pub gbuffer_normal: ImageHandle,
     pub gbuffer_roughmetal: ImageHandle,
     pub gbuffer_emissive: ImageHandle,
+    pub material_buffer: BufferHandle,
+    pub bindless_set: u64,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -53,6 +68,8 @@ impl GBufferPass {
             gbuffer_normal,
             gbuffer_roughmetal,
             gbuffer_emissive,
+            material_buffer: BufferHandle(SymbolId(0)),
+            bindless_set: 0,
             shader: None,
             pipeline: None,
             draw_commands: Vec::new(),
@@ -85,7 +102,7 @@ impl GBufferPass {
                     VertexInputAttribute {
                         location: 2,
                         binding: 0,
-                        format: VertexFormat::Float3,
+                        format: VertexFormat::Float2,
                         offset: 24,
                     },
                 ],
@@ -166,13 +183,37 @@ impl RenderPass for GBufferPass {
         builder.write_image(self.gbuffer_roughmetal, ResourceUsage::COLOR_ATTACHMENT);
         builder.write_image(self.gbuffer_emissive, ResourceUsage::COLOR_ATTACHMENT);
         builder.write_image(self.depth_buffer, ResourceUsage::DEPTH_STENCIL);
+
+        builder.read_buffer(self.material_buffer, ResourceUsage::READ);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
         let pipeline = self.pipeline.expect("GBufferPass pipeline not initialized");
         ctx.bind_pipeline_raw(pipeline);
 
+        // Bind Material SSBO at set 1
+        let mat_set = ctx.create_descriptor_set(
+            pipeline,
+            1,
+            &[DescriptorWrite::buffer(0, self.material_buffer)],
+        );
+        ctx.bind_descriptor_set(1, mat_set);
+
+        // Bind Bindless Set at set 2
+        ctx.bind_descriptor_set_raw(2, self.bindless_set);
+
+        let expected_stride = std::mem::size_of::<GBufferVertex>() as u32;
+
         for cmd in &self.draw_commands {
+            if cmd.mesh.stride != expected_stride {
+                tracing::warn!(
+                    "GBufferPass: Skipping mesh with incompatible stride {} (expected {})",
+                    cmd.mesh.stride,
+                    expected_stride
+                );
+                continue;
+            }
+
             ctx.push_constant_data(
                 ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
                 0,

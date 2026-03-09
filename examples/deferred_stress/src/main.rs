@@ -123,6 +123,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prev_transform: transform,
                 material_id: 0,
                 mesh_id: cube_mesh,
+                flags: 0,
+                _pad: 0,
             });
         }
     }
@@ -135,6 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prev_transform: floor_transform,
         material_id: 0,
         mesh_id: cube_mesh,
+        flags: 0,
+        _pad: 0,
     });
 
     // 256 Dynamic Point Lights

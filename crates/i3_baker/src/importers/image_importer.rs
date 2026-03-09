@@ -164,10 +164,13 @@ impl Importer for ImageImporter {
                     intel_tex_2::bc5::compress_blocks(&surface)
                 }
                 TextureFormat::BC7_UNORM | TextureFormat::BC7_SRGB => {
-                    intel_tex_2::bc7::compress_blocks(
-                        &intel_tex_2::bc7::opaque_ultra_fast_settings(),
-                        &surface,
-                    )
+                    let has_alpha = current_mip.chunks_exact(4).any(|c| c[3] < 1.0);
+                    let settings = if has_alpha {
+                        intel_tex_2::bc7::alpha_ultra_fast_settings()
+                    } else {
+                        intel_tex_2::bc7::opaque_ultra_fast_settings()
+                    };
+                    intel_tex_2::bc7::compress_blocks(&settings, &surface)
                 }
                 _ => rgba_u8,
             };

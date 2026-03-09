@@ -201,18 +201,26 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
         let has_colors = mesh.has_vertex_colors(0);
 
         let num_vertices = mesh.num_vertices();
-        let mut vertices = Vec::with_capacity(num_vertices * 9);
+
+        // We output either [P, N, UV] (8 floats) or [P, N, C] (9 floats).
+        // Let's pack based on presence of UVs primarily.
+        let stride = if has_uvs { 8 } else { 9 };
+        let mut vertices = Vec::with_capacity(num_vertices * stride);
 
         let pos_iter = mesh.vertices();
         let norm_iter = mesh.normals().unwrap_or_else(|| {
             vec![asset_importer::types::Vector3D::new(0.0, 0.0, 1.0); num_vertices]
         });
-        let _uv_iter = mesh.texture_coords(0).unwrap_or_else(|| {
+        let uv_iter = if has_uvs {
+            mesh.texture_coords(0).unwrap()
+        } else {
             vec![asset_importer::types::Vector3D::new(0.0, 0.0, 0.0); num_vertices]
-        });
-        let col_iter = mesh.vertex_colors(0).unwrap_or_else(|| {
+        };
+        let col_iter = if has_colors {
+            mesh.vertex_colors(0).unwrap()
+        } else {
             vec![asset_importer::types::Color4D::new(1.0, 1.0, 1.0, 1.0); num_vertices]
-        });
+        };
 
         for i in 0..num_vertices {
             let p = pos_iter[i];
@@ -220,26 +228,20 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
             vertices.push(p.y);
             vertices.push(p.z);
 
-            if has_normals {
-                let n = norm_iter[i];
-                vertices.push(n.x);
-                vertices.push(n.y);
-                vertices.push(n.z);
-            } else {
-                vertices.push(0.0);
-                vertices.push(0.0);
-                vertices.push(1.0);
-            }
+            let n = norm_iter[i];
+            vertices.push(n.x);
+            vertices.push(n.y);
+            vertices.push(n.z);
 
-            if has_colors {
+            if has_uvs {
+                let uv = uv_iter[i];
+                vertices.push(uv.x);
+                vertices.push(uv.y);
+            } else {
                 let c = col_iter[i];
                 vertices.push(c.x);
                 vertices.push(c.y);
                 vertices.push(c.z);
-            } else {
-                vertices.push(1.0);
-                vertices.push(1.0);
-                vertices.push(1.0);
             }
         }
 
@@ -372,7 +374,11 @@ fn build_mesh_output(
     let name = format!("{}_mesh_{}", file_stem, mesh_idx);
     let asset_id = Uuid::new_v5(&namespace, name.as_bytes());
 
-    let vertex_format = VertexFormat::POSITION_NORMAL_COLOR;
+    let vertex_format = if mesh.has_uvs {
+        VertexFormat::POSITION_NORMAL_UV
+    } else {
+        VertexFormat::POSITION_NORMAL_COLOR
+    };
     let stride = vertex_format.stride();
     let vertex_data: Vec<u8> = mesh.vertices.iter().flat_map(|f| f.to_ne_bytes()).collect();
 
@@ -707,10 +713,13 @@ impl Extractor for SceneExtractor {
             });
 
             let mesh_data = &assimp_data.meshes[mesh_idx];
-            let mesh_bounds = calculate_bounds(
-                &mesh_data.vertices,
-                VertexFormat::POSITION_NORMAL_COLOR.stride() as usize / 4,
-            );
+            let mesh_format = if mesh_data.has_uvs {
+                VertexFormat::POSITION_NORMAL_UV
+            } else {
+                VertexFormat::POSITION_NORMAL_COLOR
+            };
+            let mesh_bounds =
+                calculate_bounds(&mesh_data.vertices, mesh_format.stride() as usize / 4);
             scene_bounds.merge(&mesh_bounds);
         }
 

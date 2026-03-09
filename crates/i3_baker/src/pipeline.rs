@@ -121,23 +121,21 @@ impl BundleBaker {
     pub fn new(bundle_name: impl Into<String>) -> Result<Self> {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
             .map_err(|_| crate::BakerError::Pipeline("CARGO_MANIFEST_DIR not found".to_string()))?;
-        let _out_dir = std::env::var("OUT_DIR")
-            .map_err(|_| crate::BakerError::Pipeline("OUT_DIR not found".to_string()))?;
 
         let manifest_path = PathBuf::from(&manifest_dir);
         let output_dir = manifest_path.join("assets");
-        if !output_dir.exists() {
-            std::fs::create_dir_all(&output_dir).map_err(|e| crate::BakerError::Os {
-                path: output_dir.clone(),
-                source: e,
-            })?;
-        }
 
         Ok(Self {
             bundle_name: bundle_name.into(),
             output_dir,
             assets: Vec::new(),
         })
+    }
+
+    /// Set an explicit output directory.
+    pub fn with_output_dir(mut self, path: impl AsRef<Path>) -> Self {
+        self.output_dir = path.as_ref().to_path_buf();
+        self
     }
 
     /// Register an asset to be baked into the bundle.
@@ -205,6 +203,13 @@ impl BundleBaker {
                     }
                 }
             }
+        }
+
+        if !self.output_dir.exists() {
+            std::fs::create_dir_all(&self.output_dir).map_err(|e| crate::BakerError::Os {
+                path: self.output_dir.clone(),
+                source: e,
+            })?;
         }
 
         if needs_bake {

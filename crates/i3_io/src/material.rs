@@ -32,3 +32,29 @@ pub struct MaterialHeader {
 impl MaterialHeader {
     pub const MAGIC: [u8; 4] = *b"I3MT";
 }
+
+/// A parsed Material asset ready for rendering.
+#[derive(Debug, Clone)]
+pub struct MaterialAsset {
+    pub header: Option<MaterialHeader>,
+}
+
+impl crate::asset::Asset for MaterialAsset {
+    const ASSET_TYPE_ID: [u8; 16] = *MATERIAL_ASSET_TYPE.as_bytes();
+
+    fn load(_header: &crate::AssetHeader, data: &[u8]) -> crate::Result<Self> {
+        if data.len() < std::mem::size_of::<MaterialHeader>() {
+            return Err(crate::IoError::Generic(
+                "Material asset too small".to_string(),
+            ));
+        }
+
+        // Since the header is Pod, we can just cast it
+        let header =
+            *bytemuck::from_bytes::<MaterialHeader>(&data[..std::mem::size_of::<MaterialHeader>()]);
+
+        Ok(Self {
+            header: Some(header),
+        })
+    }
+}

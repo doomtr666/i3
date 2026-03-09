@@ -2,18 +2,22 @@ extern crate nalgebra_glm;
 
 use examples_common::basic_scene::BasicScene;
 use examples_common::{ExampleApp, init_tracing, main_loop};
+use i3_gfx::graph::types::*;
 use i3_gfx::prelude::*;
 use i3_io::asset::AssetLoader;
+use i3_io::material::MaterialAsset;
 use i3_io::mesh::MeshAsset;
 use i3_io::scene_asset::SceneAsset;
+use i3_io::texture::TextureAsset;
 use i3_io::vfs::{BundleBackend, Vfs};
 use i3_renderer::render_graph::{DefaultRenderGraph, RenderConfig};
 use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 struct DeferredGltfApp {
     backend: VulkanBackend,
@@ -96,8 +100,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // 3. Setup IO and VFS
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-    let assets_dir = Path::new(&manifest_dir).join("assets");
+    // Priority 1: Near EXE (Standalone)
+    // Priority 2: Root folder (cargo run)
+    let assets_dir = if let Ok(exe_path) = std::env::current_exe() {
+        let exe_dir = exe_path.parent().unwrap();
+        if exe_dir.join("viewer_scenes.i3b").exists() {
+            exe_dir.to_path_buf()
+        } else {
+            // Fallback to workspace root relative path
+            PathBuf::from("examples/viewer/assets")
+        }
+    } else {
+        PathBuf::from("examples/viewer/assets")
+    };
+
     let blob_path = assets_dir.join("viewer_scenes.i3b");
     let catalog_path = assets_dir.join("viewer_scenes.i3c");
 
@@ -127,11 +143,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut scene = BasicScene::new();
 
+    // 5. Create Render Graph early so we can use BindlessManager
+    let config = RenderConfig {
+        width: 1280,
+        height: 720,
+    };
+    let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
+
+    // Collect distinct materials required by meshes
+    let mut required_materials = std::collections::HashSet::new();
+
     // Load all meshes referenced by the scene
     for mesh_uuid in &scene_asset.mesh_refs {
         let mesh_handle = loader.load_by_uuid::<MeshAsset>(mesh_uuid)?;
         let mesh_asset = mesh_handle.wait_loaded()?;
-        scene.add_baked_mesh(&mut backend, &mesh_asset, *mesh_uuid);
+
+        let mat_uuid = uuid::Uuid::from_bytes(mesh_asset.header.material_id);
+        if !mat_uuid.is_nil() {
+            required_materials.insert(mat_uuid);
+        }
+
+        scene.add_baked_mesh(&mut backend, mesh_asset, *mesh_uuid);
+    }
+
+    // Load unique materials and their textures
+    for mat_uuid in required_materials {
+        if let Ok(mat_handle) = loader.load_by_uuid::<MaterialAsset>(&mat_uuid) {
+            if let Ok(mat_asset) = mat_handle.wait_loaded() {
+                let mut texture_loader = |tex_uuid: &Uuid,
+                                          be: &mut VulkanBackend|
+                 -> Option<ImageHandle> {
+                    if let Ok(tex_handle) = loader.load_by_uuid::<TextureAsset>(tex_uuid) {
+                        if let Ok(tex_asset) = tex_handle.wait_loaded() {
+                            let width = tex_asset.header.width;
+                            let height = tex_asset.header.height;
+                            let mips = tex_asset.header.mip_levels;
+
+                            let format = match tex_asset.header.format {
+                                112 /* BC7_SRGB */ => Format::BC7_SRGB,
+                                111 /* BC7_UNORM */ => Format::BC7_UNORM,
+                                109 /* BC5_UNORM */ => Format::BC5_UNORM,
+                                _ => Format::R8G8B8A8_SRGB,
+                            };
+
+                            let image = be.create_image(&ImageDesc {
+                                width,
+                                height,
+                                depth: 1,
+                                format,
+                                usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
+                                mip_levels: mips as u32,
+                                array_layers: 1,
+                                view_type: ImageViewType::Type2D,
+                                swizzle: Default::default(),
+                            });
+
+                            let handle = ImageHandle(SymbolId(image.0));
+
+                            let mut current_offset = 0;
+                            for mip in 0..mips {
+                                let mip_width = (width >> mip).max(1);
+                                let mip_height = (height >> mip).max(1);
+
+                                // All baked formats (BC5, BC7) currently use 16 bytes per 4x4 block
+                                let blocks_x = (mip_width + 3) / 4;
+                                let blocks_y = (mip_height + 3) / 4;
+                                let mip_size = (blocks_x * blocks_y) as usize * 16;
+
+                                if current_offset + mip_size <= tex_asset.data.len() {
+                                    let _ = RenderBackend::upload_image(
+                                        be,
+                                        image,
+                                        &tex_asset.data[current_offset..current_offset + mip_size],
+                                        mip as u32,
+                                        0,
+                                    );
+                                    current_offset += mip_size;
+                                }
+                            }
+                            return Some(handle);
+                        }
+                    }
+                    None
+                };
+
+                scene.add_baked_material(
+                    &mut backend,
+                    &mut render_graph.bindless_manager,
+                    mat_asset,
+                    mat_uuid,
+                    &mut texture_loader,
+                );
+            }
+        }
     }
 
     // Populate scene objects/lights
@@ -142,13 +246,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     scene.add_default_lights();
-
-    // 5. Create Render Graph
-    let config = RenderConfig {
-        width: 1280,
-        height: 720,
-    };
-    let render_graph = DefaultRenderGraph::new(&mut backend, &config);
 
     // 6. Run
     let mut camera = examples_common::camera_controller::CameraController::new();

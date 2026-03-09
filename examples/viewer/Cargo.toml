@@ -16,6 +16,7 @@ examples_common = { path = "../common" }
 tracing = "0.1"
 nalgebra-glm = { workspace = true }
 bytemuck = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
 i3_baker = { path = "../../crates/i3_baker" }

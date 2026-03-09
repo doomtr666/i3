@@ -1,3 +1,4 @@
+pub mod bindless;
 pub mod gpu_buffers;
 pub mod groups;
 pub mod passes;

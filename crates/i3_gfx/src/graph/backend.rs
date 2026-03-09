@@ -120,6 +120,18 @@ pub trait PassContext {
     // For now, let's assume specific sets are bound by their index.
     fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle);
 
+    /// Creates a descriptor set for this pass.
+    /// (Usually used for per-frame or per-pass bindings like Material SSBOs)
+    fn create_descriptor_set(
+        &mut self,
+        pipeline: BackendPipeline,
+        set_index: u32,
+        writes: &[DescriptorWrite],
+    ) -> DescriptorSetHandle;
+
+    /// Binds a raw descriptor set handle (for global sets like bindless).
+    fn bind_descriptor_set_raw(&mut self, set_index: u32, handle: u64);
+
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32);
     fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32);
 
@@ -135,6 +147,18 @@ pub trait PassContext {
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn clear_buffer(&mut self, buffer: crate::graph::types::BufferHandle, clear_value: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
+
+    fn copy_buffer(
+        &mut self,
+        src: crate::graph::types::BufferHandle,
+        dst: crate::graph::types::BufferHandle,
+        src_offset: u64,
+        dst_offset: u64,
+        size: u64,
+    );
+
+    fn map_buffer(&mut self, handle: crate::graph::types::BufferHandle) -> *mut u8;
+    fn unmap_buffer(&mut self, handle: crate::graph::types::BufferHandle);
 }
 
 /// Extension trait for [PassContext] to provide typed helpers.
@@ -217,6 +241,65 @@ pub trait RenderBackend {
         data: &[u8],
         offset: u64,
     ) -> Result<(), String>;
+
+    /// Upload raw bytes to an image using a staging buffer.
+    fn upload_image(
+        &mut self,
+        handle: BackendImage,
+        data: &[u8],
+        mip_level: u32,
+        array_layer: u32,
+    ) -> Result<(), String>;
+
+    /// Returns the handle ID of the global bindless descriptor set.
+    fn get_bindless_set_handle(&self) -> u64;
+
+    // --- Resource Resolution ---
+    fn resolve_image(&self, handle: crate::graph::types::ImageHandle) -> BackendImage;
+    fn resolve_buffer(&self, handle: crate::graph::types::BufferHandle) -> BackendBuffer;
+    fn resolve_pipeline(&self, handle: crate::graph::types::PipelineHandle) -> BackendPipeline;
+
+    // --- Handle Registration ---
+    fn register_external_image(
+        &mut self,
+        handle: crate::graph::types::ImageHandle,
+        physical: BackendImage,
+    );
+    fn register_external_buffer(
+        &mut self,
+        handle: crate::graph::types::BufferHandle,
+        physical: BackendBuffer,
+    );
+
+    /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
+    fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String>;
+
+    // --- Transient Resource Management (Pooling) ---
+    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage;
+    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
+    fn release_transient_image(&mut self, handle: BackendImage);
+    fn release_transient_buffer(&mut self, handle: BackendBuffer);
+    fn garbage_collect(&mut self);
+
+    // --- Descriptor Management ---
+    /// Updates a specific index in an unbounded bindless texture array descriptor.
+    fn update_bindless_texture(
+        &mut self,
+        texture: crate::graph::types::ImageHandle,
+        sampler: SamplerHandle,
+        index: u32,
+        set: u64,
+        binding: u32,
+    );
+
+    fn update_bindless_texture_raw(
+        &mut self,
+        texture: BackendImage,
+        sampler: SamplerHandle,
+        index: u32,
+        set: u64,
+        binding: u32,
+    );
 }
 
 /// Extension trait for [RenderBackend] to provide typed helpers.
@@ -295,31 +378,6 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     /// Used after parallel recording to synchronize backend state.
     fn mark_image_as_presented(&mut self, handle: crate::graph::types::ImageHandle);
 
-    // --- Handle Resolution ---
-    fn resolve_image(&self, handle: crate::graph::types::ImageHandle) -> BackendImage;
-    fn resolve_buffer(&self, handle: crate::graph::types::BufferHandle) -> BackendBuffer;
-    fn resolve_pipeline(&self, handle: crate::graph::types::PipelineHandle) -> BackendPipeline;
-    fn register_external_image(
-        &mut self,
-        handle: crate::graph::types::ImageHandle,
-        physical: BackendImage,
-    );
-    fn register_external_buffer(
-        &mut self,
-        handle: crate::graph::types::BufferHandle,
-        physical: BackendBuffer,
-    );
-
-    /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
-    fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String>;
-
-    // --- Transient Resource Management (Pooling) ---
-    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage;
-    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;
-    fn release_transient_image(&mut self, handle: BackendImage);
-    fn release_transient_buffer(&mut self, handle: BackendBuffer);
-    fn garbage_collect(&mut self);
-
     // --- Descriptor Management (Internal) ---
     fn allocate_descriptor_set(
         &mut self,
@@ -337,6 +395,22 @@ pub struct DescriptorWrite {
     pub descriptor_type: crate::graph::pipeline::BindingType, // Reusing from pipeline
     pub buffer_info: Option<DescriptorBufferInfo>,
     pub image_info: Option<DescriptorImageInfo>,
+}
+
+impl DescriptorWrite {
+    pub fn buffer(binding: u32, buffer: crate::graph::types::BufferHandle) -> Self {
+        Self {
+            binding,
+            array_element: 0,
+            descriptor_type: crate::graph::pipeline::BindingType::StorageBuffer,
+            buffer_info: Some(DescriptorBufferInfo {
+                buffer,
+                offset: 0,
+                range: 0,
+            }),
+            image_info: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -6,4 +6,5 @@ pub mod gbuffer;
 pub mod histogram_build;
 pub mod light_cull;
 pub mod sky;
+pub mod sync;
 pub mod tonemap;

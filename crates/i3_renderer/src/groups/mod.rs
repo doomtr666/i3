@@ -102,3 +102,5 @@ impl RenderPass for PostProcessGroup {
         builder.add_pass(self.tonemap_pass.clone());
     }
 }
+
+pub mod sync;

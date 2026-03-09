@@ -38,3 +38,34 @@ pub struct TextureHeader {
 impl TextureHeader {
     pub const MAGIC: [u8; 4] = *b"I3TX";
 }
+
+pub struct TextureAsset {
+    pub header: TextureHeader,
+    pub data: Vec<u8>,
+}
+
+impl crate::asset::Asset for TextureAsset {
+    const ASSET_TYPE_ID: [u8; 16] = *TEXTURE_ASSET_TYPE.as_bytes();
+
+    fn load(_header: &crate::AssetHeader, data: &[u8]) -> crate::error::Result<Self> {
+        if data.len() < std::mem::size_of::<TextureHeader>() {
+            return Err(crate::error::IoError::Generic("Invalid formatting".into()));
+        }
+
+        let mut tex_header: TextureHeader = bytemuck::Zeroable::zeroed();
+        let header_slice = unsafe {
+            std::slice::from_raw_parts_mut(
+                &mut tex_header as *mut _ as *mut u8,
+                std::mem::size_of::<TextureHeader>(),
+            )
+        };
+        header_slice.copy_from_slice(&data[..std::mem::size_of::<TextureHeader>()]);
+
+        let tex_data = data[std::mem::size_of::<TextureHeader>()..].to_vec();
+
+        Ok(Self {
+            header: tex_header,
+            data: tex_data,
+        })
+    }
+}

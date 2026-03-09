@@ -12,6 +12,7 @@ pub use i3_gfx::graph::pipeline::{
     Binding, BindingType, EntryPointInfo, PushConstantRange, ShaderModule, ShaderReflection,
     ShaderStageInfo,
 };
+use tracing::info;
 
 pub mod prelude {
     pub use crate::{
@@ -254,6 +255,13 @@ impl SlangCompiler {
         let mut bindings: Vec<Binding> = unique_bindings.into_values().collect();
         bindings.sort_by_key(|b| (b.set, b.binding));
 
+        for b in &bindings {
+            info!(
+                "Reflected binding: set={}, binding={}, type={:?}, count={}, name={}",
+                b.set, b.binding, b.binding_type, b.count, b.name
+            );
+        }
+
         Ok(ShaderReflection {
             entry_points,
             bindings,
@@ -433,10 +441,23 @@ impl SlangCompiler {
         }
 
         // Convert search paths to CString
-        let search_path_cstrings: Vec<_> = search_paths
+        let mut final_search_paths: Vec<String> =
+            search_paths.iter().map(|s| s.to_string()).collect();
+
+        // 1. Add EXE-relative shaders folder
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                final_search_paths.push(exe_dir.join("shaders").to_string_lossy().to_string());
+            }
+        }
+
+        // 2. Add Root fallback (for cargo run)
+        final_search_paths.push("crates/i3_renderer/shaders".to_string());
+
+        let search_path_cstrings: Vec<_> = final_search_paths
             .iter()
             .map(|p| {
-                std::ffi::CString::new(*p)
+                std::ffi::CString::new(p.as_str())
                     .map_err(|e| format!("Invalid search path '{}': {}", p, e))
             })
             .collect::<Result<Vec<_>, _>>()?;

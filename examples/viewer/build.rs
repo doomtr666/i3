@@ -6,13 +6,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
     let manifest_path = Path::new(&manifest_dir);
 
+    // Find the actual target directory (e.g. target/debug) from OUT_DIR
+    // OUT_DIR = .../target/debug/build/viewer-hash/out
+    let out_dir = std::env::var("OUT_DIR")?;
+    let target_dir = Path::new(&out_dir)
+        .parent()
+        .unwrap() // viewer-hash
+        .parent()
+        .unwrap() // build
+        .parent()
+        .unwrap(); // debug/release
+
     let helmet_src = manifest_path.join("../../assets/DamagedHelmet.glb");
     let sponza_src = manifest_path.join("../../assets/Sponza/glTF/Sponza.gltf");
 
     BundleBaker::new("viewer_scenes")?
+        .with_output_dir(target_dir)
         .add_asset(&helmet_src, AssimpImporter::new())
         .add_asset(&sponza_src, AssimpImporter::new())
         .execute()?;
 
+    // Copy shaders to target directory
+    let shader_src = manifest_path.join("../../crates/i3_renderer/shaders");
+    let shader_dst = target_dir.join("shaders");
+    copy_dir(&shader_src, &shader_dst)?;
+
+    // Tell cargo to rerun if assets or shaders change
+    println!("cargo:rerun-if-changed=../../assets");
+    println!("cargo:rerun-if-changed=../../crates/i3_renderer/shaders");
+
+    Ok(())
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
     Ok(())
 }

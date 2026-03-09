@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use tracing::info;
 
 use i3_gfx::prelude::*;
-use i3_io::mesh::MeshAsset;
+use i3_io::mesh::{IndexFormat, MeshAsset};
 use i3_io::scene_asset::{LightType as AssetLightType, SceneAsset};
 use i3_renderer::scene::{
-    LightData, LightId, LightType, Mesh, ObjectData, ObjectId, SceneProvider,
+    LightData, LightId, LightType, MaterialData, MaterialId, Mesh, ObjectData, ObjectId,
+    SceneProvider,
 };
 use nalgebra_glm as glm;
 use uuid::Uuid;
@@ -17,26 +19,53 @@ pub struct BasicScene {
     meshes: Vec<Mesh>,
     /// Mapping from mesh UUID to local mesh index.
     mesh_uuid_to_index: HashMap<Uuid, u32>,
+    /// Mapping from mesh UUID to its material UUID.
+    mesh_uuid_to_material: HashMap<Uuid, Uuid>,
+    /// Mapping from material UUID to local material index.
+    material_uuid_to_index: HashMap<Uuid, u32>,
     objects: Vec<(ObjectId, ObjectData)>,
+    materials: Vec<(MaterialId, MaterialData)>,
     lights: Vec<(LightId, LightData)>,
-    dirty: HashSet<ObjectId>,
+    dirty_objects: HashSet<ObjectId>,
+    dirty_materials: HashSet<MaterialId>,
     next_object_id: u64,
+    next_material_id: u32,
     next_light_id: u64,
     bounds: i3_io::mesh::BoundingBox,
 }
 
 impl BasicScene {
     pub fn new() -> Self {
-        Self {
+        let mut scene = Self {
             meshes: Vec::new(),
             mesh_uuid_to_index: HashMap::new(),
+            mesh_uuid_to_material: HashMap::new(),
+            material_uuid_to_index: HashMap::new(),
             objects: Vec::new(),
+            materials: Vec::new(),
             lights: Vec::new(),
-            dirty: HashSet::new(),
+            dirty_objects: HashSet::new(),
+            dirty_materials: HashSet::new(),
             next_object_id: 0,
+            next_material_id: 0,
             next_light_id: 0,
             bounds: i3_io::mesh::BoundingBox::empty(),
-        }
+        };
+
+        // Add default material at index 0
+        scene.add_material(MaterialData {
+            base_color_factor: [1.0, 1.0, 1.0, 1.0],
+            emissive_factor_and_alpha_cutoff: [0.0, 0.0, 0.0, 0.0],
+            metallic_factor: 0.0,
+            roughness_factor: 1.0,
+            albedo_tex_index: -1,
+            normal_tex_index: -1,
+            rmao_tex_index: -1,
+            emissive_tex_index: -1,
+            _pad: [0; 2],
+        });
+
+        scene
     }
 
     pub fn bounds(&self) -> &i3_io::mesh::BoundingBox {
@@ -84,6 +113,7 @@ impl BasicScene {
             index_buffer: ib,
             index_count: indices.len() as u32,
             index_type: IndexType::Uint16,
+            stride: 32, // Match GBufferVertex [f32; 8]
         });
 
         let _ = vertex_count; // Reserved for future validation
@@ -94,8 +124,17 @@ impl BasicScene {
     pub fn add_object(&mut self, data: ObjectData) -> ObjectId {
         let id = ObjectId(self.next_object_id);
         self.next_object_id += 1;
-        self.dirty.insert(id);
+        self.dirty_objects.insert(id);
         self.objects.push((id, data));
+        id
+    }
+
+    /// Adds a material to the scene, returns its ID.
+    pub fn add_material(&mut self, data: MaterialData) -> MaterialId {
+        let id = MaterialId(self.next_material_id);
+        self.next_material_id += 1;
+        self.dirty_materials.insert(id);
+        self.materials.push((id, data));
         id
     }
 
@@ -112,13 +151,14 @@ impl BasicScene {
         if let Some((_, data)) = self.objects.iter_mut().find(|(oid, _)| *oid == id) {
             data.prev_transform = data.world_transform;
             data.world_transform = transform;
-            self.dirty.insert(id);
+            self.dirty_objects.insert(id);
         }
     }
 
     /// Clears the dirty set. Call after the renderer has consumed the deltas.
     pub fn clear_dirty(&mut self) {
-        self.dirty.clear();
+        self.dirty_objects.clear();
+        self.dirty_materials.clear();
     }
 
     /// Returns the mesh list (for inspection/debugging).
@@ -132,7 +172,7 @@ impl BasicScene {
         let vb_bytes = unsafe {
             std::slice::from_raw_parts(
                 vertices.as_ptr() as *const u8,
-                vertices.len() * std::mem::size_of::<[f32; 9]>(),
+                vertices.len() * std::mem::size_of::<[f32; 8]>(),
             )
         };
         self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
@@ -144,7 +184,7 @@ impl BasicScene {
         let vb_bytes = unsafe {
             std::slice::from_raw_parts(
                 vertices.as_ptr() as *const u8,
-                vertices.len() * std::mem::size_of::<[f32; 9]>(),
+                vertices.len() * std::mem::size_of::<[f32; 8]>(),
             )
         };
         self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
@@ -180,47 +220,109 @@ impl BasicScene {
     pub fn add_baked_mesh(
         &mut self,
         backend: &mut dyn RenderBackend,
-        mesh: &MeshAsset,
+        mesh_asset: &MeshAsset,
         mesh_uuid: Uuid,
     ) -> u32 {
         // Create vertex buffer
         let vb = backend.create_buffer(&BufferDesc {
-            size: mesh.vertex_data.len() as u64,
+            size: mesh_asset.vertex_data.len() as u64,
             usage: BufferUsageFlags::VERTEX_BUFFER,
             memory: MemoryType::CpuToGpu,
         });
+        info!(
+            "Loading baked mesh {:?} with stride {}",
+            mesh_uuid, mesh_asset.header.vertex_stride
+        );
         backend
-            .upload_buffer(vb, &mesh.vertex_data, 0)
+            .upload_buffer(vb, &mesh_asset.vertex_data, 0)
             .expect("Failed to upload baked mesh vertices");
 
         // Create index buffer
         let ib = backend.create_buffer(&BufferDesc {
-            size: mesh.index_data.len() as u64,
+            size: mesh_asset.index_data.len() as u64,
             usage: BufferUsageFlags::INDEX_BUFFER,
             memory: MemoryType::CpuToGpu,
         });
         backend
-            .upload_buffer(ib, &mesh.index_data, 0)
+            .upload_buffer(ib, &mesh_asset.index_data, 0)
             .expect("Failed to upload baked mesh indices");
 
         let id = self.meshes.len() as u32;
-        let index_type = match mesh.header.index_format {
-            i3_io::mesh::IndexFormat::U16 => IndexType::Uint16,
-            i3_io::mesh::IndexFormat::U32 => IndexType::Uint32,
-            _ => IndexType::Uint16,
+        let index_type = if mesh_asset.header.index_format == IndexFormat::U32 {
+            IndexType::Uint32
+        } else {
+            IndexType::Uint16
         };
 
         self.meshes.push(Mesh {
             vertex_buffer: vb,
             index_buffer: ib,
-            index_count: mesh.header.index_count,
+            index_count: mesh_asset.header.index_count,
             index_type,
+            stride: mesh_asset.header.vertex_stride,
         });
 
         // Register UUID mapping
         self.mesh_uuid_to_index.insert(mesh_uuid, id);
 
+        let mat_uuid = Uuid::from_bytes(mesh_asset.header.material_id);
+        self.mesh_uuid_to_material.insert(mesh_uuid, mat_uuid);
+
         id
+    }
+
+    /// Uploads a baked material and its textures, registering them with the BindlessManager.
+    pub fn add_baked_material<T: i3_gfx::graph::backend::RenderBackendInternal + ?Sized>(
+        &mut self,
+        backend: &mut T,
+        bindless: &mut i3_renderer::bindless::BindlessManager,
+        material: &i3_io::material::MaterialAsset,
+        material_uuid: Uuid,
+        texture_loader: &mut dyn FnMut(&Uuid, &mut T) -> Option<ImageHandle>,
+    ) -> u32 {
+        // Helper to load and register a texture
+        let mut process_texture = |tex_uuid: &[u8; 16]| -> i32 {
+            let id = Uuid::from_bytes(*tex_uuid);
+            if !id.is_nil() {
+                if let Some(handle) = texture_loader(&id, backend) {
+                    return bindless.register_texture(backend, handle) as i32;
+                }
+            }
+            -1
+        };
+
+        if let Some(header) = &material.header {
+            let albedo_idx = process_texture(&header.albedo_texture);
+            let normal_idx = process_texture(&header.normal_texture);
+            let rmao_idx = process_texture(&header.metallic_roughness_texture);
+            let emissive_idx = process_texture(&header.emissive_texture);
+
+            let data = MaterialData {
+                base_color_factor: header.base_color_factor,
+                emissive_factor_and_alpha_cutoff: [
+                    header.emissive_factor[0],
+                    header.emissive_factor[1],
+                    header.emissive_factor[2],
+                    header.alpha_cutoff,
+                ],
+                metallic_factor: header.metallic_factor,
+                roughness_factor: header.roughness_factor,
+                albedo_tex_index: albedo_idx,
+                normal_tex_index: normal_idx,
+                rmao_tex_index: rmao_idx,
+                emissive_tex_index: emissive_idx,
+                _pad: [0; 2],
+            };
+
+            let material_id = self.materials.len() as u32;
+            self.materials.push((MaterialId(material_id), data));
+            self.material_uuid_to_index
+                .insert(material_uuid, material_id);
+
+            return material_id;
+        }
+
+        0
     }
 
     /// Loads a baked scene asset, creating objects and lights.
@@ -236,10 +338,25 @@ impl BasicScene {
         // Add objects
         for obj in &scene.objects {
             // Resolve mesh UUID to local index
-            let mesh_id = scene
-                .mesh_for_object(obj)
-                .and_then(|uuid| self.mesh_uuid_to_index.get(&uuid).copied())
-                .unwrap_or(0); // Default to first mesh if not found
+            let mesh_uuid = scene.mesh_for_object(obj).unwrap_or(Uuid::nil());
+            let mesh_id = self
+                .mesh_uuid_to_index
+                .get(&mesh_uuid)
+                .copied()
+                .unwrap_or(0);
+
+            // Objects inherit the material bound to their mesh.
+            // Eventually scene assets could override materials per-object, but Assimp usually bounds them per-mesh.
+            let material_uuid = self
+                .mesh_uuid_to_material
+                .get(&mesh_uuid)
+                .copied()
+                .unwrap_or(Uuid::nil());
+            let material_id = self
+                .material_uuid_to_index
+                .get(&material_uuid)
+                .copied()
+                .unwrap_or(0);
 
             // Convert transform from [[f32; 4]; 4] to glm::Mat4
             let transform = glm::Mat4::from(obj.transform);
@@ -248,7 +365,9 @@ impl BasicScene {
                 world_transform: transform,
                 prev_transform: transform,
                 mesh_id,
-                material_id: 0, // Default material
+                material_id, // Resolved material
+                flags: 0,
+                _pad: 0,
             });
 
             // Set name if available
@@ -305,9 +424,17 @@ impl SceneProvider for BasicScene {
         Box::new(
             self.objects
                 .iter()
-                .filter(|(id, _)| self.dirty.contains(id))
+                .filter(|(id, _)| self.dirty_objects.contains(id))
                 .map(|(id, data)| (*id, data)),
         )
+    }
+
+    fn material_count(&self) -> usize {
+        self.materials.len()
+    }
+
+    fn iter_materials(&self) -> Box<dyn Iterator<Item = (MaterialId, &MaterialData)> + '_> {
+        Box::new(self.materials.iter().map(|(id, data)| (*id, data)))
     }
 
     fn light_count(&self) -> usize {
@@ -324,50 +451,49 @@ impl SceneProvider for BasicScene {
 }
 
 /// Generates a white unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
-fn generate_white_cube() -> (Vec<[f32; 9]>, Vec<u16>) {
+fn generate_white_cube() -> (Vec<[f32; 8]>, Vec<u16>) {
     let (mut vertices, indices) = generate_cube();
     for v in &mut vertices {
-        v[6] = 1.0; // R
-        v[7] = 1.0; // G
-        v[8] = 1.0; // B
+        v[6] = 0.0; // U
+        v[7] = 0.0; // V (just placeholders for white cube)
     }
     (vertices, indices)
 }
 
 /// Generates a unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
-fn generate_cube() -> (Vec<[f32; 9]>, Vec<u16>) {
+fn generate_cube() -> (Vec<[f32; 8]>, Vec<u16>) {
     #[rustfmt::skip]
-    let vertices: Vec<[f32; 9]> = vec![
-        // Front face (Z+) — red
-        [-0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0, 0.0],
-        [ 0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0, 0.0],
-        [ 0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0, 0.0],
-        [-0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0, 0.0],
-        // Back face (Z-) — green
-        [ 0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 1.0, 0.0],
-        [-0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 1.0, 0.0],
-        [-0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 1.0, 0.0],
-        [ 0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 1.0, 0.0],
-        // Top face (Y+) — blue
-        [-0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0],
-        [ 0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0],
-        [ 0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0],
-        [-0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0],
-        // Bottom face (Y-) — yellow
-        [-0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  1.0, 1.0, 0.0],
-        [ 0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  1.0, 1.0, 0.0],
-        [ 0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  1.0, 1.0, 0.0],
-        [-0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  1.0, 1.0, 0.0],
-        // Right face (X+) — magenta
-        [ 0.5, -0.5,  0.5,  1.0, 0.0, 0.0,  1.0, 0.0, 1.0],
-        [ 0.5, -0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 0.0, 1.0],
-        [ 0.5,  0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 0.0, 1.0],
-        [ 0.5,  0.5,  0.5,  1.0, 0.0, 0.0,  1.0, 0.0, 1.0],
-        // Left face (X-) — cyan
-        [-0.5, -0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 1.0, 1.0],
-        [-0.5, -0.5,  0.5, -1.0, 0.0, 0.0,  0.0, 1.0, 1.0],
-        [-0.5,  0.5,  0.5, -1.0, 0.0, 0.0,  0.0, 1.0, 1.0],
-        [-0.5,  0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 1.0, 1.0],
+    let vertices: Vec<[f32; 8]> = vec![
+        // Front face (Z+)
+        [-0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 1.0],
+        [ 0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 1.0],
+        [ 0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0],
+        [-0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 0.0],
+        // Back face (Z-)
+        [ 0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 1.0],
+        [-0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  1.0, 1.0],
+        [-0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  1.0, 0.0],
+        [ 0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 0.0],
+        // Top face (Y+)
+        [-0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  0.0, 1.0],
+        [ 0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  1.0, 1.0],
+        [ 0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  1.0, 0.0],
+        [-0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  0.0, 0.0],
+        // Bottom face (Y-)
+        [-0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  0.0, 1.0],
+        [ 0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  1.0, 1.0],
+        [ 0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  1.0, 0.0],
+        [-0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  0.0, 0.0],
+        // Right face (X+)
+        [ 0.5, -0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 1.0],
+        [ 0.5, -0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 1.0],
+        [ 0.5,  0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 0.0],
+        [ 0.5,  0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 0.0],
+        // Left face (X-)
+        [-0.5, -0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 1.0],
+        [-0.5, -0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 1.0],
+        [-0.5,  0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 0.0],
+        [-0.5,  0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 0.0],
     ];
 
     #[rustfmt::skip]

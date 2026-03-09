@@ -75,7 +75,9 @@ impl VulkanDevice {
             .descriptor_indexing(true)
             .shader_sampled_image_array_non_uniform_indexing(true)
             .runtime_descriptor_array(true)
-            .descriptor_binding_variable_descriptor_count(true);
+            .descriptor_binding_variable_descriptor_count(true)
+            .descriptor_binding_sampled_image_update_after_bind(true)
+            .descriptor_binding_partially_bound(true);
 
         let mut features11 =
             vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);

@@ -28,6 +28,12 @@ impl SymbolId {
     pub const INVALID: Self = Self(0);
 }
 
+impl std::fmt::Display for SymbolId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Handle for a virtual image resource, backed by a Symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageHandle(pub SymbolId);
