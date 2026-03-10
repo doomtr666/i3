@@ -2128,6 +2128,38 @@ impl RenderBackend for VulkanBackend {
             );
         }
     }
+
+    #[cfg(debug_assertions)]
+    fn set_image_name(&mut self, image: BackendImage, name: &str) {
+        if let Some(img) = self.images.get(image.0) {
+            let c_name = std::ffi::CString::new(name).unwrap();
+            let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
+                .object_handle(img.image)
+                .object_name(&c_name);
+            unsafe {
+                self.get_device()
+                    .debug_utils
+                    .set_debug_utils_object_name(&name_info)
+                    .ok();
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn set_buffer_name(&mut self, buffer: BackendBuffer, name: &str) {
+        if let Some(buf) = self.buffers.get(buffer.0) {
+            let c_name = std::ffi::CString::new(name).unwrap();
+            let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
+                .object_handle(buf.buffer)
+                .object_name(&c_name);
+            unsafe {
+                self.get_device()
+                    .debug_utils
+                    .set_debug_utils_object_name(&name_info)
+                    .ok();
+            }
+        }
+    }
 }
 
 impl RenderBackendInternal for VulkanBackend {
@@ -2694,6 +2726,28 @@ impl RenderBackendInternal for VulkanBackend {
         }))
     }
 
+    #[cfg(debug_assertions)]
+    fn begin_debug_label(&self, command_buffer: BackendCommandBuffer, name: &str, color: [f32; 4]) {
+        let c_name = std::ffi::CString::new(name).unwrap();
+        let label = vk::DebugUtilsLabelEXT::default()
+            .label_name(&c_name)
+            .color(color);
+        unsafe {
+            let cb = vk::CommandBuffer::from_raw(command_buffer.0);
+            self.get_device()
+                .debug_utils
+                .cmd_begin_debug_utils_label(cb, &label);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn end_debug_label(&self, command_buffer: BackendCommandBuffer) {
+        unsafe {
+            let cb = vk::CommandBuffer::from_raw(command_buffer.0);
+            self.get_device().debug_utils.cmd_end_debug_utils_label(cb);
+        }
+    }
+
     fn record_pass(
         &self,
         prepared: &Self::PreparedPass,
@@ -2734,6 +2788,13 @@ impl RenderBackendInternal for VulkanBackend {
                 .begin_command_buffer(cmd, &begin_info)
                 .unwrap()
         };
+
+        #[cfg(debug_assertions)]
+        self.begin_debug_label(
+            BackendCommandBuffer(cmd.as_raw()),
+            &prepared.name,
+            [1.0, 1.0, 1.0, 1.0],
+        );
 
         let mut ctx = VulkanPassContext {
             cmd,
@@ -2852,6 +2913,9 @@ impl RenderBackendInternal for VulkanBackend {
                 }
             }
         }
+
+        #[cfg(debug_assertions)]
+        self.end_debug_label(BackendCommandBuffer(cmd.as_raw()));
 
         unsafe {
             device.handle.end_command_buffer(cmd).unwrap();

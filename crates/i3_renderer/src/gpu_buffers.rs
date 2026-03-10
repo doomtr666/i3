@@ -56,11 +56,22 @@ impl GpuBuffers {
             })
         };
 
-        Self {
+        #[allow(unused_mut)]
+        let mut buffers = Self {
             object_buffer: create_storage(backend, object_buffer_size),
             material_buffer: create_storage(backend, material_buffer_size),
             light_buffer: create_storage(backend, light_buffer_size),
             camera_ubo: create_ubo(backend, camera_ubo_size),
+        };
+
+        #[cfg(debug_assertions)]
+        {
+            backend.set_buffer_name(buffers.object_buffer, "ObjectBuffer");
+            backend.set_buffer_name(buffers.material_buffer, "MaterialBuffer");
+            backend.set_buffer_name(buffers.light_buffer, "LightBuffer");
+            backend.set_buffer_name(buffers.camera_ubo, "CameraUBO");
         }
+
+        buffers
     }
 }

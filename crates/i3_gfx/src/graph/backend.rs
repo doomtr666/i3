@@ -300,6 +300,12 @@ pub trait RenderBackend {
         set: u64,
         binding: u32,
     );
+
+    // --- Debug Utilities ---
+    /// Nests a name for an image (no-op in release).
+    fn set_image_name(&mut self, _image: BackendImage, _name: &str) {}
+    /// Nests a name for a buffer (no-op in release).
+    fn set_buffer_name(&mut self, _buffer: BackendBuffer, _name: &str) {}
 }
 
 /// Extension trait for [RenderBackend] to provide typed helpers.
@@ -386,6 +392,18 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     ) -> Result<DescriptorSetHandle, String>;
 
     fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]);
+
+    // --- Debug Utilities (Internal) ---
+    /// Begins a debug label for command buffer annotation (no-op in release).
+    fn begin_debug_label(
+        &self,
+        _command_buffer: BackendCommandBuffer,
+        _name: &str,
+        _color: [f32; 4],
+    ) {
+    }
+    /// Ends a debug label for command buffer annotation (no-op in release).
+    fn end_debug_label(&self, _command_buffer: BackendCommandBuffer) {}
 }
 
 #[derive(Debug, Clone)]

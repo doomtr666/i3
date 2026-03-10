@@ -906,9 +906,13 @@ impl CompiledGraph {
 
         for (virtual_handle, physical) in &node.external_images {
             backend.register_external_image(*virtual_handle, *physical);
+            // We do not set the debug name here because external resources
+            // should already be named where they were created.
         }
         for (virtual_handle, physical) in &node.external_buffers {
             backend.register_external_buffer(*virtual_handle, *physical);
+            // We do not set the debug name here because external resources
+            // should already be named where they were created.
         }
 
         for child in &mut node.children {
@@ -940,6 +944,8 @@ impl CompiledGraph {
                             .expect("Image without handle")
                             .downcast_ref::<ImageHandle>()
                             .expect("Not a handle");
+                        #[cfg(debug_assertions)]
+                        backend.set_image_name(physical, &symbol.name);
                         backend.register_external_image(handle, physical);
                     }
                 }
@@ -953,6 +959,8 @@ impl CompiledGraph {
                             .expect("Buffer without handle")
                             .downcast_ref::<BufferHandle>()
                             .expect("Not a handle");
+                        #[cfg(debug_assertions)]
+                        backend.set_buffer_name(physical, &symbol.name);
                         backend.register_external_buffer(handle, physical);
                     } else if symbol.lifetime == SymbolLifetime::TemporalHistory {
                         if let Some(ref mut temporal) = temporal_registry_opt {

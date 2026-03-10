@@ -149,9 +149,8 @@ pub trait RenderPass: Any + Send + Sync {
 
 impl<T: RenderPass + ?Sized> RenderPass for Arc<Mutex<T>> {
     fn name(&self) -> &str {
-        // This is a bit unfortunate but we can't get the name without locking.
-        // Usually we lock during record/execute anyway.
-        "Arc<Mutex<RenderPass>>"
+        let name = std::any::type_name::<T>();
+        name.split("::").last().unwrap_or(name)
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend) {

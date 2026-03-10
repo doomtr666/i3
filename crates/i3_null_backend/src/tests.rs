@@ -23,6 +23,7 @@ fn test_null_backend_existence_validation() {
         &backend.allocated_buffers,
         &pipelines,
         &backend.image_map,
+        1,
     );
 
     ctx.bind_vertex_buffer(
