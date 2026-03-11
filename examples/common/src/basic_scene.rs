@@ -57,7 +57,7 @@ impl BasicScene {
             base_color_factor: [1.0, 1.0, 1.0, 1.0],
             emissive_factor_and_alpha_cutoff: [0.0, 0.0, 0.0, 0.0],
             metallic_factor: 0.0,
-            roughness_factor: 1.0,
+            roughness_factor: 0.5,
             _pad_pbr: [0.0; 2],
             albedo_tex_index: -1,
             normal_tex_index: -1,

@@ -34,11 +34,10 @@ impl GpuBuffers {
         let material_buffer_size = 1024 * 64; // Stub
         let camera_ubo_size = std::mem::size_of::<CameraData>() as u64;
 
-        // Light Buffer (Header + 1024 lights) -> Struct size is 48 bytes approx
+        // Light Buffer (1024 lights) -> Struct size is 48 bytes approx
         let max_lights = 1024;
         let light_data_size = std::mem::size_of::<crate::scene::LightData>() as u64;
-        // SSBO Layout: struct { uint count; vec3 pad; LightData lights[]; }
-        let light_buffer_size = 16 + (max_lights * light_data_size);
+        let light_buffer_size = max_lights * light_data_size;
 
         let create_storage = |backend: &mut dyn RenderBackend, size: u64| {
             backend.create_buffer(&BufferDesc {

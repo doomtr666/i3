@@ -50,7 +50,8 @@ pub enum LightType {
 }
 
 /// GPU-ready data for a single light.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct LightData {
     pub position: nalgebra_glm::Vec3,
     pub direction: nalgebra_glm::Vec3,

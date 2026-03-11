@@ -155,31 +155,6 @@ impl SlangCompiler {
                     _ => 1,
                 };
 
-                // DIAGNOSTIC
-                use std::io::Write;
-                let mut file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("reflection_dump.txt")
-                    .unwrap();
-
-                writeln!(file, "GLOBAL Param: {}, type={:?}", name, ty).unwrap();
-                let struct_layout = if type_layout.kind() == slang::TypeKind::Resource {
-                    type_layout.element_type_layout()
-                } else {
-                    Some(type_layout.to_owned())
-                };
-
-                if let Some(sl) = struct_layout {
-                    for i in 0..sl.field_count() {
-                        if let Some(field) = sl.field_by_index(i) {
-                            let field_name = field.name().unwrap_or("unknown");
-                            let offset = field.offset(category.unwrap_or(slang::ParameterCategory::Uniform));
-                            writeln!(file, "  {}: offset={}", field_name, offset).unwrap();
-                        }
-                    }
-                    writeln!(file, "  TOTAL SIZE: {}", sl.size(category.unwrap_or(slang::ParameterCategory::Uniform))).unwrap();
-                }
 
                 (ty, count)
             } else {
