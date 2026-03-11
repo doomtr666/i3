@@ -1791,6 +1791,10 @@ impl RenderBackend for VulkanBackend {
                     let _ = allocator.flush_allocation(alloc, offset, data.len() as u64);
                     allocator.unmap_memory(alloc);
                 }
+
+                // Update state to reflect HOST_WRITE
+                buf.last_access = vk::AccessFlags2::HOST_WRITE;
+                buf.last_stage = vk::PipelineStageFlags2::HOST;
                 Ok(())
             } else {
                 Err("Buffer has no allocation (external?)".to_string())
@@ -2867,6 +2871,7 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         pass.execute(&mut ctx);
+        
 
         if !is_compute {
             if let PreparedDomain::Graphics {
@@ -3553,7 +3558,13 @@ impl PassContext for VulkanPassContext {
     }
 
     fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
-        if let Some(buf) = self.backend().buffers.get(handle.0.0) {
+        let physical_id = if let Some(&phy) = self.backend().external_buffer_to_physical.get(&handle.0.0) {
+            phy
+        } else {
+            handle.0.0
+        };
+
+        if let Some(buf) = self.backend().buffers.get(physical_id) {
             unsafe {
                 self.device
                     .handle
@@ -3563,7 +3574,13 @@ impl PassContext for VulkanPassContext {
     }
 
     fn bind_index_buffer(&mut self, handle: BufferHandle, index_type: IndexType) {
-        if let Some(buf) = self.backend().buffers.get(handle.0.0) {
+        let physical_id = if let Some(&phy) = self.backend().external_buffer_to_physical.get(&handle.0.0) {
+            phy
+        } else {
+            handle.0.0
+        };
+
+        if let Some(buf) = self.backend().buffers.get(physical_id) {
             let vk_type = match index_type {
                 IndexType::Uint16 => vk::IndexType::UINT16,
                 IndexType::Uint32 => vk::IndexType::UINT32,
@@ -3666,7 +3683,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn clear_buffer(&mut self, buffer: i3_gfx::graph::types::BufferHandle, clear_value: u32) {
-        let physical_id = if let Some(&phy) = self.backend().external_to_physical.get(&buffer.0.0) {
+        let physical_id = if let Some(&phy) = self.backend().external_buffer_to_physical.get(&buffer.0.0) {
             phy
         } else {
             buffer.0.0
@@ -3683,11 +3700,22 @@ impl PassContext for VulkanPassContext {
                     clear_value,
                 );
             }
+
+            // Update state to reflect TRANSFER_WRITE
+            if let Some(buf) = self.backend_mut().buffers.get_mut(physical_id) {
+                buf.last_access = vk::AccessFlags2::TRANSFER_WRITE;
+                buf.last_stage = vk::PipelineStageFlags2::TRANSFER;
+            }
         }
     }
 
     fn present(&mut self, image: i3_gfx::graph::types::ImageHandle) {
-        self.present_request = Some(image);
+        let physical_id = if let Some(&phy) = self.backend().external_to_physical.get(&image.0.0) {
+            phy
+        } else {
+            image.0.0
+        };
+        self.present_request = Some(i3_gfx::graph::types::ImageHandle(i3_gfx::graph::types::SymbolId(physical_id)));
     }
 
     fn copy_buffer(
@@ -3713,6 +3741,12 @@ impl PassContext for VulkanPassContext {
             self.device
                 .handle
                 .cmd_copy_buffer(self.cmd, src_vk, dst_vk, &[region]);
+        }
+
+        // Update destination state to reflect TRANSFER_WRITE
+        if let Some(buf) = self.backend_mut().buffers.get_mut(dst_buf.0) {
+            buf.last_access = vk::AccessFlags2::TRANSFER_WRITE;
+            buf.last_stage = vk::PipelineStageFlags2::TRANSFER;
         }
     }
 
