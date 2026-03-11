@@ -6,21 +6,20 @@
 //   RT2 (R8G8_UNORM):          Roughness + Metallic
 //   RT3 (R11G11B10_UFLOAT):    Emissive.rgb
 
+[layout("std430")]
 struct MaterialData
 {
     float4 baseColorFactor;
     float4 emissiveFactorAndAlphaCutoff;
-    float metallicFactor;
-    float roughnessFactor;
-    int albedoTexIndex;
-    int normalTexIndex;
-    int rmaoTexIndex;
-    int emissiveTexIndex;
-    uint2 _pad;
+    // x: metallic, y: roughness, zw: padding
+    float4 pbrFactors;
+    // x: albedo, y: normal, z: rmao, w: emissive
+    int4 textureIndices;
 };
 
 // Bindings
-layout(set = 1, binding = 0)
+[layout("std430")]
+[vk::binding(0, 1)]
 StructuredBuffer<MaterialData> materials;
 
 layout(set = 2, binding = 0)
@@ -34,6 +33,7 @@ struct PushConstants
     float4x4 viewProjection;
     float4x4 model;
     uint materialId;
+    uint3 _pad;
 };
 
 [[vk::push_constant]]
@@ -91,9 +91,9 @@ GBufferOutput fragmentMain(VertexOutput input)
     MaterialData mat = materials[pc.materialId];
     
     float4 albedo = float4(mat.baseColorFactor);
-    if (mat.albedoTexIndex >= 0)
+    if (mat.textureIndices.x >= 0)
     {
-        albedo *= bindlessTextures[mat.albedoTexIndex].Sample(globalSampler, input.uv);
+        albedo *= bindlessTextures[mat.textureIndices.x].Sample(globalSampler, input.uv);
     }
 
     // Alpha test
@@ -102,23 +102,23 @@ GBufferOutput fragmentMain(VertexOutput input)
         discard;
     }
 
-    float roughness = mat.roughnessFactor;
-    float metallic = mat.metallicFactor;
-    if (mat.rmaoTexIndex >= 0)
+    float roughness = mat.pbrFactors.y;
+    float metallic = mat.pbrFactors.x;
+    if (mat.textureIndices.z >= 0)
     {
-        float4 rmao = bindlessTextures[mat.rmaoTexIndex].Sample(globalSampler, input.uv);
+        float4 rmao = bindlessTextures[mat.textureIndices.z].Sample(globalSampler, input.uv);
         // Standard glTF: R=ao (ignored here for gbuffer), G=roughness, B=metallic
         roughness *= rmao.g;
         metallic *= rmao.b;
     }
 
     float3 emissive = mat.emissiveFactorAndAlphaCutoff.rgb;
-    if (mat.emissiveTexIndex >= 0)
+    if (mat.textureIndices.w >= 0)
     {
-        emissive *= bindlessTextures[mat.emissiveTexIndex].Sample(globalSampler, input.uv).rgb;
+        emissive *= bindlessTextures[mat.textureIndices.w].Sample(globalSampler, input.uv).rgb;
     }
 
-    if (mat.normalTexIndex >= 0)
+    if (mat.textureIndices.y >= 0)
     {
         // Normal mapping placeholder
     }

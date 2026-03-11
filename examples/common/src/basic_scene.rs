@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use tracing::info;
+use tracing::debug;
 
 use i3_gfx::prelude::*;
 use i3_io::mesh::{IndexFormat, MeshAsset};
@@ -58,11 +58,11 @@ impl BasicScene {
             emissive_factor_and_alpha_cutoff: [0.0, 0.0, 0.0, 0.0],
             metallic_factor: 0.0,
             roughness_factor: 1.0,
+            _pad_pbr: [0.0; 2],
             albedo_tex_index: -1,
             normal_tex_index: -1,
             rmao_tex_index: -1,
             emissive_tex_index: -1,
-            _pad: [0; 2],
         });
 
         scene
@@ -229,7 +229,7 @@ impl BasicScene {
             usage: BufferUsageFlags::VERTEX_BUFFER,
             memory: MemoryType::CpuToGpu,
         });
-        info!(
+        debug!(
             "Loading baked mesh {:?} with stride {}",
             mesh_uuid, mesh_asset.header.vertex_stride
         );
@@ -307,11 +307,11 @@ impl BasicScene {
                 ],
                 metallic_factor: header.metallic_factor,
                 roughness_factor: header.roughness_factor,
+                _pad_pbr: [0.0; 2],
                 albedo_tex_index: albedo_idx,
                 normal_tex_index: normal_idx,
                 rmao_tex_index: rmao_idx,
                 emissive_tex_index: emissive_idx,
-                _pad: [0; 2],
             };
 
             let material_id = self.materials.len() as u32;

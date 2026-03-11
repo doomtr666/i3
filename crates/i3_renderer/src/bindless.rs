@@ -67,7 +67,7 @@ impl BindlessManager {
             self.bindless_binding,
         );
 
-        tracing::info!(
+        tracing::debug!(
             "Registered bindless physical texture {} -> index {}",
             physical_id,
             index

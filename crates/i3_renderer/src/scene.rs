@@ -26,17 +26,19 @@ pub struct ObjectData {
 
 /// GPU-ready data for a material.
 #[derive(Debug, Clone, Copy)]
-#[repr(C)]
+#[repr(C, align(16))]
 pub struct MaterialData {
     pub base_color_factor: [f32; 4],
     pub emissive_factor_and_alpha_cutoff: [f32; 4],
+    // PBR factors (metallic, roughness, pad, pad) - 16 bytes
     pub metallic_factor: f32,
     pub roughness_factor: f32,
+    pub _pad_pbr: [f32; 2],
+    // Texture indices (albedo, normal, rmao, emissive) - 16 bytes
     pub albedo_tex_index: i32,
     pub normal_tex_index: i32,
     pub rmao_tex_index: i32,
     pub emissive_tex_index: i32,
-    pub _pad: [u32; 2],
 }
 
 /// Type of light source.

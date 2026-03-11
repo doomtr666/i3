@@ -58,8 +58,7 @@ impl SymbolTable {
         }
     }
 
-    pub fn publish(&mut self, name: &str, symbol: Symbol) -> SymbolId {
-        let id = SymbolId(self.symbols.len() as u64);
+    pub fn publish(&mut self, name: &str, symbol: Symbol, id: SymbolId) -> SymbolId {
         self.name_to_id.insert(name.to_string(), id);
         self.symbols.push(symbol);
         id
@@ -70,8 +69,9 @@ impl SymbolTable {
     }
 
     pub fn get_data(&self, id: SymbolId) -> Option<&dyn Any> {
+        let index = (id.0 & 0xFFFFFFFF) as usize;
         self.symbols
-            .get(id.0 as usize)
+            .get(index)
             .and_then(|s| s.data.as_ref().map(|d| d.as_ref() as &dyn Any))
     }
 }
@@ -137,6 +137,8 @@ pub struct PassRecorder<'a> {
 impl<'a> InternalPassBuilder for PassRecorder<'a> {
     fn publish_erased(&mut self, _type_id: TypeId, name: &str, data: Box<dyn Any + Send + Sync>) {
         tracing::trace!(name, "Publishing CPU data");
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
         self.storage.symbols.publish(
             name,
             Symbol {
@@ -145,6 +147,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 lifetime: SymbolLifetime::Transient,
                 data: Some(data),
             },
+            id,
         );
         // Track as a data dependency for the DAG
         self.storage.data_writes.push(name.to_string());
@@ -208,7 +211,9 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
     }
 
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
-        let id = self.storage.symbols.publish(
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        self.storage.symbols.publish(
             name,
             Symbol {
                 name: name.to_string(),
@@ -216,14 +221,17 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 lifetime: SymbolLifetime::Transient,
                 data: None, // Will update below
             },
+            id,
         );
         let actual_handle = ImageHandle(id);
-        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
         actual_handle
     }
 
     fn declare_buffer(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
-        let id = self.storage.symbols.publish(
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        self.storage.symbols.publish(
             name,
             Symbol {
                 name: name.to_string(),
@@ -231,14 +239,17 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 lifetime: SymbolLifetime::Transient,
                 data: None,
             },
+            id,
         );
         let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
         actual_handle
     }
 
     fn declare_buffer_history(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
-        let id = self.storage.symbols.publish(
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        self.storage.symbols.publish(
             name,
             Symbol {
                 name: name.to_string(),
@@ -246,15 +257,18 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 lifetime: SymbolLifetime::TemporalHistory,
                 data: None,
             },
+            id,
         );
         let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
         actual_handle
     }
 
     fn read_buffer_history(&mut self, name: &str) -> BufferHandle {
         let history_name = format!("{}_History", name);
-        let id = self.storage.symbols.publish(
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        self.storage.symbols.publish(
             &history_name,
             Symbol {
                 name: history_name.clone(),
@@ -266,14 +280,17 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 lifetime: SymbolLifetime::TemporalHistory,
                 data: None,
             },
+            id,
         );
         let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
         actual_handle
     }
 
     fn import_buffer(&mut self, name: &str, physical: BackendBuffer) -> BufferHandle {
-        let id = self.storage.symbols.publish(
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        self.storage.symbols.publish(
             name,
             Symbol {
                 name: name.to_string(),
@@ -285,16 +302,19 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 lifetime: SymbolLifetime::External,
                 data: None,
             },
+            id,
         );
         let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
         self.register_external_buffer(actual_handle, physical);
         actual_handle
     }
 
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle {
         let name = format!("Window_{}", window.0);
-        let id = self.storage.symbols.publish(
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        self.storage.symbols.publish(
             &name,
             Symbol {
                 name: name.clone(),
@@ -312,9 +332,10 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 lifetime: SymbolLifetime::External,
                 data: None,
             },
+            id,
         );
         let actual_handle = ImageHandle(id);
-        self.storage.symbols.symbols[id.0 as usize].data = Some(Box::new(actual_handle));
+        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
 
         // Record the request
         self.storage

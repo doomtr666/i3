@@ -1431,7 +1431,10 @@ impl RenderBackend for VulkanBackend {
                 }
                 i3_gfx::graph::pipeline::BindingType::Sampler => vk::DescriptorType::SAMPLER,
                 i3_gfx::graph::pipeline::BindingType::Texture => vk::DescriptorType::SAMPLED_IMAGE,
-                _ => vk::DescriptorType::UNIFORM_BUFFER, // Fallback
+                _ => {
+                    tracing::warn!("Unknown binding type for binding {}, defaulting to STORAGE_BUFFER", binding.binding);
+                    vk::DescriptorType::STORAGE_BUFFER
+                }
             };
 
             let stage_flags =
@@ -1494,7 +1497,7 @@ impl RenderBackend for VulkanBackend {
 
                 let layout =
                     if i == 2 && self.bindless_set_layout != vk::DescriptorSetLayout::null() {
-                        info!(
+                        tracing::debug!(
                             "Pipeline reusing global bindless layout for Set 2: {:?}",
                             self.bindless_set_layout
                         );
@@ -1507,7 +1510,7 @@ impl RenderBackend for VulkanBackend {
                                 .expect("Failed to create descriptor set layout")
                         };
                         self.descriptor_set_layouts.push(layout); // Track for cleanup
-                        info!("Pipeline created new layout for Set {}: {:?}", i, layout);
+                        tracing::debug!("Pipeline created new layout for Set {}: {:?}", i, layout);
                         layout
                     };
 
@@ -1785,6 +1788,7 @@ impl RenderBackend for VulkanBackend {
                         data.len(),
                     );
 
+                    let _ = allocator.flush_allocation(alloc, offset, data.len() as u64);
                     allocator.unmap_memory(alloc);
                 }
                 Ok(())
@@ -3772,7 +3776,10 @@ impl PassContext for VulkanPassContext {
 
         if let Some(alloc) = &mut physical.allocation {
             let allocator = device.allocator.lock().unwrap();
-            unsafe { allocator.unmap_memory(alloc) }
+            unsafe {
+                let _ = allocator.flush_allocation(alloc, 0, vk::WHOLE_SIZE);
+                allocator.unmap_memory(alloc);
+            }
         }
     }
 }

@@ -12,7 +12,6 @@ pub use i3_gfx::graph::pipeline::{
     Binding, BindingType, EntryPointInfo, PushConstantRange, ShaderModule, ShaderReflection,
     ShaderStageInfo,
 };
-use tracing::info;
 
 pub mod prelude {
     pub use crate::{
@@ -70,7 +69,6 @@ impl SlangCompiler {
 
         for entry_point_ref in reflection.entry_points() {
             let name = entry_point_ref.name().unwrap_or("unknown").to_string();
-
             let stage = entry_point_ref.stage();
             let stage_name = match stage {
                 slang::Stage::Vertex => "vertex",
@@ -156,6 +154,33 @@ impl SlangCompiler {
                     slang::TypeKind::Array => type_layout.element_count().unwrap_or(0) as u32,
                     _ => 1,
                 };
+
+                // DIAGNOSTIC
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("reflection_dump.txt")
+                    .unwrap();
+
+                writeln!(file, "GLOBAL Param: {}, type={:?}", name, ty).unwrap();
+                let struct_layout = if type_layout.kind() == slang::TypeKind::Resource {
+                    type_layout.element_type_layout()
+                } else {
+                    Some(type_layout.to_owned())
+                };
+
+                if let Some(sl) = struct_layout {
+                    for i in 0..sl.field_count() {
+                        if let Some(field) = sl.field_by_index(i) {
+                            let field_name = field.name().unwrap_or("unknown");
+                            let offset = field.offset(category.unwrap_or(slang::ParameterCategory::Uniform));
+                            writeln!(file, "  {}: offset={}", field_name, offset).unwrap();
+                        }
+                    }
+                    writeln!(file, "  TOTAL SIZE: {}", sl.size(category.unwrap_or(slang::ParameterCategory::Uniform))).unwrap();
+                }
+
                 (ty, count)
             } else {
                 (BindingType::Unknown, 1)
@@ -232,6 +257,7 @@ impl SlangCompiler {
                         slang::TypeKind::Array => type_layout.element_count().unwrap_or(0) as u32,
                         _ => 1,
                     };
+
                     (ty, count)
                 } else {
                     (BindingType::Unknown, 1)
@@ -256,9 +282,13 @@ impl SlangCompiler {
         bindings.sort_by_key(|b| (b.set, b.binding));
 
         for b in &bindings {
-            info!(
+            tracing::debug!(
                 "Reflected binding: set={}, binding={}, type={:?}, count={}, name={}",
-                b.set, b.binding, b.binding_type, b.count, b.name
+                b.set,
+                b.binding,
+                b.binding_type,
+                b.count,
+                b.name
             );
         }
 

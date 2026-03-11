@@ -37,14 +37,23 @@ impl RenderPass for ObjectSyncPass {
         let scene = unsafe { &*scene_wrapper.0 };
         self.scene = Some(*scene_wrapper);
 
-        let dirty_count = scene.iter_dirty_objects().count();
+        let count = scene.iter_objects().count();
 
         // 1. Write to the target persistent SSBO
         builder.write_buffer(self.object_buffer, ResourceUsage::WRITE);
 
         // 2. Allocate a transient staging buffer
-        if dirty_count > 0 {
-            let staging_size = (dirty_count * std::mem::size_of::<ObjectData>()) as u64;
+        if count > 0 {
+            // Find max object ID to establish array bounds
+            let mut max_id = 0;
+            for (id, _) in scene.iter_objects() {
+                if id.0 as usize > max_id {
+                    max_id = id.0 as usize;
+                }
+            }
+            let array_len = max_id + 1;
+
+            let staging_size = (array_len * std::mem::size_of::<ObjectData>()) as u64;
             let staging_desc = BufferDesc {
                 size: staging_size,
                 usage: BufferUsageFlags::TRANSFER_SRC,
@@ -63,11 +72,37 @@ impl RenderPass for ObjectSyncPass {
             if let Some(scene_ptr) = self.scene {
                 let scene = unsafe { &*scene_ptr.0 };
 
-                let dirty_objects: Vec<_> =
-                    scene.iter_dirty_objects().map(|(_, d)| d.clone()).collect();
-                let count = dirty_objects.len();
+                let mut max_id = 0;
+                for (id, _) in scene.iter_objects() {
+                    if id.0 as usize > max_id {
+                        max_id = id.0 as usize;
+                    }
+                }
+
+                let count = if scene.iter_objects().count() > 0 {
+                    max_id + 1
+                } else {
+                    0
+                };
+
                 if count == 0 {
                     return;
+                }
+
+                let mut objects = vec![
+                    ObjectData {
+                        world_transform: nalgebra_glm::Mat4::identity(),
+                        prev_transform: nalgebra_glm::Mat4::identity(),
+                        material_id: 0,
+                        mesh_id: 0,
+                        flags: 0,
+                        _pad: 0,
+                    };
+                    count
+                ];
+
+                for (id, data) in scene.iter_objects() {
+                    objects[id.0 as usize] = data.clone();
                 }
 
                 let size = (count * std::mem::size_of::<ObjectData>()) as u64;
@@ -75,7 +110,7 @@ impl RenderPass for ObjectSyncPass {
                 if !ptr.is_null() {
                     unsafe {
                         std::ptr::copy_nonoverlapping(
-                            dirty_objects.as_ptr() as *const u8,
+                            objects.as_ptr() as *const u8,
                             ptr,
                             size as usize,
                         );
@@ -142,10 +177,65 @@ impl RenderPass for MaterialSyncPass {
             if let Some(scene_ptr) = self.scene {
                 let scene = unsafe { &*scene_ptr.0 };
 
-                let materials: Vec<_> = scene.iter_materials().map(|(_, d)| *d).collect();
-                let count = materials.len();
+                let mut max_id = 0;
+                for (id, _) in scene.iter_materials() {
+                    if id.0 as usize > max_id {
+                        max_id = id.0 as usize;
+                    }
+                }
+
+                let count = if scene.iter_materials().count() > 0 {
+                    max_id + 1
+                } else {
+                    0
+                };
+
                 if count == 0 {
                     return;
+                }
+
+                let mut materials = vec![
+                    MaterialData {
+                        base_color_factor: [1.0, 0.0, 1.0, 1.0], // Magenta default for missing
+                        emissive_factor_and_alpha_cutoff: [0.0; 4],
+                        metallic_factor: 0.0,
+                        roughness_factor: 1.0,
+                        _pad_pbr: [0.0; 2],
+                        albedo_tex_index: -1,
+                        normal_tex_index: -1,
+                        rmao_tex_index: -1,
+                        emissive_tex_index: -1,
+                    };
+                    count
+                ];
+
+                static LOG_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                let should_log = !LOG_DONE.swap(true, std::sync::atomic::Ordering::Relaxed);
+
+                if should_log {
+                    tracing::debug!(
+                        "INITIAL MATERIAL DUMP ({} materials, size_of={})", 
+                        count, 
+                        std::mem::size_of::<MaterialData>()
+                    );
+                }
+
+                for (id, data) in scene.iter_materials() {
+                    let idx = id.0 as usize;
+                    materials[idx] = *data;
+                    
+                    if should_log {
+                        tracing::debug!(
+                            "  Material[{}]: albedo={}, normal={}, rmao={}, emissive={}, Color={:?}, PBR={:?}",
+                            idx,
+                            data.albedo_tex_index,
+                            data.normal_tex_index,
+                            data.rmao_tex_index,
+                            data.emissive_tex_index,
+                            data.base_color_factor,
+                            [data.metallic_factor, data.roughness_factor]
+                        );
+                    }
                 }
 
                 let size = (count * std::mem::size_of::<MaterialData>()) as u64;
