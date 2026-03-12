@@ -16,8 +16,9 @@ pub struct AverageLuminancePushConstants {
 
 /// Average luminance pass struct implementing the RenderPass trait.
 pub struct AverageLuminancePass {
-    pub histogram_buffer: BufferHandle,
-    pub exposure_buffer: BufferHandle,
+    // Resolved handles (updated in record)
+    histogram_buffer: BufferHandle,
+    exposure_buffer: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -26,10 +27,11 @@ pub struct AverageLuminancePass {
 }
 
 impl AverageLuminancePass {
-    pub fn new(histogram_buffer: BufferHandle, exposure_buffer: BufferHandle) -> Self {
+    pub fn new() -> Self {
+        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            histogram_buffer,
-            exposure_buffer,
+            histogram_buffer: dummy_buffer,
+            exposure_buffer: dummy_buffer,
             shader: None,
             pipeline: None,
             push_constants: None,
@@ -69,6 +71,10 @@ impl RenderPass for AverageLuminancePass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        // Resolve target handles by name
+        self.histogram_buffer = builder.resolve_buffer("HistogramBuffer");
+        self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
+
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
         let dt = *builder.consume::<f32>("TimeDelta");
 

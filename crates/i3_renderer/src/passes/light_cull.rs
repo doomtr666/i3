@@ -12,11 +12,14 @@ pub struct LightCullPushConstants {
 
 /// Light cull pass struct implementing the RenderPass trait.
 pub struct LightCullPass {
-    pub cluster_aabbs: BufferHandle,
-    pub lights: BufferHandle,
-    pub cluster_grid: BufferHandle,
-    pub cluster_light_indices: BufferHandle,
     pub push_constants: LightCullPushConstants,
+    pub light_buffer_name: String,
+
+    // Resolved handles (updated in record)
+    cluster_aabbs: BufferHandle,
+    lights: BufferHandle,
+    cluster_grid: BufferHandle,
+    cluster_light_indices: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -24,19 +27,19 @@ pub struct LightCullPass {
 }
 
 impl LightCullPass {
-    pub fn new(
-        cluster_aabbs: BufferHandle,
-        lights: BufferHandle,
-        cluster_grid: BufferHandle,
-        cluster_light_indices: BufferHandle,
-        push_constants: LightCullPushConstants,
-    ) -> Self {
+    pub fn new() -> Self {
+        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            cluster_aabbs,
-            lights,
-            cluster_grid,
-            cluster_light_indices,
-            push_constants,
+            cluster_aabbs: dummy_buffer,
+            lights: dummy_buffer,
+            cluster_grid: dummy_buffer,
+            cluster_light_indices: dummy_buffer,
+            push_constants: LightCullPushConstants {
+                view_matrix: nalgebra_glm::identity(),
+                grid_size: [0, 0, 0],
+                light_count: 0,
+            },
+            light_buffer_name: "LightBuffer".to_string(),
             shader: None,
             pipeline: None,
         }
@@ -70,6 +73,23 @@ impl RenderPass for LightCullPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        self.cluster_aabbs = builder.resolve_buffer("ClusterAABBs");
+        self.lights = builder.resolve_buffer(&self.light_buffer_name);
+        self.cluster_grid = builder.resolve_buffer("ClusterGrid");
+        self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
+
+        // Consume CommonData to compute push constants
+        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
+        let grid_x = (common.screen_width + 63) / 64;
+        let grid_y = (common.screen_height + 63) / 64;
+        let grid_z: u32 = 16;
+
+        self.push_constants = LightCullPushConstants {
+            view_matrix: common.view,
+            grid_size: [grid_x, grid_y, grid_z],
+            light_count: common.light_count,
+        };
+
         builder.read_buffer(self.cluster_aabbs, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.lights, ResourceUsage::SHADER_READ);
         builder.write_buffer(self.cluster_grid, ResourceUsage::SHADER_WRITE);

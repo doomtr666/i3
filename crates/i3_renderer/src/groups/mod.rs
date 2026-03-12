@@ -1,7 +1,7 @@
 use crate::passes::average_luminance::AverageLuminancePass;
-use crate::passes::cluster_build::{ClusterBuildPass, ClusterBuildPushConstants};
+use crate::passes::cluster_build::ClusterBuildPass;
 use crate::passes::histogram_build::HistogramBuildPass;
-use crate::passes::light_cull::{LightCullPass, LightCullPushConstants};
+use crate::passes::light_cull::LightCullPass;
 use crate::passes::tonemap::TonemapPass;
 use i3_gfx::prelude::*;
 use std::sync::{Arc, Mutex};
@@ -12,36 +12,10 @@ pub struct ClusteringGroup {
 }
 
 impl ClusteringGroup {
-    pub fn new(
-        cluster_aabbs: BufferHandle,
-        lights: BufferHandle,
-        cluster_grid: BufferHandle,
-        cluster_light_indices: BufferHandle,
-        grid_size: [u32; 3],
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            cluster_build_pass: Arc::new(Mutex::new(ClusterBuildPass::new(
-                cluster_aabbs,
-                ClusterBuildPushConstants {
-                    inv_projection: nalgebra_glm::identity(),
-                    grid_size,
-                    near_plane: 0.0,
-                    far_plane: 0.0,
-                    screen_dimensions: [0.0, 0.0],
-                    pad: 0,
-                },
-            ))),
-            light_cull_pass: Arc::new(Mutex::new(LightCullPass::new(
-                cluster_aabbs,
-                lights,
-                cluster_grid,
-                cluster_light_indices,
-                LightCullPushConstants {
-                    view_matrix: nalgebra_glm::identity(),
-                    grid_size,
-                    light_count: 0,
-                },
-            ))),
+            cluster_build_pass: Arc::new(Mutex::new(ClusterBuildPass::new())),
+            light_cull_pass: Arc::new(Mutex::new(LightCullPass::new())),
         }
     }
 }
@@ -64,29 +38,11 @@ pub struct PostProcessGroup {
 }
 
 impl PostProcessGroup {
-    pub fn new(
-        hdr_target: ImageHandle,
-        backbuffer: ImageHandle,
-        histogram_buffer: BufferHandle,
-        exposure_buffer: BufferHandle,
-        sampler: SamplerHandle,
-    ) -> Self {
+    pub fn new(sampler: SamplerHandle) -> Self {
         Self {
-            histogram_build_pass: Arc::new(Mutex::new(HistogramBuildPass::new(
-                hdr_target,
-                histogram_buffer,
-                exposure_buffer,
-            ))),
-            average_luminance_pass: Arc::new(Mutex::new(AverageLuminancePass::new(
-                histogram_buffer,
-                exposure_buffer,
-            ))),
-            tonemap_pass: Arc::new(Mutex::new(TonemapPass::new(
-                backbuffer,
-                hdr_target,
-                exposure_buffer,
-                sampler,
-            ))),
+            histogram_build_pass: Arc::new(Mutex::new(HistogramBuildPass::new())),
+            average_luminance_pass: Arc::new(Mutex::new(AverageLuminancePass::new())),
+            tonemap_pass: Arc::new(Mutex::new(TonemapPass::new(sampler))),
         }
     }
 }

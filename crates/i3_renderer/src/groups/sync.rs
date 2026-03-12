@@ -9,18 +9,10 @@ pub struct SyncGroup {
 }
 
 impl SyncGroup {
-    pub fn new(
-        object_buffer: BufferHandle,
-        material_buffer: BufferHandle,
-        max_objects: usize,
-        max_materials: usize,
-    ) -> Self {
+    pub fn new(max_objects: usize, max_materials: usize) -> Self {
         Self {
-            object_sync: Arc::new(Mutex::new(ObjectSyncPass::new(object_buffer, max_objects))),
-            material_sync: Arc::new(Mutex::new(MaterialSyncPass::new(
-                material_buffer,
-                max_materials,
-            ))),
+            object_sync: Arc::new(Mutex::new(ObjectSyncPass::new(max_objects))),
+            material_sync: Arc::new(Mutex::new(MaterialSyncPass::new(max_materials))),
         }
     }
 }

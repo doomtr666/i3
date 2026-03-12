@@ -1,14 +1,38 @@
 use examples_common::{ExampleApp, init_tracing, main_loop};
 use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use i3_vulkan_backend::VulkanBackend;
 
+/// A simple triangle rendering pass.
+struct TrianglePass {
+    pipeline_id: SymbolId,
+    backbuffer: ImageHandle,
+}
+
+impl RenderPass for TrianglePass {
+    fn name(&self) -> &str {
+        "MainPass"
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        self.backbuffer = builder.resolve_image("Backbuffer");
+        builder.bind_pipeline(PipelineHandle(self.pipeline_id));
+        builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.draw(3, 0);
+        ctx.present(self.backbuffer);
+    }
+}
+
 struct TriangleApp {
     backend: VulkanBackend,
-    pipeline_id: SymbolId,
     window: WindowHandle,
+    pass: Arc<Mutex<TrianglePass>>,
 }
 
 impl ExampleApp for TriangleApp {
@@ -18,23 +42,13 @@ impl ExampleApp for TriangleApp {
 
     fn render(&mut self) {
         let mut graph = FrameGraph::new();
-        let pipeline_id = self.pipeline_id;
         let window = self.window;
+        let pass = self.pass.clone();
 
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
-
-            builder.add_pass_from_closures(
-                "MainPass",
-                move |sub: &mut PassBuilder| {
-                    sub.bind_pipeline(PipelineHandle(pipeline_id));
-                    sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
-                },
-                move |ctx: &mut dyn PassContext| {
-                    ctx.draw(3, 0);
-                    ctx.present(backbuffer);
-                },
-            );
+            builder.publish("Backbuffer", backbuffer);
+            builder.add_pass(pass);
         });
 
         let compiler = graph.compile();
@@ -128,11 +142,16 @@ fn main() -> Result<(), String> {
     });
     let pipeline_id = SymbolId(pipeline_handle.0);
 
+    let pass = Arc::new(Mutex::new(TrianglePass {
+        pipeline_id,
+        backbuffer: ImageHandle(SymbolId(0)),
+    }));
+
     // 5. Run Main Loop
     let app = TriangleApp {
         backend,
-        pipeline_id,
         window,
+        pass,
     };
     main_loop(app);
 

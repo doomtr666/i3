@@ -60,7 +60,7 @@ impl VertexFormat {
     /// Position(3) + Normal(3) + UV(2) = 32 bytes.
     /// Used for textured static meshes.
     pub const POSITION_NORMAL_UV: VertexFormat = VertexFormat(1);
-    /// Position(3) + Normal(3) + UV(2) + Tangent(4) = 40 bytes.
+    /// Position(3) + Normal(3) + UV(2) + Tangent(4) = 48 bytes.
     /// Used for normal-mapped meshes.
     pub const POSITION_NORMAL_UV_TANGENT: VertexFormat = VertexFormat(2);
     /// Position(3) + Normal(3) + Color(3) + JointIndices(4) + JointWeights(4) = 52 bytes.
@@ -287,7 +287,7 @@ mod tests {
     fn test_vertex_format_stride() {
         assert_eq!(VertexFormat::POSITION_NORMAL_COLOR.stride(), 36);
         assert_eq!(VertexFormat::POSITION_NORMAL_UV.stride(), 32);
-        assert_eq!(VertexFormat::POSITION_NORMAL_UV_TANGENT.stride(), 40);
+        assert_eq!(VertexFormat::POSITION_NORMAL_UV_TANGENT.stride(), 48);
     }
 
     #[test]

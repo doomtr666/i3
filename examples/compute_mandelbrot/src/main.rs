@@ -3,6 +3,7 @@ use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
 use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const SHADER_SOURCE: &str = r#"
@@ -54,10 +55,51 @@ void main(uint3 threadId : SV_DispatchThreadID)
 }
 "#;
 
+/// Compute pass that renders the Mandelbrot set to a storage image.
+struct MandelbrotPass {
+    pipeline: PipelineHandle,
+    backbuffer: ImageHandle,
+    push_data: [f32; 4],
+    width: u32,
+    height: u32,
+}
+
+impl RenderPass for MandelbrotPass {
+    fn name(&self) -> &str {
+        "MandelbrotPass"
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        self.backbuffer = builder.resolve_image("Backbuffer");
+        builder.bind_pipeline(self.pipeline);
+        builder.write_image(self.backbuffer, ResourceUsage::SHADER_WRITE);
+        builder.bind_descriptor_set(
+            0,
+            vec![DescriptorWrite {
+                binding: 0,
+                array_element: 0,
+                descriptor_type: BindingType::StorageTexture,
+                image_info: Some(DescriptorImageInfo {
+                    image: self.backbuffer,
+                    sampler: None,
+                    image_layout: DescriptorImageLayout::General,
+                }),
+                buffer_info: None,
+            }],
+        );
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_data);
+        ctx.dispatch((self.width + 15) / 16, (self.height + 15) / 16, 1);
+        ctx.present(self.backbuffer);
+    }
+}
+
 struct MandelbrotApp {
     backend: VulkanBackend,
     window: WindowHandle,
-    pipeline: PipelineHandle,
+    pass: Arc<Mutex<MandelbrotPass>>,
     center: glm::Vec2,
     zoom: f32,
     mouse_pos: glm::Vec2,
@@ -105,10 +147,18 @@ impl MandelbrotApp {
         let backend_pipeline =
             backend.create_compute_pipeline(&ComputePipelineCreateInfo { shader_module });
 
+        let pass = Arc::new(Mutex::new(MandelbrotPass {
+            pipeline: PipelineHandle(SymbolId(backend_pipeline.0)),
+            backbuffer: ImageHandle(SymbolId(0)),
+            push_data: [0.0; 4],
+            width,
+            height,
+        }));
+
         Self {
             backend,
             window,
-            pipeline: PipelineHandle(SymbolId(backend_pipeline.0)),
+            pass,
             center: glm::vec2(-0.5, 0.0),
             zoom: 2.5,
             mouse_pos: glm::vec2(0.0, 0.0),
@@ -123,51 +173,26 @@ impl ExampleApp for MandelbrotApp {
     fn update(&mut self, _delta: Duration) {}
 
     fn render(&mut self) {
+        // Update pass state before recording
+        {
+            let mut pass = self.pass.lock().unwrap();
+            pass.push_data = [self.center.x, self.center.y, self.zoom, 0.0];
+            pass.width = self.width;
+            pass.height = self.height;
+        }
+
         let mut graph = FrameGraph::new();
         let window = self.window;
-        let pipeline = self.pipeline;
-        let width = self.width;
-        let height = self.height;
-
-        let push_data = [self.center.x, self.center.y, self.zoom, 0.0];
+        let pass = self.pass.clone();
 
         graph.record(move |builder| {
             let backbuffer = builder.acquire_backbuffer(window);
-
-            builder.add_pass_from_closures(
-                "MandelbrotPass",
-                move |sub: &mut PassBuilder| {
-                    sub.bind_pipeline(pipeline);
-                    sub.write_image(backbuffer, ResourceUsage::SHADER_WRITE);
-                    sub.bind_descriptor_set(
-                        0,
-                        vec![DescriptorWrite {
-                            binding: 0,
-                            array_element: 0,
-                            descriptor_type: BindingType::StorageTexture,
-                            image_info: Some(DescriptorImageInfo {
-                                image: backbuffer,
-                                sampler: None,
-                                image_layout: DescriptorImageLayout::General,
-                            }),
-                            buffer_info: None,
-                        }],
-                    );
-                },
-                move |ctx: &mut dyn PassContext| {
-                    ctx.push_constant_data(ShaderStageFlags::Compute, 0, &push_data);
-                    ctx.dispatch((width + 15) / 16, (height + 15) / 16, 1);
-                    ctx.present(backbuffer);
-                },
-            );
+            builder.publish("Backbuffer", backbuffer);
+            builder.add_pass(pass);
         });
 
         let compiled = graph.compile();
         if let Err(e) = compiled.execute(&mut self.backend, None) {
-            // The original code used a match statement.
-            // The provided Code Edit snippet for the `if let Err` block was syntactically incorrect.
-            // To faithfully apply the change while maintaining syntactic correctness,
-            // we convert the `match` to an `if let Err` and handle the error cases.
             if e == GraphError::WindowMinimized {
                 std::thread::sleep(Duration::from_millis(100));
             } else {

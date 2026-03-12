@@ -77,65 +77,16 @@ impl DefaultRenderGraph {
             ..Default::default()
         });
 
-        // Mock handles for initialization (will be declared properly in record)
-        let dummy_image = ImageHandle(SymbolId(0));
-        let dummy_buffer = BufferHandle(SymbolId(0));
-
-        let gbuffer_pass = Arc::new(Mutex::new(GBufferPass::new(
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_image,
-        )));
-
-        let sky_pass = Arc::new(Mutex::new(SkyPass::new(dummy_image, dummy_image)));
-
-        let clustering_group = Arc::new(Mutex::new(ClusteringGroup::new(
-            dummy_buffer,
-            dummy_buffer,
-            dummy_buffer,
-            dummy_buffer,
-            [1, 1, 1],
-        )));
-
-        let deferred_resolve_pass = Arc::new(Mutex::new(DeferredResolvePass::new(
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_buffer,
-            dummy_buffer,
-            dummy_buffer,
-            sampler,
-            dummy_buffer,
-        )));
-
-        let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(
-            dummy_image,
-            dummy_image,
-            dummy_buffer,
-            dummy_buffer,
-            sampler,
-        )));
-
-        let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            dummy_image,
-            sampler,
-            DebugChannel::Lit,
-        )));
+        let gbuffer_pass = Arc::new(Mutex::new(GBufferPass::new()));
+        let sky_pass = Arc::new(Mutex::new(SkyPass::new()));
+        let clustering_group = Arc::new(Mutex::new(ClusteringGroup::new()));
+        let deferred_resolve_pass = Arc::new(Mutex::new(DeferredResolvePass::new(sampler)));
+        let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(sampler)));
+        let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(sampler, DebugChannel::Lit)));
 
         let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(_backend);
 
         let sync_group = Arc::new(Mutex::new(SyncGroup::new(
-            BufferHandle(SymbolId(0)), // Will be bound properly in record
-            BufferHandle(SymbolId(0)),
             1024 * 64, // max_objects approx
             1024 * 64, // max_materials approx
         )));
@@ -220,11 +171,7 @@ impl DefaultRenderGraph {
         }
     }
 
-    fn record_clustering(
-        &self,
-        builder: &mut PassBuilder,
-        light_buffer: BufferHandle,
-    ) -> (BufferHandle, BufferHandle, BufferHandle, u32, u32, u32) {
+    fn record_clustering(&self, builder: &mut PassBuilder) -> (u32, u32, u32) {
         let common = *builder.consume::<CommonData>("Common");
 
         // Cluster Build Pass
@@ -233,7 +180,7 @@ impl DefaultRenderGraph {
         let grid_z = 16;
 
         let max_clusters = (grid_x * grid_y * grid_z) as u64;
-        let cluster_aabbs = builder.declare_buffer(
+        builder.declare_buffer(
             "ClusterAABBs",
             BufferDesc {
                 size: max_clusters * 32,
@@ -241,7 +188,7 @@ impl DefaultRenderGraph {
                 memory: MemoryType::GpuOnly,
             },
         );
-        let cluster_grid = builder.declare_buffer(
+        builder.declare_buffer(
             "ClusterGrid",
             BufferDesc {
                 size: max_clusters * 8,
@@ -264,58 +211,15 @@ impl DefaultRenderGraph {
             buffer: cluster_light_indices,
         });
 
-        // Update persistent clustering group with current handles and logic
-        {
-            let group = self.clustering_group.lock().unwrap();
-
-            let mut build = group.cluster_build_pass.lock().unwrap();
-            build.cluster_aabbs = cluster_aabbs;
-            build.push_constants = crate::passes::cluster_build::ClusterBuildPushConstants {
-                inv_projection: common.inv_projection,
-                grid_size: [grid_x, grid_y, grid_z],
-                near_plane: common.near_plane,
-                far_plane: common.far_plane,
-                screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
-                pad: 0,
-            };
-
-            let mut cull = group.light_cull_pass.lock().unwrap();
-            cull.cluster_aabbs = cluster_aabbs;
-            cull.lights = light_buffer;
-            cull.cluster_grid = cluster_grid;
-            cull.cluster_light_indices = cluster_light_indices;
-            cull.push_constants = crate::passes::light_cull::LightCullPushConstants {
-                view_matrix: common.view,
-                grid_size: [grid_x, grid_y, grid_z],
-                light_count: common.light_count,
-            };
-        }
-
         builder.add_pass(self.clustering_group.clone());
 
-        (
-            cluster_aabbs,
-            cluster_grid,
-            cluster_light_indices,
-            grid_x,
-            grid_y,
-            grid_z,
-        )
+        (grid_x, grid_y, grid_z)
     }
 
-    fn record_gbuffer(
-        &self,
-        builder: &mut PassBuilder,
-    ) -> (
-        ImageHandle,
-        ImageHandle,
-        ImageHandle,
-        ImageHandle,
-        ImageHandle,
-    ) {
+    fn record_gbuffer(&self, builder: &mut PassBuilder) {
         let common = *builder.consume::<CommonData>("Common");
 
-        let albedo = builder.declare_image(
+        builder.declare_image(
             "GBuffer_Albedo",
             ImageDesc::new(
                 common.screen_width,
@@ -323,7 +227,7 @@ impl DefaultRenderGraph {
                 Format::R8G8B8A8_SRGB,
             ),
         );
-        let normal = builder.declare_image(
+        builder.declare_image(
             "GBuffer_Normal",
             ImageDesc::new(
                 common.screen_width,
@@ -331,7 +235,7 @@ impl DefaultRenderGraph {
                 Format::R16G16_SFLOAT,
             ),
         );
-        let roughmetal = builder.declare_image(
+        builder.declare_image(
             "GBuffer_RoughMetal",
             ImageDesc::new(
                 common.screen_width,
@@ -339,7 +243,7 @@ impl DefaultRenderGraph {
                 Format::R8G8_UNORM,
             ),
         );
-        let emissive = builder.declare_image(
+        builder.declare_image(
             "GBuffer_Emissive",
             ImageDesc::new(
                 common.screen_width,
@@ -347,7 +251,7 @@ impl DefaultRenderGraph {
                 Format::R11G11B10_UFLOAT,
             ),
         );
-        let depth = builder.declare_image(
+        builder.declare_image(
             "DepthBuffer",
             ImageDesc {
                 width: common.screen_width,
@@ -362,21 +266,7 @@ impl DefaultRenderGraph {
             },
         );
 
-        {
-            let mut pass = self.gbuffer_pass.lock().unwrap();
-            pass.depth_buffer = depth;
-            pass.gbuffer_albedo = albedo;
-            pass.gbuffer_normal = normal;
-            pass.gbuffer_roughmetal = roughmetal;
-            pass.gbuffer_emissive = emissive;
-            pass.material_buffer =
-                builder.import_buffer("MaterialBuffer", self.gpu_buffers.material_buffer);
-            pass.bindless_set = self.bindless_manager.bindless_set;
-        }
-
         builder.add_pass(self.gbuffer_pass.clone());
-
-        (albedo, normal, roughmetal, emissive, depth)
     }
 
     /// Records the full render graph for one frame.
@@ -449,12 +339,20 @@ impl DefaultRenderGraph {
                 nalgebra_glm::vec3(1.0, 0.9, 0.8),
             ));
 
+        let scene_objects: Vec<(u64, crate::scene::ObjectData)> = scene
+            .iter_objects()
+            .map(|(id, data)| (id.0, data.clone()))
+            .collect();
+        let scene_materials: Vec<(u32, crate::scene::MaterialData)> = scene
+            .iter_materials()
+            .map(|(id, data)| (id.0, data.clone()))
+            .collect();
+
         graph.record(move |builder| {
             builder.publish("Common", common);
-            // SAFETY: The SceneProvider is owned by the app and lives at least for this frame.
-            // We cast it to a 'static pointer to satisfy the FrameGraph blackboard's T: 'static requirement.
-            let scene_ptr = unsafe { std::mem::transmute::<*const dyn SceneProvider, *const (dyn SceneProvider + 'static)>(scene as *const _) };
-            builder.publish("SceneProvider", crate::passes::sync::ScenePointer(scene_ptr));
+            builder.publish("BindlessSet", self.bindless_manager.bindless_set);
+            builder.publish("SceneObjects", scene_objects);
+            builder.publish("SceneMaterials", scene_materials);
             builder.publish("GBufferCommands", draw_commands);
             builder.publish("SunDirection", sun_dir);
             builder.publish("SunIntensity", sun_int);
@@ -462,53 +360,35 @@ impl DefaultRenderGraph {
             builder.publish("TimeDelta", dt);
 
             let backbuffer = builder.acquire_backbuffer(window);
-            let light_buffer = builder.import_buffer("LightBuffer", light_buffer_physical);
+            builder.publish("Backbuffer", backbuffer);
+            builder.import_buffer("LightBuffer", light_buffer_physical);
 
             let object_buffer_physical = self.gpu_buffers.object_buffer;
-            let object_buffer = builder.import_buffer("ObjectBuffer", object_buffer_physical);
+            builder.import_buffer("ObjectBuffer", object_buffer_physical);
 
             let material_buffer_physical = self.gpu_buffers.material_buffer;
-            let material_buffer = builder.import_buffer("MaterialBuffer", material_buffer_physical);
+            builder.import_buffer("MaterialBuffer", material_buffer_physical);
 
             // 0. Sync CPU scene delta to GPU
-            {
-                let group = self.sync_group.lock().unwrap();
-                let mut osync = group.object_sync.lock().unwrap();
-                osync.object_buffer = object_buffer;
-                let mut msync = group.material_sync.lock().unwrap();
-                msync.material_buffer = material_buffer;
-            }
             builder.add_pass(self.sync_group.clone());
 
             // 1. Clustering & Culling
-            let (_cluster_aabbs, cluster_grid, cluster_light_indices, grid_x, grid_y, grid_z) =
-                self.record_clustering(builder, light_buffer);
+            let (grid_x, grid_y, grid_z) = self.record_clustering(builder);
 
             builder.publish("ClusterGridSize", [grid_x, grid_y, grid_z]);
             builder.publish("DebugChannel", channel as u32);
 
             // 2. GBuffer Generation
-            let (
-                gbuffer_albedo,
-                gbuffer_normal,
-                gbuffer_roughmetal,
-                gbuffer_emissive,
-                depth_buffer,
-            ) = self.record_gbuffer(builder);
+            self.record_gbuffer(builder);
 
-            let hdr_target = builder.declare_image(
+            builder.declare_image(
                 "HDR_Target",
                 ImageDesc::new(screen_width, screen_height, Format::R16G16B16A16_SFLOAT),
             );
 
-            {
-                let mut pass = self.sky_pass.lock().unwrap();
-                pass.hdr_target = hdr_target;
-                pass.depth_buffer = depth_buffer;
-            }
             builder.add_pass(self.sky_pass.clone());
 
-            let exposure_buffer = builder.declare_buffer_history(
+            builder.declare_buffer_history(
                 "ExposureBuffer",
                 BufferDesc {
                     size: 8,
@@ -517,7 +397,7 @@ impl DefaultRenderGraph {
                 },
             );
 
-            let histogram_buffer = builder.declare_buffer(
+            builder.declare_buffer(
                 "HistogramBuffer",
                 BufferDesc {
                     size: 256 * 4,
@@ -531,112 +411,27 @@ impl DefaultRenderGraph {
                 || channel == DebugChannel::ClusterGrid
             {
                 // 4. Deferred Lighting
-                let hdr_final = self.record_lighting(
-                    builder,
-                    hdr_target,
-                    exposure_buffer,
-                    gbuffer_albedo,
-                    gbuffer_normal,
-                    gbuffer_roughmetal,
-                    gbuffer_emissive,
-                    depth_buffer,
-                    light_buffer,
-                    cluster_grid,
-                    cluster_light_indices,
-                );
-
-                // Use the exposure buffer from record_lighting?
-                // Wait, record_lighting declarations might conflict.
-                // I'll update record_lighting to take them as params or resolve them.
+                self.record_lighting(builder);
 
                 // 5. Post Processing
-                self.record_post_process(
-                    builder,
-                    hdr_final,
-                    backbuffer,
-                    exposure_buffer,
-                    histogram_buffer,
-                    dt,
-                );
+                self.record_post_process(builder);
             } else {
-                {
-                    let mut pass = self.debug_viz_pass.lock().unwrap();
-                    pass.backbuffer = backbuffer;
-                    pass.gbuffer_albedo = gbuffer_albedo;
-                    pass.gbuffer_normal = gbuffer_normal;
-                    pass.gbuffer_roughmetal = gbuffer_roughmetal;
-                    pass.gbuffer_emissive = gbuffer_emissive;
-                    pass.channel = channel;
-                }
                 builder.add_pass(self.debug_viz_pass.clone());
             }
         });
     }
 
-    fn record_lighting(
-        &self,
-        builder: &mut PassBuilder,
-        hdr_target: ImageHandle,
-        exposure_buffer: BufferHandle,
-        gbuffer_albedo: ImageHandle,
-        gbuffer_normal: ImageHandle,
-        gbuffer_roughmetal: ImageHandle,
-        gbuffer_emissive: ImageHandle,
-        depth_buffer: ImageHandle,
-        lights: BufferHandle,
-        cluster_grid: BufferHandle,
-        cluster_light_indices: BufferHandle,
-    ) -> ImageHandle {
-        {
-            let mut pass = self.deferred_resolve_pass.lock().unwrap();
-            pass.hdr_target = hdr_target;
-            pass.gbuffer_albedo = gbuffer_albedo;
-            pass.gbuffer_normal = gbuffer_normal;
-            pass.gbuffer_roughmetal = gbuffer_roughmetal;
-            pass.gbuffer_emissive = gbuffer_emissive;
-            pass.depth_buffer = depth_buffer;
-            pass.lights = lights;
-            pass.cluster_grid = cluster_grid;
-            pass.cluster_light_indices = cluster_light_indices;
-            pass.exposure_buffer = exposure_buffer;
-        }
-
+    fn record_lighting(&self, builder: &mut PassBuilder) -> ImageHandle {
         builder.add_pass(self.deferred_resolve_pass.clone());
-
-        hdr_target
+        builder.resolve_image("HDR_Target")
     }
 
-    fn record_post_process(
-        &self,
-        builder: &mut PassBuilder,
-        hdr_target: ImageHandle,
-        backbuffer: ImageHandle,
-        exposure_buffer: BufferHandle,
-        histogram_buffer: BufferHandle,
-        _dt: f32,
-    ) {
+    fn record_post_process(&self, builder: &mut PassBuilder) {
+        let histogram_buffer = builder.resolve_buffer("HistogramBuffer");
         builder.add_pass(ClearBufferPass {
             name: "ClearHistogram".to_string(),
             buffer: histogram_buffer,
         });
-
-        {
-            let group = self.post_process_group.lock().unwrap();
-
-            let mut hist = group.histogram_build_pass.lock().unwrap();
-            hist.hdr_image = hdr_target;
-            hist.histogram_buffer = histogram_buffer;
-            hist.exposure_buffer = exposure_buffer;
-
-            let mut avg = group.average_luminance_pass.lock().unwrap();
-            avg.histogram_buffer = histogram_buffer;
-            avg.exposure_buffer = exposure_buffer;
-
-            let mut tone = group.tonemap_pass.lock().unwrap();
-            tone.backbuffer = backbuffer;
-            tone.hdr_target = hdr_target;
-            tone.exposure_buffer = exposure_buffer;
-        }
 
         builder.add_pass(self.post_process_group.clone());
     }

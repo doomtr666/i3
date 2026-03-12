@@ -1,7 +1,7 @@
 use crate::graph::backend::{DescriptorWrite, PassContext, RenderBackend};
 use crate::graph::types::{BufferHandle, ImageDesc, ImageHandle, ResourceUsage, WindowHandle};
 use std::any::{Any, TypeId};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 /// Context provided to a node during its recording phase.
 /// This is a struct to allow for generic methods (publish/consume).
@@ -22,6 +22,16 @@ impl<'a> PassBuilder<'a> {
         let any = self.inner.consume_erased(TypeId::of::<T>(), name);
         any.downcast_ref::<T>()
             .expect("Type mismatch in symbol table")
+    }
+
+    /// Resolves an ImageHandle from the symbol table by name.
+    pub fn resolve_image(&mut self, name: &str) -> ImageHandle {
+        *self.consume::<ImageHandle>(name)
+    }
+
+    /// Resolves a BufferHandle from the symbol table by name.
+    pub fn resolve_buffer(&mut self, name: &str) -> BufferHandle {
+        *self.consume::<BufferHandle>(name)
     }
 
     // --- GPU Intents ---
@@ -116,19 +126,6 @@ impl<'a> PassBuilder<'a> {
     pub fn add_pass<P: RenderPass + 'static>(&mut self, pass: P) {
         self.add_node(Box::new(pass));
     }
-
-    /// Helper to add a pass using two closures (record and execute).
-    pub fn add_pass_from_closures<R, E>(&mut self, name: &str, record: R, execute: E)
-    where
-        R: FnMut(&mut PassBuilder) + Send + Sync + 'static,
-        E: Fn(&mut dyn PassContext) + Send + Sync + 'static,
-    {
-        self.add_pass(SimplePass {
-            name: name.to_string(),
-            record,
-            execute,
-        });
-    }
 }
 
 /// A Node in the Frame Graph (Pass or Group).
@@ -163,49 +160,6 @@ impl<T: RenderPass + ?Sized> RenderPass for Arc<Mutex<T>> {
 
     fn execute(&self, ctx: &mut dyn PassContext) {
         self.lock().unwrap().execute(ctx);
-    }
-}
-
-impl<T: RenderPass + ?Sized> RenderPass for Arc<RwLock<T>> {
-    fn name(&self) -> &str {
-        "Arc<RwLock<RenderPass>>"
-    }
-
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        self.write().unwrap().init(backend);
-    }
-
-    fn record(&mut self, builder: &mut PassBuilder) {
-        self.write().unwrap().record(builder);
-    }
-
-    fn execute(&self, ctx: &mut dyn PassContext) {
-        self.read().unwrap().execute(ctx);
-    }
-}
-
-/// A simple pass implementation that uses closures.
-pub struct SimplePass<R, E> {
-    pub name: String,
-    pub record: R,
-    pub execute: E,
-}
-
-impl<R, E> RenderPass for SimplePass<R, E>
-where
-    R: FnMut(&mut PassBuilder) + Send + Sync + 'static,
-    E: Fn(&mut dyn PassContext) + Send + Sync + 'static,
-{
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn record(&mut self, builder: &mut PassBuilder) {
-        (self.record)(builder);
-    }
-
-    fn execute(&self, ctx: &mut dyn PassContext) {
-        (self.execute)(ctx);
     }
 }
 

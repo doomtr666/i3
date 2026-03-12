@@ -15,8 +15,10 @@ pub struct ClusterBuildPushConstants {
 
 /// Cluster build pass struct implementing the RenderPass trait.
 pub struct ClusterBuildPass {
-    pub cluster_aabbs: BufferHandle,
     pub push_constants: ClusterBuildPushConstants,
+
+    // Resolved handles (updated in record)
+    cluster_aabbs: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -24,10 +26,17 @@ pub struct ClusterBuildPass {
 }
 
 impl ClusterBuildPass {
-    pub fn new(cluster_aabbs: BufferHandle, push_constants: ClusterBuildPushConstants) -> Self {
+    pub fn new() -> Self {
         Self {
-            cluster_aabbs,
-            push_constants,
+            cluster_aabbs: BufferHandle(SymbolId(0)),
+            push_constants: ClusterBuildPushConstants {
+                inv_projection: nalgebra_glm::identity(),
+                grid_size: [0, 0, 0],
+                near_plane: 0.0,
+                far_plane: 0.0,
+                screen_dimensions: [0.0, 0.0],
+                pad: 0,
+            },
             shader: None,
             pipeline: None,
         }
@@ -61,6 +70,23 @@ impl RenderPass for ClusterBuildPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        self.cluster_aabbs = builder.resolve_buffer("ClusterAABBs");
+
+        // Consume CommonData to compute push constants
+        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
+        let grid_x = (common.screen_width + 63) / 64;
+        let grid_y = (common.screen_height + 63) / 64;
+        let grid_z: u32 = 16;
+
+        self.push_constants = ClusterBuildPushConstants {
+            inv_projection: common.inv_projection,
+            grid_size: [grid_x, grid_y, grid_z],
+            near_plane: common.near_plane,
+            far_plane: common.far_plane,
+            screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
+            pad: 0,
+        };
+
         builder.write_buffer(self.cluster_aabbs, ResourceUsage::SHADER_WRITE);
         builder.bind_descriptor_set(
             0,

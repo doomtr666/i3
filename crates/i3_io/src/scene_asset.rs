@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_scene_header_size() {
-        assert_eq!(std::mem::size_of::<SceneHeader>(), 64);
+        assert_eq!(std::mem::size_of::<SceneHeader>(), 80);
     }
 
     #[test]

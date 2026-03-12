@@ -16,8 +16,9 @@ pub struct SkyPushConstants {
 
 /// Sky pass struct implementing the RenderPass trait.
 pub struct SkyPass {
-    pub hdr_target: ImageHandle,
-    pub depth_buffer: ImageHandle,
+    // Resolved handles (updated in record)
+    hdr_target: ImageHandle,
+    depth_buffer: ImageHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -26,10 +27,11 @@ pub struct SkyPass {
 }
 
 impl SkyPass {
-    pub fn new(hdr_target: ImageHandle, depth_buffer: ImageHandle) -> Self {
+    pub fn new() -> Self {
+        let dummy_image = ImageHandle(SymbolId(0));
         Self {
-            hdr_target,
-            depth_buffer,
+            hdr_target: dummy_image,
+            depth_buffer: dummy_image,
             shader: None,
             pipeline: None,
             push_constants: None,
@@ -88,6 +90,10 @@ impl RenderPass for SkyPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        // Resolve target handles by name
+        self.hdr_target = builder.resolve_image("HDR_Target");
+        self.depth_buffer = builder.resolve_image("DepthBuffer");
+
         // Compute push constants from blackboard
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
         let sun_dir = *builder.consume::<glm::Vec3>("SunDirection");

@@ -12,10 +12,14 @@ pub struct ToneMapPushConstants {
 
 /// Tonemap pass struct implementing the RenderPass trait.
 pub struct TonemapPass {
-    pub backbuffer: ImageHandle,
-    pub hdr_target: ImageHandle,
-    pub exposure_buffer: BufferHandle,
     pub sampler: SamplerHandle,
+    pub backbuffer_name: String,
+    pub hdr_image_name: String,
+
+    // Resolved handles (updated in record)
+    backbuffer: ImageHandle,
+    hdr_target: ImageHandle,
+    exposure_buffer: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -24,17 +28,16 @@ pub struct TonemapPass {
 }
 
 impl TonemapPass {
-    pub fn new(
-        backbuffer: ImageHandle,
-        hdr_target: ImageHandle,
-        exposure_buffer: BufferHandle,
-        sampler: SamplerHandle,
-    ) -> Self {
+    pub fn new(sampler: SamplerHandle) -> Self {
+        let dummy_image = ImageHandle(SymbolId(0));
+        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            backbuffer,
-            hdr_target,
-            exposure_buffer,
+            backbuffer: dummy_image,
+            hdr_target: dummy_image,
+            exposure_buffer: dummy_buffer,
             sampler,
+            backbuffer_name: "Backbuffer".to_string(),
+            hdr_image_name: "HDR_Target".to_string(),
             shader: None,
             pipeline: None,
             push_constants: None,
@@ -82,6 +85,11 @@ impl RenderPass for TonemapPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        // Resolve target handles by name
+        self.backbuffer = builder.resolve_image(&self.backbuffer_name);
+        self.hdr_target = builder.resolve_image(&self.hdr_image_name);
+        self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
+
         self.push_constants = Some(ToneMapPushConstants {
             debug_mode: 0,
             pad0: 0,

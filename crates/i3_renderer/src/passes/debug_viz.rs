@@ -31,13 +31,16 @@ pub struct DebugVizPushConstants {
 /// and writes to the backbuffer.
 /// Debug visualization pass struct implementing the RenderPass trait.
 pub struct DebugVizPass {
-    pub backbuffer: ImageHandle,
-    pub gbuffer_albedo: ImageHandle,
-    pub gbuffer_normal: ImageHandle,
-    pub gbuffer_roughmetal: ImageHandle,
-    pub gbuffer_emissive: ImageHandle,
     pub sampler: SamplerHandle,
     pub channel: DebugChannel,
+    pub backbuffer_name: String,
+
+    // Resolved handles (updated in record)
+    backbuffer: ImageHandle,
+    gbuffer_albedo: ImageHandle,
+    gbuffer_normal: ImageHandle,
+    gbuffer_roughmetal: ImageHandle,
+    gbuffer_emissive: ImageHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -45,23 +48,17 @@ pub struct DebugVizPass {
 }
 
 impl DebugVizPass {
-    pub fn new(
-        backbuffer: ImageHandle,
-        gbuffer_albedo: ImageHandle,
-        gbuffer_normal: ImageHandle,
-        gbuffer_roughmetal: ImageHandle,
-        gbuffer_emissive: ImageHandle,
-        sampler: SamplerHandle,
-        channel: DebugChannel,
-    ) -> Self {
+    pub fn new(sampler: SamplerHandle, channel: DebugChannel) -> Self {
+        let dummy_image = ImageHandle(SymbolId(0));
         Self {
-            backbuffer,
-            gbuffer_albedo,
-            gbuffer_normal,
-            gbuffer_roughmetal,
-            gbuffer_emissive,
+            backbuffer: dummy_image,
+            gbuffer_albedo: dummy_image,
+            gbuffer_normal: dummy_image,
+            gbuffer_roughmetal: dummy_image,
+            gbuffer_emissive: dummy_image,
             sampler,
             channel,
+            backbuffer_name: "Backbuffer".to_string(),
             shader: None,
             pipeline: None,
         }
@@ -114,6 +111,28 @@ impl RenderPass for DebugVizPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        // Resolve configuration from blackboard
+        let channel_u32 = builder.consume::<u32>("DebugChannel");
+        self.channel = match *channel_u32 {
+            0 => DebugChannel::Lit,
+            1 => DebugChannel::LightDensity,
+            2 => DebugChannel::ClusterGrid,
+            3 => DebugChannel::Albedo,
+            4 => DebugChannel::Normal,
+            5 => DebugChannel::Roughness,
+            6 => DebugChannel::Metallic,
+            7 => DebugChannel::Emissive,
+            8 => DebugChannel::Depth,
+            _ => DebugChannel::Lit,
+        };
+
+        // Resolve target handles by name
+        self.gbuffer_albedo = builder.resolve_image("GBuffer_Albedo");
+        self.gbuffer_normal = builder.resolve_image("GBuffer_Normal");
+        self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
+        self.gbuffer_emissive = builder.resolve_image("GBuffer_Emissive");
+        self.backbuffer = builder.resolve_image(&self.backbuffer_name);
+
         // Read GBuffer targets
         builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);

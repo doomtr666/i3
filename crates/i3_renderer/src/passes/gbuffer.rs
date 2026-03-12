@@ -41,13 +41,15 @@ impl Default for GBufferPushConstants {
 
 /// GBuffer pass struct implementing the RenderPass trait.
 pub struct GBufferPass {
-    pub depth_buffer: ImageHandle,
-    pub gbuffer_albedo: ImageHandle,
-    pub gbuffer_normal: ImageHandle,
-    pub gbuffer_roughmetal: ImageHandle,
-    pub gbuffer_emissive: ImageHandle,
-    pub material_buffer: BufferHandle,
     pub bindless_set: u64,
+
+    // Resolved handles (updated in record)
+    depth_buffer: ImageHandle,
+    gbuffer_albedo: ImageHandle,
+    gbuffer_normal: ImageHandle,
+    gbuffer_roughmetal: ImageHandle,
+    gbuffer_emissive: ImageHandle,
+    material_buffer: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -56,20 +58,16 @@ pub struct GBufferPass {
 }
 
 impl GBufferPass {
-    pub fn new(
-        depth_buffer: ImageHandle,
-        gbuffer_albedo: ImageHandle,
-        gbuffer_normal: ImageHandle,
-        gbuffer_roughmetal: ImageHandle,
-        gbuffer_emissive: ImageHandle,
-    ) -> Self {
+    pub fn new() -> Self {
+        let dummy_image = ImageHandle(SymbolId(0));
+        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            depth_buffer,
-            gbuffer_albedo,
-            gbuffer_normal,
-            gbuffer_roughmetal,
-            gbuffer_emissive,
-            material_buffer: BufferHandle(SymbolId(0)),
+            depth_buffer: dummy_image,
+            gbuffer_albedo: dummy_image,
+            gbuffer_normal: dummy_image,
+            gbuffer_roughmetal: dummy_image,
+            gbuffer_emissive: dummy_image,
+            material_buffer: dummy_buffer,
             bindless_set: 0,
             shader: None,
             pipeline: None,
@@ -179,6 +177,17 @@ impl RenderPass for GBufferPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        // Resolve target handles by name
+        self.gbuffer_albedo = builder.resolve_image("GBuffer_Albedo");
+        self.gbuffer_normal = builder.resolve_image("GBuffer_Normal");
+        self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
+        self.gbuffer_emissive = builder.resolve_image("GBuffer_Emissive");
+        self.depth_buffer = builder.resolve_image("DepthBuffer");
+        self.material_buffer = builder.resolve_buffer("MaterialBuffer");
+
+        // Resolve bindless descriptor set from blackboard
+        self.bindless_set = *builder.consume::<u64>("BindlessSet");
+
         // Consume draw commands from blackboard
         self.draw_commands = builder
             .consume::<Vec<DrawCommand>>("GBufferCommands")

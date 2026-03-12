@@ -12,9 +12,12 @@ pub struct HistogramPushConstants {
 
 /// Histogram build pass struct implementing the RenderPass trait.
 pub struct HistogramBuildPass {
-    pub hdr_image: ImageHandle,
-    pub histogram_buffer: BufferHandle,
-    pub exposure_buffer: BufferHandle,
+    pub hdr_image_name: String,
+
+    // Resolved handles (updated in record)
+    hdr_image: ImageHandle,
+    histogram_buffer: BufferHandle,
+    exposure_buffer: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -25,15 +28,14 @@ pub struct HistogramBuildPass {
 }
 
 impl HistogramBuildPass {
-    pub fn new(
-        hdr_image: ImageHandle,
-        histogram_buffer: BufferHandle,
-        exposure_buffer: BufferHandle,
-    ) -> Self {
+    pub fn new() -> Self {
+        let dummy_image = ImageHandle(SymbolId(0));
+        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            hdr_image,
-            histogram_buffer,
-            exposure_buffer,
+            hdr_image: dummy_image,
+            histogram_buffer: dummy_buffer,
+            exposure_buffer: dummy_buffer,
+            hdr_image_name: "HDR_Target".to_string(),
             shader: None,
             pipeline: None,
             width: 0,
@@ -75,6 +77,11 @@ impl RenderPass for HistogramBuildPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        // Resolve target handles by name
+        self.hdr_image = builder.resolve_image(&self.hdr_image_name);
+        self.histogram_buffer = builder.resolve_buffer("HistogramBuffer");
+        self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
+
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
         self.width = common.screen_width;
         self.height = common.screen_height;

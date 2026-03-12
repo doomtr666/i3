@@ -18,17 +18,19 @@ pub struct DeferredResolvePushConstants {
 
 /// Deferred resolve pass struct implementing the RenderPass trait.
 pub struct DeferredResolvePass {
-    pub hdr_target: ImageHandle,
-    pub gbuffer_albedo: ImageHandle,
-    pub gbuffer_normal: ImageHandle,
-    pub gbuffer_roughmetal: ImageHandle,
-    pub gbuffer_emissive: ImageHandle,
-    pub depth_buffer: ImageHandle,
-    pub lights: BufferHandle,
-    pub cluster_grid: BufferHandle,
-    pub cluster_light_indices: BufferHandle,
     pub sampler: SamplerHandle,
-    pub exposure_buffer: BufferHandle,
+
+    // Resolved handles (updated in record)
+    hdr_target: ImageHandle,
+    gbuffer_albedo: ImageHandle,
+    gbuffer_normal: ImageHandle,
+    gbuffer_roughmetal: ImageHandle,
+    gbuffer_emissive: ImageHandle,
+    depth_buffer: ImageHandle,
+    lights: BufferHandle,
+    cluster_grid: BufferHandle,
+    cluster_light_indices: BufferHandle,
+    exposure_buffer: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -37,31 +39,21 @@ pub struct DeferredResolvePass {
 }
 
 impl DeferredResolvePass {
-    pub fn new(
-        hdr_target: ImageHandle,
-        gbuffer_albedo: ImageHandle,
-        gbuffer_normal: ImageHandle,
-        gbuffer_roughmetal: ImageHandle,
-        gbuffer_emissive: ImageHandle,
-        depth_buffer: ImageHandle,
-        lights: BufferHandle,
-        cluster_grid: BufferHandle,
-        cluster_light_indices: BufferHandle,
-        sampler: SamplerHandle,
-        exposure_buffer: BufferHandle,
-    ) -> Self {
+    pub fn new(sampler: SamplerHandle) -> Self {
+        let dummy_image = ImageHandle(SymbolId(0));
+        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            hdr_target,
-            gbuffer_albedo,
-            gbuffer_normal,
-            gbuffer_roughmetal,
-            gbuffer_emissive,
-            depth_buffer,
-            lights,
-            cluster_grid,
-            cluster_light_indices,
             sampler,
-            exposure_buffer,
+            hdr_target: dummy_image,
+            gbuffer_albedo: dummy_image,
+            gbuffer_normal: dummy_image,
+            gbuffer_roughmetal: dummy_image,
+            gbuffer_emissive: dummy_image,
+            depth_buffer: dummy_image,
+            lights: dummy_buffer,
+            cluster_grid: dummy_buffer,
+            cluster_light_indices: dummy_buffer,
+            exposure_buffer: dummy_buffer,
             shader: None,
             pipeline: None,
             push_constants: None,
@@ -109,6 +101,19 @@ impl RenderPass for DeferredResolvePass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        // Resolve target handles by name
+        self.hdr_target = builder.resolve_image("HDR_Target");
+        self.gbuffer_albedo = builder.resolve_image("GBuffer_Albedo");
+        self.gbuffer_normal = builder.resolve_image("GBuffer_Normal");
+        self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
+        self.gbuffer_emissive = builder.resolve_image("GBuffer_Emissive");
+        self.depth_buffer = builder.resolve_image("DepthBuffer");
+
+        self.lights = builder.resolve_buffer("LightBuffer");
+        self.cluster_grid = builder.resolve_buffer("ClusterGrid");
+        self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
+        self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
+
         let (common, grid_size, debug_mode) = {
             let c = *builder.consume::<crate::render_graph::CommonData>("Common");
             let g = *builder.consume::<[u32; 3]>("ClusterGridSize");
