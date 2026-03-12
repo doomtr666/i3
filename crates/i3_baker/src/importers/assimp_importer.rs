@@ -501,33 +501,35 @@ impl Extractor for MaterialExtractor {
         for mat in &assimp_data.materials {
             let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, mat.name.as_bytes());
 
+            use crate::importers::image_importer::TextureSemantic;
+
             // Texture UUIDs
             let albedo_id = bake_texture(
                 mat.albedo_path.as_ref(),
                 assimp_data,
                 ctx,
-                true,
+                TextureSemantic::Albedo,
                 &mut outputs,
             )?;
             let normal_id = bake_texture(
                 mat.normal_path.as_ref(),
                 assimp_data,
                 ctx,
-                false,
+                TextureSemantic::Normal,
                 &mut outputs,
             )?;
             let metallic_roughness_id = bake_texture(
                 mat.metallic_roughness_path.as_ref(),
                 assimp_data,
                 ctx,
-                false,
+                TextureSemantic::MetallicRoughness,
                 &mut outputs,
             )?;
             let emissive_id = bake_texture(
                 mat.emissive_path.as_ref(),
                 assimp_data,
                 ctx,
-                true,
+                TextureSemantic::Emissive,
                 &mut outputs,
             )?;
 
@@ -559,7 +561,7 @@ fn bake_texture(
     path: Option<&PathBuf>,
     scene: &AssimpScene,
     ctx: &BakeContext,
-    is_srgb: bool,
+    semantic: crate::importers::image_importer::TextureSemantic,
     outputs: &mut Vec<BakeOutput>,
 ) -> Result<Uuid> {
     let path = match path {
@@ -580,22 +582,11 @@ fn bake_texture(
     }
 
     use crate::importers::image_importer::{ImageImporter, TextureImportOptions};
-    use i3_io::texture::TextureFormat;
-
-    let mut format = if is_srgb {
-        TextureFormat::BC7_SRGB
-    } else {
-        TextureFormat::BC7_UNORM
-    };
-    let path_lc = path.to_string_lossy().to_lowercase();
-    if path_lc.contains("normal") || path_lc.contains("norm") {
-        format = TextureFormat::BC5_UNORM;
-    }
 
     let importer = ImageImporter::new(TextureImportOptions {
-        is_srgb,
+        semantic,
         generate_mips: true,
-        format,
+        format: None,
     });
 
     if let Some(embedded_idx_str) = filename.strip_prefix('*') {

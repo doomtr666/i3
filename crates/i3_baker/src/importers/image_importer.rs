@@ -10,19 +10,30 @@ pub struct ImageImporter {
     options: TextureImportOptions,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureSemantic {
+    Albedo,
+    Normal,
+    MetallicRoughness,
+    Emissive,
+    Occlusion,
+    Generic,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TextureImportOptions {
-    pub is_srgb: bool,
+    pub semantic: TextureSemantic,
     pub generate_mips: bool,
-    pub format: TextureFormat,
+    /// Optional format override. If None, it's inferred from semantic.
+    pub format: Option<TextureFormat>,
 }
 
 impl Default for TextureImportOptions {
     fn default() -> Self {
         Self {
-            is_srgb: true,
+            semantic: TextureSemantic::Generic,
             generate_mips: true,
-            format: TextureFormat::BC7_SRGB,
+            format: None,
         }
     }
 }
@@ -89,9 +100,15 @@ impl Importer for ImageImporter {
 
         let (width, height) = imported.img.dimensions();
 
+        // Determine format and sRGB status based on semantic or override
+        let is_srgb_input = matches!(
+            self.options.semantic,
+            TextureSemantic::Albedo | TextureSemantic::Emissive
+        );
+
         let mut current_mip = {
             let mut rgba_f32 = Vec::with_capacity((width * height * 4) as usize);
-            if self.options.is_srgb {
+            if is_srgb_input {
                 for pixel in imported.img.to_rgba8().pixels() {
                     rgba_f32.push(Self::srgb_to_linear(pixel[0] as f32 / 255.0));
                     rgba_f32.push(Self::srgb_to_linear(pixel[1] as f32 / 255.0));
@@ -109,6 +126,15 @@ impl Importer for ImageImporter {
             rgba_f32
         };
 
+        let target_format = self.options.format.unwrap_or_else(|| match self.options.semantic {
+            TextureSemantic::Albedo => TextureFormat::BC7_SRGB,
+            TextureSemantic::Normal => TextureFormat::BC5_UNORM,
+            TextureSemantic::MetallicRoughness => TextureFormat::BC7_UNORM,
+            TextureSemantic::Emissive => TextureFormat::BC7_SRGB,
+            TextureSemantic::Occlusion => TextureFormat::BC4_UNORM,
+            TextureSemantic::Generic => TextureFormat::BC7_UNORM,
+        });
+
         let mut mip_width = width;
         let mut mip_height = height;
         let mut all_pixel_data = Vec::new();
@@ -116,7 +142,7 @@ impl Importer for ImageImporter {
 
         loop {
             let is_target_srgb = matches!(
-                self.options.format,
+                target_format,
                 TextureFormat::R8G8B8A8_SRGB
                     | TextureFormat::BC1_RGB_SRGB
                     | TextureFormat::BC1_RGBA_SRGB
@@ -138,8 +164,15 @@ impl Importer for ImageImporter {
                     .collect()
             } else {
                 current_mip
-                    .iter()
-                    .map(|&f| (f.clamp(0.0, 1.0) * 255.0) as u8)
+                    .chunks_exact(4)
+                    .flat_map(|c| {
+                        [
+                            (c[0].clamp(0.0, 1.0) * 255.0) as u8,
+                            (c[1].clamp(0.0, 1.0) * 255.0) as u8,
+                            (c[2].clamp(0.0, 1.0) * 255.0) as u8,
+                            (c[3].clamp(0.0, 1.0) * 255.0) as u8,
+                        ]
+                    })
                     .collect()
             };
 
@@ -150,7 +183,7 @@ impl Importer for ImageImporter {
                 data: &rgba_u8,
             };
 
-            let compressed = match self.options.format {
+            let compressed = match target_format {
                 TextureFormat::BC1_RGB_UNORM | TextureFormat::BC1_RGB_SRGB => {
                     intel_tex_2::bc1::compress_blocks(&surface)
                 }
@@ -219,7 +252,7 @@ impl Importer for ImageImporter {
             depth: 1,
             mip_levels: mip_count,
             array_layers: 1,
-            format: self.options.format as u32,
+            format: target_format as u32,
             data_size: all_pixel_data.len() as u64,
         };
 
