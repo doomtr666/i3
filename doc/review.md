@@ -616,8 +616,13 @@ Each section below is an independently executable work package. They are ordered
 
 #### P2-1: Add progress reporting to BundleBaker
 - **Files:** `crates/i3_baker/src/pipeline.rs`
-- **What:** During `BundleBaker::execute()`, emit progress via `cargo:warning=` messages (which Cargo displays in real-time during build scripts). Format: `cargo:warning=[i3_baker] [3/47] Baking mesh: Sponza_Wall...`. Emit timing info for each asset. Also emit total summary: `cargo:warning=[i3_baker] Done: 47 assets baked in 12.3s`.
-- **Test:** Run viewer build, observe progress output in terminal.
+- **What:**
+  - Implement a `ProgressReporter` trait to decouple the baker from Cargo's output format.
+  - During `BundleBaker::execute()`, emit progress.
+  - For `build.rs` usage, use `cargo:warning=` messages.
+  - **Note on buffering:** Cargo buffers `build.rs` output by default. To see real-time progress, the user must run `cargo build -vv`.
+  - **Future:** Consider a standalone `i3_baker` CLI tool for a better interactive experience outside of Cargo's build lifecycle.
+- **Test:** Run `cargo build -vv` on viewer, observe real-time progress.
 
 #### P2-2: Update baker_design.md
 - **Files:** `doc/baker_design.md`

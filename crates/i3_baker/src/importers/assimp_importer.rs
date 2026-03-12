@@ -5,15 +5,44 @@ use i3_io::material::{MATERIAL_ASSET_TYPE, MaterialHeader};
 use i3_io::mesh::{BoundingBox, IndexFormat, MeshHeader, VertexFormat};
 use i3_io::scene_asset::{ObjectInstance, SceneHeader};
 use nalgebra_glm::Mat4;
+use rayon::prelude::*;
 use std::any::Any;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
+
+use crate::importers::image_importer::{ImageImporter, TextureImportOptions, TextureSemantic};
 
 /// UUID type for i3mesh assets.
 const MESH_TYPE_UUID: Uuid = i3_io::mesh::MESH_ASSET_TYPE;
 
 /// UUID type for i3scene assets.
 const SCENE_TYPE_UUID: Uuid = i3_io::scene_asset::SCENE_ASSET_TYPE;
+
+// ---------------------------------------------------------------------------
+// Texture resolution types (for parallel baking)
+// ---------------------------------------------------------------------------
+
+/// Source of a texture to bake (embedded in the model or external file).
+#[derive(Clone, Debug)]
+enum TextureSource {
+    /// Embedded texture at the given index in `AssimpScene::embedded_textures`.
+    Embedded { index: usize },
+    /// External texture file at the given resolved absolute path.
+    File { path: PathBuf },
+}
+
+/// A fully resolved texture reference, ready for parallel baking.
+#[derive(Clone, Debug)]
+struct ResolvedTexture {
+    asset_id: Uuid,
+    source: TextureSource,
+    semantic: TextureSemantic,
+}
+
+// ---------------------------------------------------------------------------
+// Extracted data types (Send + Sync compatible)
+// ---------------------------------------------------------------------------
 
 /// Extracted material data (Send + Sync compatible).
 #[derive(Debug, Clone)]
@@ -65,6 +94,10 @@ impl ImportedData for AssimpScene {
         self
     }
 }
+
+// ---------------------------------------------------------------------------
+// AssimpImporter
+// ---------------------------------------------------------------------------
 
 /// Importer for 3D model formats using Assimp.
 pub struct AssimpImporter {
@@ -134,7 +167,7 @@ impl Importer for AssimpImporter {
                     asset_importer::texture::TextureData::Texels(texels) => {
                         let mut bytes = Vec::with_capacity(texels.len() * 4);
                         for t in texels {
-                            // asset-importerTexel has b,g,r,a
+                            // asset-importer Texel has b,g,r,a
                             bytes.push(t.b);
                             bytes.push(t.g);
                             bytes.push(t.r);
@@ -172,20 +205,30 @@ impl Importer for AssimpImporter {
             assimp_data.materials.len()
         );
 
-        let mut outputs = Vec::new();
         println!(
-            "cargo:warning=AssimpImporter: Running {} extractors",
+            "cargo:warning=AssimpImporter: Running {} extractors (parallel)",
             self.extractors.len()
         );
-        for extractor in &self.extractors {
-            let res = extractor.extract(assimp_data, ctx)?;
-            println!(
-                "cargo:warning=AssimpImporter: Extractor '{}' produced {} outputs",
-                extractor.name(),
-                res.len()
-            );
-            outputs.extend(res);
-        }
+
+        // Run all extractors in parallel via rayon.
+        // Each extractor reads from the shared &AssimpScene (Sync) and &BakeContext (Sync).
+        let results: Result<Vec<Vec<BakeOutput>>> = self
+            .extractors
+            .par_iter()
+            .map(|extractor| {
+                let res = extractor.extract(assimp_data, ctx)?;
+                println!(
+                    "cargo:warning=AssimpImporter: Extractor '{}' produced {} outputs",
+                    extractor.name(),
+                    res.len()
+                );
+                Ok(res)
+            })
+            .collect();
+
+        let all_outputs = results?;
+        let outputs: Vec<BakeOutput> = all_outputs.into_iter().flatten().collect();
+
         println!(
             "cargo:warning=AssimpImporter: TOTAL produced {} outputs",
             outputs.len()
@@ -193,6 +236,10 @@ impl Importer for AssimpImporter {
         Ok(outputs)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Assimp scene data extraction (from C++ scene into Rust structs)
+// ---------------------------------------------------------------------------
 
 fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
     let mut extracted = Vec::new();
@@ -369,6 +416,10 @@ fn extract_materials(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// MeshExtractor — parallel mesh baking
+// ---------------------------------------------------------------------------
+
 pub struct MeshExtractor;
 impl Extractor for MeshExtractor {
     fn name(&self) -> &str {
@@ -383,11 +434,12 @@ impl Extractor for MeshExtractor {
             &Uuid::NAMESPACE_OID,
             assimp_data.source_path.to_string_lossy().as_bytes(),
         );
-        let mut outputs = Vec::new();
-        for i in 0..assimp_data.meshes.len() {
-            outputs.push(build_mesh_output(assimp_data, i, namespace)?);
-        }
-        Ok(outputs)
+
+        // Build all meshes in parallel via rayon.
+        (0..assimp_data.meshes.len())
+            .into_par_iter()
+            .map(|i| build_mesh_output(assimp_data, i, namespace))
+            .collect()
     }
 }
 
@@ -486,6 +538,10 @@ fn calculate_bounds(vertices: &[f32], stride_floats: usize) -> BoundingBox {
     BoundingBox { min, max }
 }
 
+// ---------------------------------------------------------------------------
+// MaterialExtractor — three-phase parallel texture baking
+// ---------------------------------------------------------------------------
+
 pub struct MaterialExtractor;
 impl Extractor for MaterialExtractor {
     fn name(&self) -> &str {
@@ -496,48 +552,111 @@ impl Extractor for MaterialExtractor {
     }
     fn extract(&self, data: &dyn ImportedData, ctx: &BakeContext) -> Result<Vec<BakeOutput>> {
         let assimp_data = data.as_any().downcast_ref::<AssimpScene>().unwrap();
-        let mut outputs = Vec::new();
+
+        // ---------------------------------------------------------------
+        // Phase 1: Collect all unique texture references across materials.
+        // Deduplication is by asset_id (deterministic UUID from path).
+        // ---------------------------------------------------------------
+        let mut unique_textures: HashMap<Uuid, ResolvedTexture> = HashMap::new();
+
+        // Per-material texture UUIDs: [albedo, normal, metallic_roughness, emissive]
+        let mut mat_texture_ids: Vec<[Uuid; 4]> = Vec::with_capacity(assimp_data.materials.len());
 
         for mat in &assimp_data.materials {
-            let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, mat.name.as_bytes());
+            let mut ids = [Uuid::nil(); 4];
 
-            use crate::importers::image_importer::TextureSemantic;
-
-            // Texture UUIDs
-            let albedo_id = bake_texture(
+            // Albedo
+            if let Some(resolved) = resolve_texture_ref(
                 mat.albedo_path.as_ref(),
                 assimp_data,
                 ctx,
                 TextureSemantic::Albedo,
-                &mut outputs,
-            )?;
-            let normal_id = bake_texture(
+            ) {
+                ids[0] = resolved.asset_id;
+                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            }
+
+            // Normal
+            if let Some(resolved) = resolve_texture_ref(
                 mat.normal_path.as_ref(),
                 assimp_data,
                 ctx,
                 TextureSemantic::Normal,
-                &mut outputs,
-            )?;
-            let metallic_roughness_id = bake_texture(
+            ) {
+                ids[1] = resolved.asset_id;
+                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            }
+
+            // MetallicRoughness
+            if let Some(resolved) = resolve_texture_ref(
                 mat.metallic_roughness_path.as_ref(),
                 assimp_data,
                 ctx,
                 TextureSemantic::MetallicRoughness,
-                &mut outputs,
-            )?;
-            let emissive_id = bake_texture(
+            ) {
+                ids[2] = resolved.asset_id;
+                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            }
+
+            // Emissive
+            if let Some(resolved) = resolve_texture_ref(
                 mat.emissive_path.as_ref(),
                 assimp_data,
                 ctx,
                 TextureSemantic::Emissive,
-                &mut outputs,
-            )?;
+            ) {
+                ids[3] = resolved.asset_id;
+                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            }
+
+            mat_texture_ids.push(ids);
+        }
+
+        println!(
+            "cargo:warning=MaterialExtractor: {} unique textures to bake (parallel)",
+            unique_textures.len()
+        );
+
+        // ---------------------------------------------------------------
+        // Phase 2: Bake all unique textures in parallel via rayon.
+        // This is where the heavy BC7/BC5 compression happens.
+        // ---------------------------------------------------------------
+        let texture_entries: Vec<(Uuid, ResolvedTexture)> = unique_textures.into_iter().collect();
+
+        let baked_results: Result<Vec<(Uuid, Vec<BakeOutput>)>> = texture_entries
+            .par_iter()
+            .map(|(id, resolved)| {
+                println!(
+                    "cargo:warning=MaterialExtractor: Baking texture {:?} ({:?})",
+                    resolved.semantic, resolved.source
+                );
+                let outputs = bake_resolved_texture(resolved, assimp_data, ctx)?;
+                Ok((*id, outputs))
+            })
+            .collect();
+
+        let baked_map: HashMap<Uuid, Vec<BakeOutput>> = baked_results?.into_iter().collect();
+
+        // ---------------------------------------------------------------
+        // Phase 3: Assemble material assets + collect texture outputs.
+        // ---------------------------------------------------------------
+        let mut outputs: Vec<BakeOutput> = Vec::new();
+
+        // First, collect all baked texture outputs.
+        for baked_outputs in baked_map.into_values() {
+            outputs.extend(baked_outputs);
+        }
+
+        // Then, build material assets using the resolved texture UUIDs.
+        for (i, mat) in assimp_data.materials.iter().enumerate() {
+            let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, mat.name.as_bytes());
+            let ids = &mat_texture_ids[i];
 
             let header = MaterialHeader {
-                albedo_texture: albedo_id.into_bytes(),
-                normal_texture: normal_id.into_bytes(),
-                metallic_roughness_texture: metallic_roughness_id.into_bytes(),
-                emissive_texture: emissive_id.into_bytes(),
+                albedo_texture: ids[0].into_bytes(),
+                normal_texture: ids[1].into_bytes(),
+                metallic_roughness_texture: ids[2].into_bytes(),
+                emissive_texture: ids[3].into_bytes(),
                 base_color_factor: mat.base_color_factor,
                 metallic_factor: mat.metallic_factor,
                 roughness_factor: mat.roughness_factor,
@@ -553,42 +672,32 @@ impl Extractor for MaterialExtractor {
                 name: mat.name.clone(),
             });
         }
+
         Ok(outputs)
     }
 }
 
-fn bake_texture(
+// ---------------------------------------------------------------------------
+// Texture resolution helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve a texture path to a `ResolvedTexture` without performing any I/O-heavy
+/// work. Returns `None` if the path is absent, empty, or cannot be resolved.
+fn resolve_texture_ref(
     path: Option<&PathBuf>,
     scene: &AssimpScene,
     ctx: &BakeContext,
-    semantic: crate::importers::image_importer::TextureSemantic,
-    outputs: &mut Vec<BakeOutput>,
-) -> Result<Uuid> {
-    let path = match path {
-        Some(p) => p,
-        None => return Ok(Uuid::nil()),
-    };
-
-    println!(
-        "cargo:warning=AssimpImporter: bake_texture called with path: {:?}",
-        path
-    );
-
+    semantic: TextureSemantic,
+) -> Option<ResolvedTexture> {
+    let path = path?;
     let source_dir = ctx.source_path.parent().unwrap();
     let filename = path.to_string_lossy().trim().to_string();
 
     if filename.is_empty() {
-        return Ok(Uuid::nil());
+        return None;
     }
 
-    use crate::importers::image_importer::{ImageImporter, TextureImportOptions};
-
-    let importer = ImageImporter::new(TextureImportOptions {
-        semantic,
-        generate_mips: true,
-        format: None,
-    });
-
+    // Embedded texture (path starts with '*')
     if let Some(embedded_idx_str) = filename.strip_prefix('*') {
         if let Ok(idx) = embedded_idx_str.parse::<usize>() {
             if idx < scene.embedded_textures.len() {
@@ -596,40 +705,23 @@ fn bake_texture(
                     &Uuid::NAMESPACE_URL,
                     format!("embedded_{}_{}", scene.source_path.display(), idx).as_bytes(),
                 );
-
-                if outputs.iter().any(|o| o.asset_id == asset_id) {
-                    return Ok(asset_id);
-                }
-
-                println!(
-                    "cargo:warning=AssimpImporter: Baking embedded texture '*{}' (ID={:?})",
-                    idx, asset_id
-                );
-
-                let buffer = &scene.embedded_textures[idx];
-                let imported = importer.import_memory(buffer, &scene.source_path)?;
-                let texture_outputs = importer.extract(imported.as_ref(), ctx)?;
-                outputs.extend(texture_outputs);
-
-                // Override the UUID of the output to match our embedded one
-                if let Some(last) = outputs.last_mut() {
-                    last.asset_id = asset_id;
-                }
-
-                return Ok(asset_id);
+                return Some(ResolvedTexture {
+                    asset_id,
+                    source: TextureSource::Embedded { index: idx },
+                    semantic,
+                });
             }
         }
-
         println!(
-            "cargo:warning=AssimpImporter: Failed to resolve embedded texture '{}'",
+            "cargo:warning=resolve_texture_ref: Failed to resolve embedded texture '{}'",
             filename
         );
-        return Ok(Uuid::nil());
+        return None;
     }
 
+    // External file texture — resolve with heuristics
     let mut full_path = source_dir.join(&filename);
 
-    // Heuristics to find the texture if not in the immediate directory
     if !full_path.exists() {
         let candidates = [
             source_dir.join(&filename),
@@ -652,42 +744,68 @@ fn bake_texture(
         }
     }
 
-    // Final fallback: search recursively in the asset root?
-    // For now, let's just log and skip if still not found.
     if !full_path.exists() {
         println!(
-            "cargo:warning=AssimpImporter: Texture NOT FOUND: '{}' (searched around {:?})",
+            "cargo:warning=resolve_texture_ref: Texture NOT FOUND: '{}' (searched around {:?})",
             filename, source_dir
         );
-        return Ok(Uuid::nil());
+        return None;
     }
 
     if full_path.is_dir() {
         println!(
-            "cargo:warning=AssimpImporter: Skipping directory texture at {:?}",
+            "cargo:warning=resolve_texture_ref: Skipping directory texture at {:?}",
             full_path
         );
-        return Ok(Uuid::nil());
+        return None;
     }
 
     let full_path = full_path.canonicalize().unwrap_or(full_path);
-
     let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, full_path.to_string_lossy().as_bytes());
-    if outputs.iter().any(|o| o.asset_id == asset_id) {
-        return Ok(asset_id);
+
+    Some(ResolvedTexture {
+        asset_id,
+        source: TextureSource::File { path: full_path },
+        semantic,
+    })
+}
+
+/// Bake a resolved texture into one or more `BakeOutput`s.
+/// This is the CPU-intensive step (image decode + BC7/BC5 compression + mipmap generation).
+fn bake_resolved_texture(
+    resolved: &ResolvedTexture,
+    scene: &AssimpScene,
+    ctx: &BakeContext,
+) -> Result<Vec<BakeOutput>> {
+    let importer = ImageImporter::new(TextureImportOptions {
+        semantic: resolved.semantic,
+        generate_mips: true,
+        format: None,
+    });
+
+    let mut outputs = match &resolved.source {
+        TextureSource::Embedded { index } => {
+            let buffer = &scene.embedded_textures[*index];
+            let imported = importer.import_memory(buffer, &scene.source_path)?;
+            importer.extract(imported.as_ref(), ctx)?
+        }
+        TextureSource::File { path } => {
+            let imported = importer.import(path)?;
+            importer.extract(imported.as_ref(), ctx)?
+        }
+    };
+
+    // Override the asset_id to match our deterministic UUID from resolve_texture_ref.
+    for output in &mut outputs {
+        output.asset_id = resolved.asset_id;
     }
 
-    println!(
-        "cargo:warning=AssimpImporter: Baking texture {:?} (ID={:?})",
-        full_path, asset_id
-    );
-
-    let imported = importer.import(&full_path)?;
-    let texture_outputs = importer.extract(imported.as_ref(), ctx)?;
-    outputs.extend(texture_outputs);
-
-    Ok(asset_id)
+    Ok(outputs)
 }
+
+// ---------------------------------------------------------------------------
+// SceneExtractor
+// ---------------------------------------------------------------------------
 
 pub struct SceneExtractor;
 impl Extractor for SceneExtractor {

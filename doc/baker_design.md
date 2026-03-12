@@ -10,7 +10,7 @@ The baker transforms **source assets** (glTF, FBX, OBJ, images, shaders) into **
 flowchart LR
     subgraph Offline - i3_baker
         A[Source Files] --> B[Scanner]
-        B --> C[Registry SQLite<br>hash + deps]
+        B --> C[mtime check<br>source vs output]
         C -->|needs rebake| D[Importer Layer]
         D --> E[Extractor Layer]
         E --> F[BundleWriter]
@@ -31,7 +31,7 @@ flowchart LR
 
 1. **GPU-ready** — Baked data is in the exact format expected by the renderer (vertex layout, index type, alignment). Zero transformation at runtime.
 2. **Zero-copy** — Bundles are designed for `mmap`. Vertex/index data is directly mappable as GPU buffers.
-3. **Incremental** — Only modified assets are re-baked (SQLite registry + SHA-256).
+3. **Incremental** — Only modified assets are re-baked (mtime comparison between source and catalog).
 4. **Parallel** — Each asset bake is independent, parallelizable via rayon.
 5. **Extensible** — Each source format is handled by an `Importer`, each output type by an `Extractor`.
 
@@ -45,11 +45,9 @@ The baker uses a two-layer architecture that separates **parsing** (importers) f
 
 An importer reads a source file format and produces an intermediate representation. Each source file is parsed **once** by a single importer, then all relevant extractors operate on the parsed result.
 
-| Importer         | Library / Crate | Source Extensions                          | Phase |
-|------------------|-----------------|--------------------------------------------|-------|
 | `AssimpImporter` | `russimp`       | .gltf, .glb, .fbx, .obj, .dae, .3ds, .blend, ... | 1   |
-| `SlangImporter`  | `i3_slang`      | .slang                                     | future |
-| `ImageImporter`  | `image` / `basis_universal` | .png, .jpg, .tga, .hdr, .exr    | future |
+| `SlangImporter`  | `i3_slang`      | .slang                                     | 1      |
+| `ImageImporter`  | `image` / `intel_tex_2` | .png, .jpg, .tga, .hdr, .exr    | 1      |
 
 **Assimp** (via `russimp` Rust bindings) is the geometry importer. It provides a unified `Scene` data model covering meshes, skeletons, animations, lights, cameras, materials, and the scene graph — all from a single parse. This avoids redundant re-parsing of the same source file for each output type.
 
@@ -59,14 +57,12 @@ Assimp is a native C++ library. It is integrated via the existing `third_party/`
 
 Extractors operate on the parsed intermediate data (e.g., Assimp `Scene`) and produce typed `BakeOutput` assets. Multiple extractors run on the same parsed data.
 
-| Extractor          | Input               | Output Asset    | Phase |
-|--------------------|----------------------|-----------------|-------|
 | `MeshExtractor`    | Assimp `Scene`       | `i3mesh`        | 1     |
 | `SceneExtractor`   | Assimp `Scene`       | `i3scene`       | 1     |
 | `SkeletonExtractor`| Assimp `Scene`       | `i3skeleton`    | 2     |
 | `AnimationExtractor`| Assimp `Scene`      | `i3animation`   | 3     |
 | `PipelineExtractor`| Slang `ShaderModule` | `i3pipeline`    | future |
-| `TextureExtractor` | Image data           | `i3texture`     | future |
+| `TextureExtractor` | Image data           | `i3texture`     | 1     |
 
 ### 2.3 Data Flow — Single Source File
 
@@ -795,6 +791,44 @@ impl BasicScene {
 - Automatic LOD (meshoptimizer)
 - Zstd/GDeflate compression in bundles
 - Hot-reload (watch mode)
+
+## 10. Texture Semantic & Automated Formats
+
+To ensure optimal GPU memory usage and quality, `ImageImporter` uses a **Semantic** system to choose the best block compression format.
+
+| Semantic | format | Colorspace | Description |
+|---|---|---|---|
+| `Albedo` | `BC7_SRGB` | sRGB | Color data, high quality, alpha support |
+| `Normal` | `BC5_UNORM` | Linear | 2-channel Tangent-Space normals (reconstruct Z) |
+| `MetallicRoughness` | `BC7_UNORM` | Linear | PBR parameters (G=Roughness, B=Metallic) |
+| `Emissive` | `BC7_SRGB` | sRGB | Emissive color data |
+| `Occlusion` | `BC4_UNORM` | Linear | Single channel Ambient Occlusion |
+| `Generic` | `BC7_UNORM` | Linear | Fallback for unknown data |
+
+### Automated Path Heuristics
+While `AssimpImporter` explicitly maps material slots to semantics, the standalone `ImageImporter` can also use filename heuristics (e.g., `*_normal.png` -> `Normal` semantic).
+
+## 11. Incremental Build Logic
+
+The baker avoids redundant work by comparing the modification time (`mtime`) of source files against the existing bundle catalog (`.i3c`).
+
+1. **Discovery:** Scanner finds all files matching supported extensions.
+2. **Check:** If `.i3c` exists, its `mtime` is used as a baseline.
+3. **Decision:** An asset is rebaked if:
+   - The `.i3c` or `.i3b` is missing.
+   - Any source file dependency has `mtime > i3c_mtime`.
+   - `FORCE_BAKE` environment variable is set.
+
+## 12. Build Progress Reporting
+
+The baker supports real-time progress reporting via Cargo's build script protocol.
+
+```
+cargo:warning=[i3_baker] [15/199] Baking Sponza_Ceiling...
+cargo:warning=[i3_baker] [15/199] Finished Sponza_Ceiling in 45.2ms.
+```
+
+This ensures that during long bakes, the user is not left with a frozen CLI, and can monitor the parallel processing of assets.
 
 ---
 

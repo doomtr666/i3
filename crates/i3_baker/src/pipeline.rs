@@ -220,19 +220,28 @@ impl BundleBaker {
             );
             let total_start = Instant::now();
 
-            // Parallel bake using Rayon
+            let total_assets = self.assets.len();
             let results: Result<Vec<Vec<BakeOutput>>> = self
                 .assets
                 .into_par_iter()
-                .map(|job| {
+                .enumerate()
+                .map(|(idx, job)| {
                     let start = Instant::now();
-                    println!("  Baking {:?}...", job.source_path);
+                    let asset_name = job.source_path.file_name().unwrap_or_default().to_string_lossy();
+                    println!(
+                        "cargo:warning=[i3_baker] [{}/{}] Baking {}...",
+                        idx + 1,
+                        total_assets,
+                        asset_name
+                    );
                     let ctx = BakeContext::new(&job.source_path, &self.output_dir);
                     let imported = job.importer.import(&job.source_path)?;
                     let outputs = job.importer.extract(imported.as_ref(), &ctx)?;
                     println!(
-                        "  Finished {:?} in {:.2?}.",
-                        job.source_path,
+                        "cargo:warning=[i3_baker] [{}/{}] Finished {} in {:.2?}.",
+                        idx + 1,
+                        total_assets,
+                        asset_name,
                         start.elapsed()
                     );
                     Ok(outputs)
@@ -251,7 +260,7 @@ impl BundleBaker {
             writer.finish(&catalog_path)?;
 
             println!(
-                "Bundle '{}' bake complete in {:.2?}.",
+                "cargo:warning=[i3_baker] Bundle '{}' bake complete in {:.2?}.",
                 self.bundle_name,
                 total_start.elapsed()
             );
