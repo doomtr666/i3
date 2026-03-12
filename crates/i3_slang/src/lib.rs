@@ -7,7 +7,6 @@ use i3_gfx::graph::pipeline::ShaderStageFlags;
 use shader_slang as slang;
 
 // Re-export types from i3_gfx for convenience
-// Re-export types from i3_gfx for convenience
 pub use i3_gfx::graph::pipeline::{
     Binding, BindingType, EntryPointInfo, PushConstantRange, ShaderModule, ShaderReflection,
     ShaderStageInfo,

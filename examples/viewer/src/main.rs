@@ -8,7 +8,7 @@ use i3_io::asset::AssetLoader;
 use i3_io::material::MaterialAsset;
 use i3_io::mesh::MeshAsset;
 use i3_io::scene_asset::SceneAsset;
-use i3_io::texture::TextureAsset;
+use i3_io::texture::{TextureAsset, TextureFormat};
 use i3_io::vfs::{BundleBackend, Vfs};
 use i3_renderer::render_graph::{DefaultRenderGraph, RenderConfig};
 use i3_vulkan_backend::VulkanBackend;
@@ -126,8 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Load baked assets
     // Try to load Sponza, fallback to Helmet
-    let scene_name =
-        std::env::var("I3_SCENE").unwrap_or_else(|_| "DamagedHelmet_scene".to_string());
+    let scene_name = std::env::var("I3_SCENE").unwrap_or_else(|_| "Sponza_scene".to_string());
     info!("Loading SceneAsset '{}'...", scene_name);
 
     let scene_handle = loader.load::<SceneAsset>(&scene_name);
@@ -164,7 +163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             required_materials.insert(mat_uuid);
         }
 
-        scene.add_baked_mesh(&mut backend, mesh_asset, *mesh_uuid);
+        scene.add_baked_mesh(&mut backend, &mesh_asset, *mesh_uuid);
     }
 
     // Load unique materials and their textures
@@ -181,9 +180,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mips = tex_asset.header.mip_levels;
 
                             let format = match tex_asset.header.format {
-                                112 /* BC7_SRGB */ => Format::BC7_SRGB,
-                                111 /* BC7_UNORM */ => Format::BC7_UNORM,
-                                109 /* BC5_UNORM */ => Format::BC5_UNORM,
+                                f if f == TextureFormat::BC7_SRGB as u32 => Format::BC7_SRGB,
+                                f if f == TextureFormat::BC7_UNORM as u32 => Format::BC7_UNORM,
+                                f if f == TextureFormat::BC5_UNORM as u32 => Format::BC5_UNORM,
                                 _ => Format::R8G8B8A8_SRGB,
                             };
 
@@ -231,7 +230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 scene.add_baked_material(
                     &mut backend,
                     &mut render_graph.bindless_manager,
-                    mat_asset,
+                    &mat_asset,
                     mat_uuid,
                     &mut texture_loader,
                 );

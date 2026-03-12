@@ -261,39 +261,3 @@ impl BundleBaker {
     }
 }
 
-/// Legacy trait kept for compatibility during migration.
-#[deprecated(note = "Use Importer and Extractor traits instead")]
-#[allow(deprecated)]
-pub trait AssetPlugin: Send + Sync {
-    fn name(&self) -> &str;
-    fn source_extension(&self) -> &str;
-    fn output_extension(&self) -> &str;
-    fn bake(&self, context: &mut BakeContext) -> Result<BakeResult>;
-}
-
-/// Legacy result type kept for compatibility.
-#[deprecated(note = "Use BakeOutput instead")]
-#[allow(deprecated)]
-pub struct BakeResult {
-    pub blob: Vec<u8>,
-    pub secondary_outputs: Vec<PathBuf>,
-}
-
-/// Pipeline node for building import pipelines.
-pub struct PipelineNode {
-    pub importer: Box<dyn Importer>,
-    pub extractors: Vec<Box<dyn Extractor>>,
-}
-
-impl PipelineNode {
-    pub fn new(importer: Box<dyn Importer>) -> Self {
-        Self {
-            importer,
-            extractors: Vec::new(),
-        }
-    }
-
-    pub fn add_extractor(&mut self, extractor: Box<dyn Extractor>) {
-        self.extractors.push(extractor);
-    }
-}

@@ -22,7 +22,6 @@ impl<T> Copy for SyncPtr<T> {}
 unsafe impl<T> Send for SyncPtr<T> {}
 unsafe impl<T> Sync for SyncPtr<T> {}
 
-impl<T> SyncPtr<T> {}
 
 /// Metadata and data for an entry in the symbol table.
 pub struct Symbol {

@@ -52,14 +52,8 @@ impl crate::asset::Asset for TextureAsset {
             return Err(crate::error::IoError::Generic("Invalid formatting".into()));
         }
 
-        let mut tex_header: TextureHeader = bytemuck::Zeroable::zeroed();
-        let header_slice = unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut tex_header as *mut _ as *mut u8,
-                std::mem::size_of::<TextureHeader>(),
-            )
-        };
-        header_slice.copy_from_slice(&data[..std::mem::size_of::<TextureHeader>()]);
+        let header_size = std::mem::size_of::<TextureHeader>();
+        let tex_header: TextureHeader = bytemuck::pod_read_unaligned(&data[..header_size]);
 
         let tex_data = data[std::mem::size_of::<TextureHeader>()..].to_vec();
 

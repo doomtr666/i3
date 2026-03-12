@@ -13,7 +13,7 @@ pub trait Asset: Sized + Send + Sync + 'static {
 }
 
 pub struct AssetInner<T> {
-    pub sync: std::sync::Mutex<(u8, Option<std::result::Result<T, crate::IoError>>)>,
+    pub sync: std::sync::Mutex<(u8, Option<std::result::Result<Arc<T>, crate::IoError>>)>,
     pub condvar: std::sync::Condvar,
 }
 
@@ -47,14 +47,11 @@ impl<T> AssetHandle<T> {
         self.state() == ASSET_STATE_LOADED
     }
 
-    pub fn get(&self) -> Option<&T> {
+    pub fn get(&self) -> Option<Arc<T>> {
         let lock = self.inner.sync.lock().unwrap();
         if lock.0 == ASSET_STATE_LOADED {
             match lock.1.as_ref().unwrap() {
-                Ok(asset) => {
-                    let ptr = asset as *const T;
-                    Some(unsafe { &*ptr })
-                }
+                Ok(asset) => Some(asset.clone()),
                 Err(_) => None,
             }
         } else {
@@ -62,7 +59,7 @@ impl<T> AssetHandle<T> {
         }
     }
 
-    pub fn wait_loaded(&self) -> Result<&T> {
+    pub fn wait_loaded(&self) -> Result<Arc<T>> {
         let mut lock = self.inner.sync.lock().unwrap();
         lock = self
             .inner
@@ -74,11 +71,7 @@ impl<T> AssetHandle<T> {
 
         if lock.0 == ASSET_STATE_LOADED {
             match lock.1.as_ref().unwrap() {
-                Ok(asset) => {
-                    // Safe because the asset is immutable once state is LOADED
-                    let ptr = asset as *const T;
-                    Ok(unsafe { &*ptr })
-                }
+                Ok(asset) => Ok(asset.clone()),
                 Err(e) => Err(e.clone()),
             }
         } else {
@@ -212,7 +205,7 @@ impl AssetLoader {
         {
             let mut lock = handle.inner.sync.lock().unwrap();
             lock.0 = new_state;
-            lock.1 = Some(result);
+            lock.1 = Some(result.map(Arc::new));
         }
 
         handle.inner.condvar.notify_all();

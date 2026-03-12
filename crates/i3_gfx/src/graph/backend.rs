@@ -23,15 +23,6 @@ pub struct WindowDesc {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GraphicsPipelineDescDummy {
-    // Renamed to avoid conflict with existing GraphicsPipelineDesc
-    // This is hard to hash/eq genericly. For MVP, we might use name?
-    // Or pointer?
-    // For now, let's assume we don't pool pipelines this way or used differently.
-    // Pipelines are usually cached by hash of state.
-    pub dummy: u32,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
