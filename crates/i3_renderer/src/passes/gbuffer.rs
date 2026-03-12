@@ -15,6 +15,7 @@ pub struct GBufferVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    pub tangent: [f32; 4],
 }
 
 /// Push constants for the GBuffer pass.
@@ -104,6 +105,12 @@ impl GBufferPass {
                         binding: 0,
                         format: VertexFormat::Float2,
                         offset: 24,
+                    },
+                    VertexInputAttribute {
+                        location: 3,
+                        binding: 0,
+                        format: VertexFormat::Float4,
+                        offset: 32,
                     },
                 ],
             },

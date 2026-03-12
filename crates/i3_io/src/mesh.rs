@@ -75,7 +75,7 @@ impl VertexFormat {
         match self.0 {
             0 => 36, // PositionNormalColor
             1 => 32, // PositionNormalUv
-            2 => 40, // PositionNormalUvTangent
+            2 => 48, // PositionNormalUvTangent
             3 => 52, // PositionNormalColorSkin
             4 => 56, // PositionNormalUvTangentSkin
             _ => 0,

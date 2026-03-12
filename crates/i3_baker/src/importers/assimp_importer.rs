@@ -37,6 +37,7 @@ pub struct ExtractedMesh {
     pub indices: Vec<u32>,
     pub has_normals: bool,
     pub has_uvs: bool,
+    pub has_tangents: bool,
     pub has_colors: bool,
     pub material_index: Option<usize>,
 }
@@ -202,9 +203,10 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
 
         let num_vertices = mesh.num_vertices();
 
-        // We output either [P, N, UV] (8 floats) or [P, N, C] (9 floats).
-        // Let's pack based on presence of UVs primarily.
-        let stride = if has_uvs { 8 } else { 9 };
+        // If it has UVs, we now ALWAYS include tangents (48 bytes stride: P3, N3, UV2, T4)
+        // Otherwise, we use P3, N3, C3 (36 bytes stride)
+        let has_tangents = mesh.tangents().is_some() && mesh.bitangents().is_some();
+        let stride = if has_uvs { 12 } else { 9 };
         let mut vertices = Vec::with_capacity(num_vertices * stride);
 
         let pos_iter = mesh.vertices();
@@ -221,6 +223,8 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
         } else {
             vec![asset_importer::types::Color4D::new(1.0, 1.0, 1.0, 1.0); num_vertices]
         };
+        let tang_iter = mesh.tangents();
+        let bitang_iter = mesh.bitangents();
 
         for i in 0..num_vertices {
             let p = pos_iter[i];
@@ -237,6 +241,32 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
                 let uv = uv_iter[i];
                 vertices.push(uv.x);
                 vertices.push(uv.y);
+
+                if let (Some(tangents), Some(bitangents)) = (&tang_iter, &bitang_iter) {
+                    let t = tangents[i];
+                    let b = bitangents[i];
+                    let n = norm_iter[i];
+
+                    // Calculate handness (w component of tangent)
+                    // w = dot(cross(n, t), b) < 0 ? -1.0 : 1.0
+                    let cross_nt = asset_importer::types::Vector3D::new(
+                        n.y * t.z - n.z * t.y,
+                        n.z * t.x - n.x * t.z,
+                        n.x * t.y - n.y * t.x,
+                    );
+                    let dot_val = cross_nt.x * b.x + cross_nt.y * b.y + cross_nt.z * b.z;
+                    let w = if dot_val < 0.0 { -1.0 } else { 1.0 };
+
+                    vertices.push(t.x);
+                    vertices.push(t.y);
+                    vertices.push(t.z);
+                    vertices.push(w);
+                } else {
+                    vertices.push(1.0);
+                    vertices.push(0.0);
+                    vertices.push(0.0);
+                    vertices.push(1.0);
+                }
             } else {
                 let c = col_iter[i];
                 vertices.push(c.x);
@@ -252,6 +282,7 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
             indices,
             has_normals,
             has_uvs,
+            has_tangents,
             has_colors,
             material_index: Some(mesh.material_index()),
         });
@@ -375,7 +406,7 @@ fn build_mesh_output(
     let asset_id = Uuid::new_v5(&namespace, name.as_bytes());
 
     let vertex_format = if mesh.has_uvs {
-        VertexFormat::POSITION_NORMAL_UV
+        VertexFormat::POSITION_NORMAL_UV_TANGENT
     } else {
         VertexFormat::POSITION_NORMAL_COLOR
     };

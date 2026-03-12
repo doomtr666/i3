@@ -44,12 +44,15 @@ struct VertexInput
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float3 normal   : NORMAL;
     [[vk::location(2)]] float2 uv       : TEXCOORD0;
+    [[vk::location(3)]] float4 tangent  : TANGENT;
 };
 
 struct VertexOutput
 {
     float4 clipPosition : SV_Position;
     float3 worldNormal  : NORMAL;
+    float3 worldTangent : TANGENT;
+    float3 worldBitangent : BITANGENT;
     float2 uv           : TEXCOORD0;
 };
 
@@ -80,7 +83,19 @@ VertexOutput vertexMain(VertexInput input)
     float4 worldPos = mul(pc.model, float4(input.position, 1.0));
     output.clipPosition = mul(pc.viewProjection, worldPos);
 
-    output.worldNormal = normalize(mul((float3x3)pc.model, input.normal));
+    float3x3 normalMatrix = (float3x3)pc.model;
+    float3 worldNormal = normalize(mul(normalMatrix, input.normal));
+    float3 worldTangent = normalize(mul(normalMatrix, input.tangent.xyz));
+    
+    // Gram-Schmidt re-orthogonalization to ensure T is perpendicular to N
+    worldTangent = normalize(worldTangent - dot(worldTangent, worldNormal) * worldNormal);
+    
+    // Calculate bitangent using handness stored in tangent.w
+    float3 worldBitangent = cross(worldNormal, worldTangent) * input.tangent.w;
+
+    output.worldNormal = worldNormal;
+    output.worldTangent = worldTangent;
+    output.worldBitangent = worldBitangent;
     output.uv = input.uv;
     return output;
 }
@@ -118,14 +133,31 @@ GBufferOutput fragmentMain(VertexOutput input)
         emissive *= bindlessTextures[mat.textureIndices.w].Sample(globalSampler, input.uv).rgb;
     }
 
+    float3 normal = normalize(input.worldNormal);
     if (mat.textureIndices.y >= 0)
     {
-        // Normal mapping placeholder
+        // Sample normal map (typically BC5: RG channels only)
+        float2 normalSample = bindlessTextures[mat.textureIndices.y].Sample(globalSampler, input.uv).rg;
+        
+        // Transform from [0, 1] to [-1, 1]
+        float2 tangentNormal = normalSample * 2.0 - 1.0;
+        
+        // Reconstruct Z channel
+        float z = sqrt(max(0.0, 1.0 - dot(tangentNormal, tangentNormal)));
+        float3 normalTS = float3(tangentNormal, z);
+
+        // Transform from tangent space to world space
+        float3x3 TBN = float3x3(
+            normalize(input.worldTangent),
+            normalize(input.worldBitangent),
+            normal
+        );
+        normal = normalize(mul(normalTS, TBN));
     }
 
     GBufferOutput output;
     output.albedo     = float4(albedo.rgb, 1.0);
-    output.normal     = encodeOctahedral(normalize(input.worldNormal));
+    output.normal     = encodeOctahedral(normal);
     output.roughMetal = float2(roughness, metallic);
     output.emissive   = emissive;
     return output;

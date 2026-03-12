@@ -113,7 +113,7 @@ impl BasicScene {
             index_buffer: ib,
             index_count: indices.len() as u32,
             index_type: IndexType::Uint16,
-            stride: 32, // Match GBufferVertex [f32; 8]
+            stride: 48, // Match GBufferVertex [f32; 12]
         });
 
         let _ = vertex_count; // Reserved for future validation
@@ -172,23 +172,23 @@ impl BasicScene {
         let vb_bytes = unsafe {
             std::slice::from_raw_parts(
                 vertices.as_ptr() as *const u8,
-                vertices.len() * std::mem::size_of::<[f32; 8]>(),
+                vertices.len() * std::mem::size_of::<[f32; 12]>(),
             )
         };
         self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
     }
 
-    /// Convenience: creates a white unit cube mesh and returns its MeshId.
     pub fn add_white_cube_mesh(&mut self, backend: &mut dyn RenderBackend) -> u32 {
         let (vertices, indices) = generate_white_cube();
         let vb_bytes = unsafe {
             std::slice::from_raw_parts(
                 vertices.as_ptr() as *const u8,
-                vertices.len() * std::mem::size_of::<[f32; 8]>(),
+                vertices.len() * std::mem::size_of::<[f32; 12]>(),
             )
         };
         self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
     }
+
 
     /// Convenience: adds default directional lights (key light and backlight).
     pub fn add_default_lights(&mut self) {
@@ -451,9 +451,10 @@ impl SceneProvider for BasicScene {
 }
 
 /// Generates a white unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
-fn generate_white_cube() -> (Vec<[f32; 8]>, Vec<u16>) {
+fn generate_white_cube() -> (Vec<[f32; 12]>, Vec<u16>) {
     let (mut vertices, indices) = generate_cube();
     for v in &mut vertices {
+        // v[3..6] is normal, v[6..8] is UV, v[8..12] is tangent
         v[6] = 0.0; // U
         v[7] = 0.0; // V (just placeholders for white cube)
     }
@@ -461,39 +462,39 @@ fn generate_white_cube() -> (Vec<[f32; 8]>, Vec<u16>) {
 }
 
 /// Generates a unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
-fn generate_cube() -> (Vec<[f32; 8]>, Vec<u16>) {
+fn generate_cube() -> (Vec<[f32; 12]>, Vec<u16>) {
     #[rustfmt::skip]
-    let vertices: Vec<[f32; 8]> = vec![
+    let vertices: Vec<[f32; 12]> = vec![
         // Front face (Z+)
-        [-0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 1.0],
-        [ 0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 1.0],
-        [ 0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0],
-        [-0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 0.0],
+        [-0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 1.0,  1.0, 0.0, 0.0, 1.0],
+        [ 0.5, -0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 1.0,  1.0, 0.0, 0.0, 1.0],
+        [ 0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  1.0, 0.0,  1.0, 0.0, 0.0, 1.0],
+        [-0.5,  0.5,  0.5,  0.0, 0.0, 1.0,  0.0, 0.0,  1.0, 0.0, 0.0, 1.0],
         // Back face (Z-)
-        [ 0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 1.0],
-        [-0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  1.0, 1.0],
-        [-0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  1.0, 0.0],
-        [ 0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 0.0],
+        [ 0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 1.0, -1.0, 0.0, 0.0, 1.0],
+        [-0.5, -0.5, -0.5,  0.0, 0.0,-1.0,  1.0, 1.0, -1.0, 0.0, 0.0, 1.0],
+        [-0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  1.0, 0.0, -1.0, 0.0, 0.0, 1.0],
+        [ 0.5,  0.5, -0.5,  0.0, 0.0,-1.0,  0.0, 0.0, -1.0, 0.0, 0.0, 1.0],
         // Top face (Y+)
-        [-0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  0.0, 1.0],
-        [ 0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  1.0, 1.0],
-        [ 0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  1.0, 0.0],
-        [-0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  0.0, 0.0],
+        [-0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  0.0, 1.0,  1.0, 0.0, 0.0, 1.0],
+        [ 0.5,  0.5,  0.5,  0.0, 1.0, 0.0,  1.0, 1.0,  1.0, 0.0, 0.0, 1.0],
+        [ 0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  1.0, 0.0,  1.0, 0.0, 0.0, 1.0],
+        [-0.5,  0.5, -0.5,  0.0, 1.0, 0.0,  0.0, 0.0,  1.0, 0.0, 0.0, 1.0],
         // Bottom face (Y-)
-        [-0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  0.0, 1.0],
-        [ 0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  1.0, 1.0],
-        [ 0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  1.0, 0.0],
-        [-0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  0.0, 0.0],
+        [-0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  0.0, 1.0,  1.0, 0.0, 0.0, 1.0],
+        [ 0.5, -0.5, -0.5,  0.0,-1.0, 0.0,  1.0, 1.0,  1.0, 0.0, 0.0, 1.0],
+        [ 0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  1.0, 0.0,  1.0, 0.0, 0.0, 1.0],
+        [-0.5, -0.5,  0.5,  0.0,-1.0, 0.0,  0.0, 0.0,  1.0, 0.0, 0.0, 1.0],
         // Right face (X+)
-        [ 0.5, -0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 1.0],
-        [ 0.5, -0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 1.0],
-        [ 0.5,  0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 0.0],
-        [ 0.5,  0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 0.0],
+        [ 0.5, -0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 1.0,  0.0, 0.0, -1.0, 1.0],
+        [ 0.5, -0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 1.0,  0.0, 0.0, -1.0, 1.0],
+        [ 0.5,  0.5, -0.5,  1.0, 0.0, 0.0,  1.0, 0.0,  0.0, 0.0, -1.0, 1.0],
+        [ 0.5,  0.5,  0.5,  1.0, 0.0, 0.0,  0.0, 0.0,  0.0, 0.0, -1.0, 1.0],
         // Left face (X-)
-        [-0.5, -0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 1.0],
-        [-0.5, -0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 1.0],
-        [-0.5,  0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 0.0],
-        [-0.5,  0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 0.0],
+        [-0.5, -0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 1.0,  0.0, 0.0, 1.0, 1.0],
+        [-0.5, -0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 1.0,  0.0, 0.0, 1.0, 1.0],
+        [-0.5,  0.5,  0.5, -1.0, 0.0, 0.0,  1.0, 0.0,  0.0, 0.0, 1.0, 1.0],
+        [-0.5,  0.5, -0.5, -1.0, 0.0, 0.0,  0.0, 0.0,  0.0, 0.0, 1.0, 1.0],
     ];
 
     #[rustfmt::skip]

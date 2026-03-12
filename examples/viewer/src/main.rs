@@ -126,7 +126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Load baked assets
     // Try to load Sponza, fallback to Helmet
-    let scene_name = std::env::var("I3_SCENE").unwrap_or_else(|_| "Sponza_scene".to_string());
+    let scene_name =
+        std::env::var("I3_SCENE").unwrap_or_else(|_| "DamagedHelmet_scene".to_string());
     info!("Loading SceneAsset '{}'...", scene_name);
 
     let scene_handle = loader.load::<SceneAsset>(&scene_name);
