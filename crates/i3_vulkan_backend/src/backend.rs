@@ -8,209 +8,44 @@ use i3_gfx::graph::types::*;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use vk_mem::Alloc;
 
-pub struct PhysicalImage {
-    pub image: vk::Image,
-    pub view: vk::ImageView,
-    pub allocation: Option<vk_mem::Allocation>,
-    pub desc: ImageDesc,
-    pub format: vk::Format,
-
-    pub last_layout: vk::ImageLayout,
-    pub last_access: vk::AccessFlags2,
-    pub last_stage: vk::PipelineStageFlags2,
-    pub last_write_frame: u64,
-}
-
-pub struct PhysicalBuffer {
-    pub buffer: vk::Buffer,
-    pub allocation: Option<vk_mem::Allocation>,
-    pub desc: BufferDesc,
-
-    // Synchronization state (Sync2)
-    pub last_access: vk::AccessFlags2,
-    pub last_stage: vk::PipelineStageFlags2,
-}
-
-enum Slot<T> {
-    Occupied {
-        data: T,
-        generation: u32,
-    },
-    Free {
-        next_free: Option<u32>,
-        generation: u32,
-    },
-}
-
-pub struct ResourceArena<T> {
-    slots: Vec<Slot<T>>,
-    free_head: Option<u32>,
-}
-
-impl<T> ResourceArena<T> {
-    pub fn new() -> Self {
-        Self {
-            slots: Vec::with_capacity(256),
-            free_head: None,
-        }
-    }
-
-    pub fn insert(&mut self, data: T) -> u64 {
-        if let Some(index) = self.free_head {
-            let slot = &mut self.slots[index as usize];
-            if let Slot::Free {
-                next_free,
-                generation,
-            } = *slot
-            {
-                let generation_val = generation;
-                *slot = Slot::Occupied {
-                    data,
-                    generation: generation_val,
-                };
-                self.free_head = next_free;
-                return ((generation_val as u64) << 32) | (index as u64);
-            }
-        }
-
-        let index = self.slots.len() as u32;
-        let generation = 1u32;
-        self.slots.push(Slot::Occupied { data, generation });
-        ((generation as u64) << 32) | (index as u64)
-    }
-
-    pub fn get(&self, id: u64) -> Option<&T> {
-        let index = (id & 0xFFFFFFFF) as usize;
-        let generation_val = (id >> 32) as u32;
-        if let Some(Slot::Occupied { data, generation }) = self.slots.get(index) {
-            if *generation == generation_val {
-                return Some(data);
-            }
-        }
-        None
-    }
-
-    pub fn get_mut(&mut self, id: u64) -> Option<&mut T> {
-        let index = (id & 0xFFFFFFFF) as usize;
-        let generation_val = (id >> 32) as u32;
-        if let Some(Slot::Occupied { data, generation }) = self.slots.get_mut(index) {
-            if *generation == generation_val {
-                return Some(data);
-            }
-        }
-        None
-    }
-
-    pub fn remove(&mut self, id: u64) -> Option<T> {
-        let index = (id & 0xFFFFFFFF) as usize;
-        let generation_val = (id >> 32) as u32;
-        if index >= self.slots.len() {
-            return None;
-        }
-
-        match self.slots[index] {
-            Slot::Occupied { generation, .. } if generation == generation_val => {
-                let old_slot = std::mem::replace(
-                    &mut self.slots[index],
-                    Slot::Free {
-                        next_free: self.free_head,
-                        generation: generation + 1,
-                    },
-                );
-                self.free_head = Some(index as u32);
-                if let Slot::Occupied { data, .. } = old_slot {
-                    Some(data)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (u64, &mut T)> {
-        self.slots.iter_mut().enumerate().filter_map(|(i, slot)| {
-            if let Slot::Occupied { data, generation } = slot {
-                let id = ((*generation as u64) << 32) | (i as u64);
-                Some((id, data))
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (u64, &T)> {
-        self.slots.iter().enumerate().filter_map(|(i, slot)| {
-            if let Slot::Occupied { data, generation } = slot {
-                let id = ((*generation as u64) << 32) | (i as u64);
-                Some((id, data))
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn ids(&self) -> Vec<u64> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(i, slot)| {
-                if let Slot::Occupied { generation, .. } = slot {
-                    Some(((*generation as u64) << 32) | (i as u64))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-}
+use crate::resource_arena::{PhysicalBuffer, PhysicalImage, PhysicalPipeline, ResourceArena};
 
 // ...
 
-struct ThreadCommandPool {
-    pool: vk::CommandPool,
-    allocated: Vec<vk::CommandBuffer>,
-    cursor: usize,
+pub(crate) struct ThreadCommandPool {
+    pub(crate) pool: vk::CommandPool,
+    pub(crate) allocated: Vec<vk::CommandBuffer>,
+    pub(crate) cursor: usize,
 }
 
-struct VulkanFrameContext {
-    command_pool: vk::CommandPool,
-    descriptor_pool: vk::DescriptorPool,
-    allocated_command_buffers: Vec<vk::CommandBuffer>,
-    cursor: usize,
-    submitted_cursor: usize,
-    last_completion_value: u64,
-    per_thread_pools: Vec<std::sync::Mutex<ThreadCommandPool>>,
+pub(crate) struct VulkanFrameContext {
+    pub(crate) command_pool: vk::CommandPool,
+    pub(crate) descriptor_pool: vk::DescriptorPool,
+    pub(crate) allocated_command_buffers: Vec<vk::CommandBuffer>,
+    pub(crate) cursor: usize,
+    pub(crate) submitted_cursor: usize,
+    pub(crate) last_completion_value: u64,
+    pub(crate) per_thread_pools: Vec<std::sync::Mutex<ThreadCommandPool>>,
 }
 
-struct WindowContext {
+pub(crate) struct WindowContext {
     // Order matters for drop: swapchain must be dropped BEFORE raw (surface)
-    swapchain: Option<crate::swapchain::VulkanSwapchain>,
-    raw: crate::window::VulkanWindow,
-    config: SwapchainConfig,
+    pub(crate) swapchain: Option<crate::swapchain::VulkanSwapchain>,
+    pub(crate) raw: crate::window::VulkanWindow,
+    pub(crate) config: SwapchainConfig,
     // Semaphores for acquire (per frame in flight)
-    acquire_semaphores: Vec<vk::Semaphore>,
-    acquire_semaphore_ids: Vec<u64>,
+    pub(crate) acquire_semaphores: Vec<vk::Semaphore>,
+    pub(crate) acquire_semaphore_ids: Vec<u64>,
     // Semaphores for present (per frame in flight)
-    present_semaphores: Vec<vk::Semaphore>,
+    pub(crate) present_semaphores: Vec<vk::Semaphore>,
     #[allow(dead_code)]
-    present_semaphore_ids: Vec<u64>,
+    pub(crate) present_semaphore_ids: Vec<u64>,
     // Track the current frame's acquire semaphore to pair it with the image
-    current_acquire_sem_id: Option<u64>,
-    current_image_index: Option<u32>,
-}
-
-#[derive(Clone)]
-pub struct PhysicalPipeline {
-    pub handle: vk::Pipeline,
-    pub layout: vk::PipelineLayout,
-    pub bind_point: vk::PipelineBindPoint,
-    pub set_layouts: Vec<vk::DescriptorSetLayout>,
-    pub pushable_sets_mask: u32,
-    pub physical_id: u64,
+    pub(crate) current_acquire_sem_id: Option<u64>,
+    pub(crate) current_image_index: Option<u32>,
 }
 
 pub enum PreparedDomain {
@@ -239,8 +74,8 @@ unsafe impl Sync for VulkanPreparedPass {}
 
 pub struct VulkanBackend {
     // Window Management
-    windows: HashMap<u64, WindowContext>,
-    next_window_id: u64,
+    pub(crate) windows: HashMap<u64, WindowContext>,
+    pub(crate) next_window_id: u64,
 
     // SDL2 context
     pub sdl: sdl2::Sdl,
@@ -264,8 +99,8 @@ pub struct VulkanBackend {
     pub recycled_semaphores: Vec<vk::Semaphore>,
 
     // Transient Pools
-    transient_image_pool: HashMap<ImageDesc, Vec<u64>>,
-    transient_buffer_pool: HashMap<BufferDesc, Vec<u64>>,
+    pub(crate) transient_image_pool: HashMap<ImageDesc, Vec<u64>>,
+    pub(crate) transient_buffer_pool: HashMap<BufferDesc, Vec<u64>>,
 
     // Resources
     pub samplers: ResourceArena<vk::Sampler>,
@@ -280,17 +115,17 @@ pub struct VulkanBackend {
     pub descriptor_pool_max_sets: u32,
 
     // Loaders
-    swapchain_loader: Option<ash::khr::swapchain::Device>,
+    pub(crate) swapchain_loader: Option<ash::khr::swapchain::Device>,
 
     // Scratch Buffers for hot path
-    target_id_scratch: Vec<u64>,
-    image_barrier_scratch: Vec<vk::ImageMemoryBarrier2<'static>>,
-    buffer_barrier_scratch: Vec<vk::BufferMemoryBarrier2<'static>>,
+    pub(crate) target_id_scratch: Vec<u64>,
+    pub(crate) image_barrier_scratch: Vec<vk::ImageMemoryBarrier2<'static>>,
+    pub(crate) buffer_barrier_scratch: Vec<vk::BufferMemoryBarrier2<'static>>,
 
     // Global Frame Contexts
-    frame_contexts: Vec<VulkanFrameContext>,
-    frame_started: bool,
-    global_frame_index: usize,
+    pub(crate) frame_contexts: Vec<VulkanFrameContext>,
+    pub(crate) frame_started: bool,
+    pub(crate) global_frame_index: usize,
     pub next_resource_id: u64,
     pub bindless_set_layout: vk::DescriptorSetLayout,
     pub bindless_set_handle: u64,
@@ -352,11 +187,11 @@ impl VulkanBackend {
         })
     }
 
-    fn get_device(&self) -> &Arc<crate::device::VulkanDevice> {
+    pub fn get_device(&self) -> &Arc<crate::device::VulkanDevice> {
         self.device.as_ref().expect("Backend not initialized")
     }
 
-    fn get_image_barrier(
+    pub fn get_image_barrier(
         &mut self,
         physical_id: u64,
         new_layout: vk::ImageLayout,
@@ -420,7 +255,7 @@ impl VulkanBackend {
         }
     }
 
-    fn get_buffer_barrier(
+    pub fn get_buffer_barrier(
         &mut self,
         physical_id: u64,
         dst_access: vk::AccessFlags2,
@@ -466,7 +301,7 @@ impl VulkanBackend {
         }
     }
 
-    fn get_image_state(
+    pub fn get_image_state(
         &self,
         usage: ResourceUsage,
         is_write: bool,
@@ -525,7 +360,7 @@ impl VulkanBackend {
         (layout, access, stage)
     }
 
-    fn get_buffer_state(
+    pub fn get_buffer_state(
         &self,
         usage: ResourceUsage,
         bind_point: vk::PipelineBindPoint,
@@ -1272,501 +1107,11 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineCreateInfo) -> BackendPipeline {
-        let device = self.get_device().clone();
-        let id = self.next_id();
-        debug!("Creating Graphics Pipeline");
-        use crate::convert::*;
-
-        // 1. Create Shader Module (once per pipeline setup)
-        let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
-            std::slice::from_raw_parts(
-                desc.shader_module.bytecode.as_ptr() as *const u32,
-                desc.shader_module.bytecode.len() / 4,
-            )
-        });
-
-        let module = unsafe { device.handle.create_shader_module(&create_info, None) }
-            .expect("Shader module creation failed");
-        self.shader_modules.push(module);
-
-        let mut stages = Vec::new();
-
-        // Create CStrings first to ensure stable pointers
-        let entry_points: Vec<std::ffi::CString> = desc
-            .shader_module
-            .stages
-            .iter()
-            .map(|s| std::ffi::CString::new(s.entry_point.as_str()).unwrap())
-            .collect();
-
-        for (stage_info, entry_point_cstr) in desc.shader_module.stages.iter().zip(&entry_points) {
-            let stage_flag = if stage_info.stage.contains(ShaderStageFlags::Vertex) {
-                vk::ShaderStageFlags::VERTEX
-            } else if stage_info.stage.contains(ShaderStageFlags::Fragment) {
-                vk::ShaderStageFlags::FRAGMENT
-            } else if stage_info.stage.contains(ShaderStageFlags::Compute) {
-                vk::ShaderStageFlags::COMPUTE
-            } else {
-                vk::ShaderStageFlags::empty()
-            };
-
-            stages.push(
-                vk::PipelineShaderStageCreateInfo::default()
-                    .module(module)
-                    .stage(stage_flag)
-                    .name(entry_point_cstr.as_c_str()),
-            );
-        }
-
-        // 2. Vertex Input
-        let vk_vertex_bindings: Vec<vk::VertexInputBindingDescription> = desc
-            .vertex_input
-            .bindings
-            .iter()
-            .map(|b| vk::VertexInputBindingDescription {
-                binding: b.binding,
-                stride: b.stride,
-                input_rate: convert_vertex_input_rate(b.input_rate),
-            })
-            .collect();
-
-        let vk_vertex_attributes: Vec<vk::VertexInputAttributeDescription> = desc
-            .vertex_input
-            .attributes
-            .iter()
-            .map(|a| vk::VertexInputAttributeDescription {
-                location: a.location,
-                binding: a.binding,
-                format: convert_vertex_format(a.format),
-                offset: a.offset,
-            })
-            .collect();
-
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(&vk_vertex_bindings)
-            .vertex_attribute_descriptions(&vk_vertex_attributes);
-
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(convert_primitive_topology(desc.input_assembly.topology))
-            .primitive_restart_enable(desc.input_assembly.primitive_restart_enable);
-
-        let tessellation = vk::PipelineTessellationStateCreateInfo::default()
-            .patch_control_points(desc.tessellation_state.patch_control_points);
-
-        // 3. Dynamic States
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-        let viewport = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
-
-        let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
-            .depth_clamp_enable(desc.rasterization_state.depth_clamp_enable)
-            .rasterizer_discard_enable(desc.rasterization_state.rasterizer_discard_enable)
-            .polygon_mode(convert_polygon_mode(desc.rasterization_state.polygon_mode))
-            .cull_mode(convert_cull_mode(desc.rasterization_state.cull_mode))
-            // Engine Convention: Vulkan uses Clockwise Front Face to compensate for Negative Viewport
-            .front_face(vk::FrontFace::CLOCKWISE)
-            .depth_bias_enable(desc.rasterization_state.depth_bias_enable)
-            .depth_bias_constant_factor(desc.rasterization_state.depth_bias_constant_factor)
-            .depth_bias_clamp(desc.rasterization_state.depth_bias_clamp)
-            .depth_bias_slope_factor(desc.rasterization_state.depth_bias_slope_factor)
-            .line_width(desc.rasterization_state.line_width);
-
-        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(convert_sample_count(desc.multisample_state.sample_count))
-            .sample_shading_enable(desc.multisample_state.sample_shading_enable)
-            .alpha_to_coverage_enable(desc.multisample_state.alpha_to_coverage_enable);
-
-        // 4. Depth Stencil
-
-        // 5. Color Blend
-        let attachments: Vec<vk::PipelineColorBlendAttachmentState> = desc
-            .render_targets
-            .color_targets
-            .iter()
-            .map(|target| {
-                let mut attachment = vk::PipelineColorBlendAttachmentState::default()
-                    .color_write_mask(convert_color_component_flags(target.write_mask));
-
-                if let Some(blend) = target.blend {
-                    attachment = attachment
-                        .blend_enable(true)
-                        .src_color_blend_factor(convert_blend_factor(blend.src_color_factor))
-                        .dst_color_blend_factor(convert_blend_factor(blend.dst_color_factor))
-                        .color_blend_op(convert_blend_op(blend.color_op))
-                        .src_alpha_blend_factor(convert_blend_factor(blend.src_alpha_factor))
-                        .dst_alpha_blend_factor(convert_blend_factor(blend.dst_alpha_factor))
-                        .alpha_blend_op(convert_blend_op(blend.alpha_op));
-                } else {
-                    attachment = attachment.blend_enable(false);
-                }
-                attachment
-            })
-            .collect();
-
-        let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-            .attachments(&attachments)
-            .logic_op_enable(desc.render_targets.logic_op.is_some())
-            .logic_op(convert_logic_op(
-                desc.render_targets.logic_op.unwrap_or(LogicOp::NoOp),
-            ));
-
-        // 5. Layout (Push Constants + Descriptor Sets)
-
-        // Group bindings by set index
-        let mut set_bindings: HashMap<u32, Vec<vk::DescriptorSetLayoutBinding>> = HashMap::new();
-        for binding in &desc.shader_module.reflection.bindings {
-            let descriptor_type = match binding.binding_type {
-                i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
-                    vk::DescriptorType::UNIFORM_BUFFER
-                }
-                i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
-                    vk::DescriptorType::STORAGE_BUFFER
-                }
-                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER
-                }
-                i3_gfx::graph::pipeline::BindingType::Sampler => vk::DescriptorType::SAMPLER,
-                i3_gfx::graph::pipeline::BindingType::Texture => vk::DescriptorType::SAMPLED_IMAGE,
-                _ => {
-                    tracing::warn!("Unknown binding type for binding {}, defaulting to STORAGE_BUFFER", binding.binding);
-                    vk::DescriptorType::STORAGE_BUFFER
-                }
-            };
-
-            let stage_flags =
-                convert_shader_stage_flags(i3_gfx::graph::pipeline::ShaderStageFlags::All); // Simplified for MVP
-
-            let vk_binding = vk::DescriptorSetLayoutBinding::default()
-                .binding(binding.binding)
-                .descriptor_type(descriptor_type)
-                .descriptor_count(binding.count)
-                .stage_flags(stage_flags);
-
-            set_bindings
-                .entry(binding.set)
-                .or_default()
-                .push(vk_binding);
-        }
-
-        // Create Descriptor Set Layouts (filling gaps)
-        let mut descriptor_set_layouts = Vec::new();
-        let mut pushable_sets_mask = 0;
-        if !set_bindings.is_empty() || self.bindless_set_layout != vk::DescriptorSetLayout::null() {
-            // Force at least 3 sets (0, 1, 2) to ensure Bindless is always at Set 2
-            let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
-            for i in 0..=max_set {
-                let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
-                let mut binding_flags_info =
-                    vk::DescriptorSetLayoutBindingFlagsCreateInfo::default();
-                let mut binding_flags = Vec::with_capacity(bindings.len());
-                for b in bindings {
-                    if b.descriptor_count >= 1000 || b.descriptor_count == 0 {
-                        binding_flags.push(
-                            vk::DescriptorBindingFlags::PARTIALLY_BOUND
-                                | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-                        );
-                    } else {
-                        binding_flags.push(vk::DescriptorBindingFlags::empty());
-                    }
-                }
-
-                binding_flags_info = binding_flags_info.binding_flags(&binding_flags);
-
-                let mut layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-                    .bindings(bindings)
-                    .push_next(&mut binding_flags_info);
-
-                // Enable Push Descriptors for Set 0 (implied by backend requirement)
-                if i == 0 && !bindings.is_empty() {
-                    layout_info =
-                        layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
-                    pushable_sets_mask |= 1 << 0;
-                }
-
-                // If any binding has UPDATE_AFTER_BIND, the set layout itself needs the flag
-                if binding_flags
-                    .iter()
-                    .any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND))
-                {
-                    layout_info.flags |= vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL;
-                }
-
-                let layout =
-                    if i == 2 && self.bindless_set_layout != vk::DescriptorSetLayout::null() {
-                        tracing::debug!(
-                            "Pipeline reusing global bindless layout for Set 2: {:?}",
-                            self.bindless_set_layout
-                        );
-                        self.bindless_set_layout
-                    } else {
-                        let layout = unsafe {
-                            device
-                                .handle
-                                .create_descriptor_set_layout(&layout_info, None)
-                                .expect("Failed to create descriptor set layout")
-                        };
-                        self.descriptor_set_layouts.push(layout); // Track for cleanup
-                        tracing::debug!("Pipeline created new layout for Set {}: {:?}", i, layout);
-                        layout
-                    };
-
-                descriptor_set_layouts.push(layout);
-            }
-        }
-        // (pipeline_layouts field was removed, descriptor layouts are stored in PhysicalPipeline)
-
-        // Push Constants from reflection
-        let pc_ranges: Vec<vk::PushConstantRange> = desc
-            .shader_module
-            .reflection
-            .push_constants
-            .iter()
-            .map(|pc| vk::PushConstantRange {
-                stage_flags: crate::convert::convert_shader_stage_flags(
-                    ShaderStageFlags::from_bits_truncate(pc.stage_flags.bits()),
-                ),
-                offset: pc.offset,
-                size: pc.size,
-            })
-            .collect();
-
-        let layout_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(&descriptor_set_layouts)
-            .push_constant_ranges(&pc_ranges);
-
-        let pipeline_layout =
-            unsafe { device.handle.create_pipeline_layout(&layout_info, None) }.unwrap();
-
-        // 6. Dynamic Rendering Info
-        let mut color_formats = Vec::new();
-        for rt in &desc.render_targets.color_targets {
-            color_formats.push(convert_format(rt.format));
-        }
-
-        let depth_format = desc
-            .render_targets
-            .depth_stencil_format
-            .map(|f| convert_format(f))
-            .unwrap_or(vk::Format::UNDEFINED);
-
-        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&color_formats)
-            .depth_attachment_format(depth_format);
-
-        debug!(
-            "Pipeline {:?} formats: color={:?}, depth={:?}",
-            id, color_formats, depth_format
-        );
-
-        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(desc.depth_stencil_state.depth_test_enable)
-            .depth_write_enable(desc.depth_stencil_state.depth_write_enable)
-            .depth_compare_op(convert_compare_op(
-                desc.depth_stencil_state.depth_compare_op,
-            ))
-            .depth_bounds_test_enable(desc.depth_stencil_state.depth_bounds_test_enable)
-            .stencil_test_enable(desc.depth_stencil_state.stencil_test_enable)
-            .front(convert_stencil_op_state(&desc.depth_stencil_state.front))
-            .back(convert_stencil_op_state(&desc.depth_stencil_state.back))
-            .min_depth_bounds(desc.depth_stencil_state.min_depth_bounds)
-            .max_depth_bounds(desc.depth_stencil_state.max_depth_bounds);
-
-        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
-            .vertex_input_state(&vertex_input)
-            .input_assembly_state(&input_assembly)
-            .viewport_state(&viewport)
-            .rasterization_state(&rasterization)
-            .multisample_state(&multisample)
-            .depth_stencil_state(&depth_stencil)
-            .color_blend_state(&color_blend)
-            .tessellation_state(&tessellation)
-            .dynamic_state(&dynamic_state)
-            .layout(pipeline_layout)
-            .push_next(&mut rendering_info);
-
-        let pipeline = unsafe {
-            device.handle.create_graphics_pipelines(
-                vk::PipelineCache::null(),
-                &[pipeline_info],
-                None,
-            )
-        }
-        .expect("Pipeline creation failed")[0];
-
-        // Create PhysicalPipeline struct
-        let physical = PhysicalPipeline {
-            handle: pipeline,
-            layout: pipeline_layout,
-            bind_point: vk::PipelineBindPoint::GRAPHICS,
-            set_layouts: descriptor_set_layouts,
-            pushable_sets_mask,
-            physical_id: 0,
-        };
-
-        let physical_handle = self.pipeline_resources.insert(physical);
-        self.pipeline_resources
-            .get_mut(physical_handle)
-            .unwrap()
-            .physical_id = physical_handle;
-        BackendPipeline(physical_handle)
+        crate::pipeline_cache::create_graphics_pipeline(self, desc)
     }
 
     fn create_compute_pipeline(&mut self, desc: &ComputePipelineCreateInfo) -> BackendPipeline {
-        let device = self.get_device().clone();
-        let _id = self.next_id();
-        debug!("Creating Compute Pipeline");
-        use crate::convert::*;
-
-        // 1. Create Shader Module
-        let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
-            std::slice::from_raw_parts(
-                desc.shader_module.bytecode.as_ptr() as *const u32,
-                desc.shader_module.bytecode.len() / 4,
-            )
-        });
-
-        let module = unsafe { device.handle.create_shader_module(&create_info, None) }
-            .expect("Shader module creation failed");
-        self.shader_modules.push(module);
-
-        // Compute has exactly one stage
-        let entry_point =
-            std::ffi::CString::new(desc.shader_module.stages[0].entry_point.as_str()).unwrap();
-        let stage_info = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(module)
-            .name(&entry_point);
-
-        // 2. Layout
-        let mut set_bindings: HashMap<u32, Vec<vk::DescriptorSetLayoutBinding>> = HashMap::new();
-        for binding in &desc.shader_module.reflection.bindings {
-            let descriptor_type = convert_binding_type_to_descriptor(binding.binding_type.clone());
-            let stage_flags = vk::ShaderStageFlags::COMPUTE;
-
-            let vk_binding = vk::DescriptorSetLayoutBinding::default()
-                .binding(binding.binding)
-                .descriptor_type(descriptor_type)
-                .descriptor_count(binding.count)
-                .stage_flags(stage_flags);
-
-            set_bindings
-                .entry(binding.set)
-                .or_default()
-                .push(vk_binding);
-        }
-
-        let mut descriptor_set_layouts = Vec::new();
-        let mut pushable_sets_mask = 0;
-        if !set_bindings.is_empty() {
-            let max_set = *set_bindings.keys().max().unwrap();
-            for i in 0..=max_set {
-                let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
-                let mut binding_flags_info =
-                    vk::DescriptorSetLayoutBindingFlagsCreateInfo::default();
-                let mut binding_flags = Vec::with_capacity(bindings.len());
-                for b in bindings {
-                    if b.descriptor_count >= 1000 || b.descriptor_count == 0 {
-                        binding_flags.push(
-                            vk::DescriptorBindingFlags::PARTIALLY_BOUND
-                                | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-                        );
-                    } else {
-                        binding_flags.push(vk::DescriptorBindingFlags::empty());
-                    }
-                }
-
-                binding_flags_info = binding_flags_info.binding_flags(&binding_flags);
-
-                let mut layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-                    .bindings(bindings)
-                    .push_next(&mut binding_flags_info);
-
-                // Enable Push Descriptors for Set 0 (implied by backend requirement)
-                if i == 0 {
-                    layout_info =
-                        layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
-                    pushable_sets_mask |= 1 << 0;
-                }
-
-                // If any binding has UPDATE_AFTER_BIND, the set layout itself needs the flag
-                if binding_flags
-                    .iter()
-                    .any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND))
-                {
-                    layout_info.flags |= vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL;
-                }
-
-                let layout =
-                    if i == 2 && self.bindless_set_layout != vk::DescriptorSetLayout::null() {
-                        self.bindless_set_layout
-                    } else {
-                        let layout = unsafe {
-                            device
-                                .handle
-                                .create_descriptor_set_layout(&layout_info, None)
-                                .expect("Failed to create descriptor set layout")
-                        };
-                        self.descriptor_set_layouts.push(layout); // Track for cleanup
-                        layout
-                    };
-
-                descriptor_set_layouts.push(layout);
-            }
-        }
-
-        // (pipeline_layouts field was removed, descriptor layouts are stored in PhysicalPipeline)
-
-        let pc_ranges: Vec<vk::PushConstantRange> = desc
-            .shader_module
-            .reflection
-            .push_constants
-            .iter()
-            .map(|pc| vk::PushConstantRange {
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
-                offset: pc.offset,
-                size: pc.size,
-            })
-            .collect();
-
-        let layout_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(&descriptor_set_layouts)
-            .push_constant_ranges(&pc_ranges);
-
-        let pipeline_layout =
-            unsafe { device.handle.create_pipeline_layout(&layout_info, None) }.unwrap();
-
-        // 3. Pipeline
-        let pipeline_info = vk::ComputePipelineCreateInfo::default()
-            .stage(stage_info)
-            .layout(pipeline_layout);
-
-        let pipeline = unsafe {
-            device.handle.create_compute_pipelines(
-                vk::PipelineCache::null(),
-                &[pipeline_info],
-                None,
-            )
-        }
-        .expect("Compute pipeline creation failed")[0];
-
-        // Create PhysicalPipeline struct
-        let physical = PhysicalPipeline {
-            handle: pipeline,
-            layout: pipeline_layout,
-            bind_point: vk::PipelineBindPoint::COMPUTE,
-            set_layouts: descriptor_set_layouts,
-            pushable_sets_mask,
-            physical_id: 0,
-        };
-
-        let handle = self.pipeline_resources.insert(physical);
-        self.pipeline_resources.get_mut(handle).unwrap().physical_id = handle;
-        BackendPipeline(handle)
+        crate::pipeline_cache::create_compute_pipeline(self, desc)
     }
 
     fn upload_buffer(
@@ -2091,50 +1436,20 @@ impl RenderBackend for VulkanBackend {
         set: u64,
         binding: u32,
     ) {
-        let physical = self.resolve_image(texture);
-        self.update_bindless_texture_raw(physical, sampler, index, set, binding);
+        crate::descriptors::update_bindless_texture(self, texture, sampler, index, set, binding);
     }
 
     fn update_bindless_texture_raw(
         &mut self,
         texture: BackendImage,
-        _sampler: SamplerHandle,
+        sampler: SamplerHandle,
         index: u32,
         set: u64,
         binding: u32,
     ) {
-        let vk_set = if let Some(s) = self.descriptor_sets.lock().unwrap().get(set as u64) {
-            *s
-        } else {
-            error!("Descriptor set (bindless) not found: {}", set);
-            return;
-        };
-
-        if let Some(img) = self.images.get(texture.0) {
-            let image_info = vk::DescriptorImageInfo {
-                sampler: vk::Sampler::null(),
-                image_view: img.view,
-                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            };
-
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(vk_set)
-                .dst_binding(binding)
-                .dst_array_element(index)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&image_info));
-
-            unsafe {
-                self.get_device()
-                    .handle
-                    .update_descriptor_sets(std::slice::from_ref(&write), &[]);
-            }
-        } else {
-            error!(
-                "Physical image not found for bindless update: {:?}",
-                texture.0
-            );
-        }
+        crate::descriptors::update_bindless_texture_raw(
+            self, texture, sampler, index, set, binding,
+        );
     }
 
     #[cfg(debug_assertions)]
@@ -2172,296 +1487,27 @@ impl RenderBackend for VulkanBackend {
 
 impl RenderBackendInternal for VulkanBackend {
     fn begin_frame(&mut self) {
-        if self.frame_started {
-            return;
-        }
-
-        let device = self.get_device().clone();
-        self.global_frame_index = (self.global_frame_index + 1) % self.frame_contexts.len();
-        self.frame_count += 1;
-        self.cpu_timeline += 1;
-
-        let ctx = &mut self.frame_contexts[self.global_frame_index];
-
-        // Wait for this frame slot to be ready
-        if ctx.last_completion_value > 0 {
-            let semaphores = [self.timeline_sem];
-            let values = [ctx.last_completion_value];
-            let wait_info = vk::SemaphoreWaitInfo::default()
-                .semaphores(&semaphores)
-                .values(&values);
-            unsafe {
-                device
-                    .handle
-                    .wait_semaphores(&wait_info, u64::MAX)
-                    .expect("Failed to wait for frame timeline");
-            }
-        }
-
-        // Reset the pools for this frame
-        unsafe {
-            device
-                .handle
-                .reset_command_pool(ctx.command_pool, vk::CommandPoolResetFlags::empty())
-                .expect("Failed to reset command pool");
-            device
-                .handle
-                .reset_descriptor_pool(ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
-                .expect("Failed to reset descriptor pool");
-
-            for tp_mutex in &ctx.per_thread_pools {
-                let mut tp = tp_mutex.lock().unwrap();
-                device
-                    .handle
-                    .reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
-                    .expect("Failed to reset thread command pool");
-                tp.cursor = 0;
-            }
-        }
-
-        ctx.cursor = 0;
-        ctx.submitted_cursor = 0;
-        self.frame_started = true;
+        crate::submission::begin_frame(self);
     }
 
     fn end_frame(&mut self) {
-        self.garbage_collect();
-        self.frame_started = false;
+        crate::submission::end_frame(self);
     }
 
     fn acquire_swapchain_image(
         &mut self,
         window: WindowHandle,
     ) -> Result<Option<(BackendImage, u64, u32)>, String> {
-        let device = self.get_device().clone();
-        let frame_slot = self.global_frame_index;
-
-        loop {
-            let (sc_handle, acquire_sem_id, semaphore) = {
-                let ctx = self
-                    .windows
-                    .get_mut(&window.0)
-                    .ok_or("Invalid window handle")?;
-                let size = ctx.raw.handle.drawable_size();
-                if size.0 == 0 || size.1 == 0 {
-                    return Ok(None);
-                }
-
-                if ctx.swapchain.is_none() {
-                    let sc_res = crate::swapchain::VulkanSwapchain::new(
-                        device.clone(),
-                        ctx.raw.surface,
-                        size.0,
-                        size.1,
-                        ctx.config,
-                    );
-
-                    match sc_res {
-                        Ok(sc) => ctx.swapchain = Some(sc),
-                        Err(e) if e == "ZeroExtent" => return Ok(None),
-                        Err(e) => return Err(e),
-                    }
-                }
-
-                let swapchain = ctx.swapchain.as_ref().unwrap();
-                let sem_id =
-                    ctx.acquire_semaphore_ids[frame_slot % ctx.acquire_semaphore_ids.len()];
-                let sem = ctx.acquire_semaphores[frame_slot % ctx.acquire_semaphores.len()];
-
-                (swapchain.handle, sem_id, sem)
-            };
-
-            let fp = self.swapchain_loader.as_ref().unwrap();
-            let res =
-                unsafe { fp.acquire_next_image(sc_handle, u64::MAX, semaphore, vk::Fence::null()) };
-
-            match res {
-                Ok((index, suboptimal)) => {
-                    if suboptimal {
-                        debug!("Swapchain is suboptimal, invalidating for recreation");
-                        let images_to_remove = {
-                            let ctx = self.windows.get_mut(&window.0).unwrap();
-                            let sc = ctx.swapchain.take().unwrap();
-                            let imgs = sc.images.clone();
-                            ctx.swapchain = Some(sc); // Put it back if we still want to use it
-                            imgs
-                        };
-                        unsafe {
-                            self.get_device().handle.device_wait_idle().ok();
-                        }
-                        self.unregister_swapchain_images(&images_to_remove);
-                        let ctx = self.windows.get_mut(&window.0).unwrap();
-                        ctx.swapchain = None;
-                    }
-
-                    let ctx = self.windows.get_mut(&window.0).unwrap();
-                    let swapchain = ctx.swapchain.as_ref().unwrap();
-                    ctx.current_acquire_sem_id = Some(acquire_sem_id);
-                    ctx.current_image_index = Some(index);
-
-                    let image_raw = swapchain.images[index as usize];
-                    let image_id = image_raw.as_raw();
-                    let arena_id = if let Some(&id) = self.external_to_physical.get(&image_id) {
-                        if let Some(img) = self.images.get_mut(id) {
-                            img.last_layout = vk::ImageLayout::UNDEFINED;
-                            img.last_access = vk::AccessFlags2::empty();
-                            img.last_stage = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
-                        }
-                        id
-                    } else {
-                        let view_raw = swapchain.image_views[index as usize];
-                        let new_id = self.images.insert(PhysicalImage {
-                            image: image_raw,
-                            view: view_raw,
-                            allocation: None,
-                            desc: ImageDesc::new(
-                                swapchain.extent.width,
-                                swapchain.extent.height,
-                                crate::convert::convert_vk_format(swapchain.format),
-                            ),
-                            format: swapchain.format,
-                            last_layout: vk::ImageLayout::UNDEFINED,
-                            last_access: vk::AccessFlags2::empty(),
-                            last_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                            last_write_frame: 0,
-                        });
-                        self.external_to_physical.insert(image_id, new_id);
-                        new_id
-                    };
-
-                    return Ok(Some((BackendImage(arena_id), acquire_sem_id, index)));
-                }
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                    debug!("Swapchain out of date during acquire, invalidating...");
-                    let images_to_remove = {
-                        let ctx = self.windows.get_mut(&window.0).unwrap();
-                        if let Some(sc) = ctx.swapchain.take() {
-                            sc.images.clone()
-                        } else {
-                            Vec::new()
-                        }
-                    };
-                    unsafe {
-                        self.get_device().handle.device_wait_idle().ok();
-                    }
-                    self.unregister_swapchain_images(&images_to_remove);
-                    continue; // Loop and recreate
-                }
-                Err(e) => {
-                    return Err(format!("Failed to acquire swapchain image: {}", e));
-                }
-            }
-        }
+        crate::submission::acquire_swapchain_image(self, window)
     }
 
     fn submit(
         &mut self,
         batch: CommandBatch,
-        _wait_sems: &[u64],
-        _signal_sems: &[u64],
+        wait_sems: &[u64],
+        signal_sems: &[u64],
     ) -> Result<u64, String> {
-        // Timeline advancement
-        self.cpu_timeline += 1;
-        let signal_value = self.cpu_timeline;
-
-        // Collect all binary semaphores from windows that acquired images
-        // 1. Collect Active Window Contexts (Borrow scope)
-        let mut active_windows = Vec::with_capacity(2);
-        let frame_slot = self.global_frame_index;
-        for ctx in self.windows.values_mut() {
-            if let (Some(a_id), Some(i)) = (
-                ctx.current_acquire_sem_id.take(),
-                ctx.current_image_index.take(),
-            ) {
-                let release_sem = ctx.present_semaphores[frame_slot % ctx.present_semaphores.len()];
-                let acquire_sem = self.semaphores.get(a_id).cloned().unwrap();
-                active_windows.push((
-                    ctx.swapchain.as_ref().unwrap().handle,
-                    i,
-                    acquire_sem,
-                    release_sem,
-                ));
-            }
-        }
-
-        // 2. Process Binary Semaphores (Outside borrow scope)
-        let mut wait_binary: Vec<vk::Semaphore> = Vec::with_capacity(active_windows.len());
-        let mut signal_binary: Vec<vk::Semaphore> = Vec::with_capacity(active_windows.len());
-        let mut present_info = Vec::with_capacity(active_windows.len());
-
-        for (sc_handle, image_index, acquire_sem, release_sem) in active_windows {
-            wait_binary.push(acquire_sem);
-            signal_binary.push(release_sem);
-            present_info.push((sc_handle, image_index, release_sem));
-        }
-
-        let device = self.get_device().clone();
-
-        let wait_values = [0u64; 8];
-        let mut signal_values = [0u64; 8];
-        signal_values[0] = signal_value;
-
-        let num_binary = signal_binary.len();
-        let mut all_signals = Vec::with_capacity(num_binary + 1);
-        all_signals.push(self.timeline_sem);
-        all_signals.extend(&signal_binary);
-
-        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; 8];
-
-        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(&wait_values[..wait_binary.len()])
-            .signal_semaphore_values(&signal_values[..all_signals.len()]);
-
-        let submit_info = vk::SubmitInfo::default()
-            .push_next(&mut timeline_info)
-            .wait_semaphores(&wait_binary)
-            .wait_dst_stage_mask(&wait_stages[..wait_binary.len()])
-            .signal_semaphores(&all_signals);
-
-        // Collect all command buffers: Batch + any legacy main pool recordings
-        let mut cmds: Vec<vk::CommandBuffer> = batch
-            .command_buffers
-            .iter()
-            .map(|cb| unsafe { std::mem::transmute::<u64, vk::CommandBuffer>(cb.0) })
-            .collect();
-
-        let frame_ctx = &mut self.frame_contexts[self.global_frame_index];
-        let legacy_cmds =
-            &frame_ctx.allocated_command_buffers[frame_ctx.submitted_cursor..frame_ctx.cursor];
-        cmds.extend_from_slice(legacy_cmds);
-
-        let submit_info = submit_info.command_buffers(&cmds);
-
-        unsafe {
-            device
-                .handle
-                .queue_submit(device.graphics_queue, &[submit_info], vk::Fence::null())
-                .map_err(|e| e.to_string())?;
-        }
-
-        // Update submitted_cursor to current cursor
-        frame_ctx.submitted_cursor = frame_ctx.cursor;
-
-        // Present all windows
-        let fp = self.swapchain_loader.as_ref().unwrap();
-        for (swapchain, index, wait_sem) in present_info {
-            let swapchains = [swapchain];
-            let indices = [index];
-            let wait_sems = [wait_sem];
-            let present_info = vk::PresentInfoKHR::default()
-                .wait_semaphores(&wait_sems)
-                .swapchains(&swapchains)
-                .image_indices(&indices);
-
-            unsafe {
-                fp.queue_present(device.graphics_queue, &present_info).ok(); // Presentation errors handled on next acquire
-            }
-        }
-
-        // Advance slot's last completion value
-        frame_ctx.last_completion_value = signal_value;
-
-        Ok(signal_value)
+        crate::submission::submit(self, batch, wait_sems, signal_sems)
     }
 
     type PreparedPass = VulkanPreparedPass;
@@ -2871,7 +1917,6 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         pass.execute(&mut ctx);
-        
 
         if !is_compute {
             if let PreparedDomain::Graphics {
@@ -2953,203 +1998,11 @@ impl RenderBackendInternal for VulkanBackend {
         pipeline: PipelineHandle,
         set_index: u32,
     ) -> Result<DescriptorSetHandle, String> {
-        let pipeline_id = pipeline.0.0;
-        let layout = {
-            let p = self
-                .pipeline_resources
-                .get(pipeline_id)
-                .ok_or_else(|| format!("Pipeline layout not found for {:?}", pipeline))?;
-
-            if set_index as usize >= p.set_layouts.len() {
-                return Err(format!(
-                    "Set index {} out of bounds for pipeline {:?}",
-                    set_index, pipeline
-                ));
-            }
-            p.set_layouts[set_index as usize]
-        };
-
-        let layouts_to_alloc = [layout];
-        let pool = self.static_descriptor_pool;
-        let alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(pool)
-            .set_layouts(&layouts_to_alloc);
-
-        let mut arena = self.descriptor_sets.lock().unwrap();
-
-        let sets = unsafe {
-            self.get_device()
-                .handle
-                .allocate_descriptor_sets(&alloc_info)
-                .map_err(|e| format!("Failed to allocate descriptor set: {}", e))?
-        };
-
-        let set = sets[0];
-        let handle_id = arena.insert(set);
-
-        Ok(DescriptorSetHandle(handle_id))
+        crate::descriptors::allocate_descriptor_set(self, pipeline, set_index)
     }
 
     fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]) {
-        let vk_set = if let Some(s) = self.descriptor_sets.lock().unwrap().get(set.0) {
-            *s
-        } else {
-            error!("Descriptor set not found: {:?}", set);
-            return;
-        };
-
-        // We need to keep the structures alive until the call to update_descriptor_sets
-        // But `vk::WriteDescriptorSet` holds references.
-        // We iterate and build vectors.
-
-        let mut descriptor_writes = Vec::new();
-        let mut buffer_infos = Vec::new(); // Store infos to keep alive
-        let mut image_infos = Vec::new();
-
-        // Pass 1: Create Info structures
-        for write in writes {
-            match write.descriptor_type {
-                i3_gfx::graph::pipeline::BindingType::UniformBuffer
-                | i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
-                    if let Some(info) = &write.buffer_info {
-                        let physical_id = self.resolve_buffer(info.buffer).0;
-                        if let Some(buf) = self.buffers.get(physical_id) {
-                            buffer_infos.push(vk::DescriptorBufferInfo {
-                                buffer: buf.buffer,
-                                offset: info.offset,
-                                range: if info.range == 0 {
-                                    vk::WHOLE_SIZE
-                                } else {
-                                    info.range
-                                },
-                            });
-                        }
-                    }
-                }
-                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler
-                | i3_gfx::graph::pipeline::BindingType::Texture
-                | i3_gfx::graph::pipeline::BindingType::StorageTexture
-                | i3_gfx::graph::pipeline::BindingType::Sampler => {
-                    if let Some(info) = &write.image_info {
-                        // Resolve Image View
-                        // We need `image_views` map, but it's keyed by physical ID.
-                        // `info.image` is a logical handle.
-                        // We first convert logical -> physical
-                        let physical_id =
-                            if let Some(&phy) = self.external_to_physical.get(&info.image.0.0) {
-                                phy
-                            } else {
-                                info.image.0.0
-                            };
-
-                        if let Some(img) = self.images.get(physical_id) {
-                            let layout = match info.image_layout {
-                                i3_gfx::graph::backend::DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
-                                i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            };
-
-                            let vk_sampler = if let Some(sampler_handle) = info.sampler {
-                                self.samplers
-                                    .get(sampler_handle.0)
-                                    .cloned()
-                                    .unwrap_or(vk::Sampler::null())
-                            } else {
-                                vk::Sampler::null()
-                            };
-
-                            image_infos.push(vk::DescriptorImageInfo {
-                                sampler: vk_sampler,
-                                image_view: img.view,
-                                image_layout: layout,
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Pass 2: Create WriteDescriptorSet
-        let mut buf_idx = 0;
-        let mut img_idx = 0;
-
-        for write in writes {
-            let mut vk_write = vk::WriteDescriptorSet::default()
-                .dst_set(vk_set)
-                .dst_binding(write.binding)
-                .dst_array_element(write.array_element);
-
-            match write.descriptor_type {
-                i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
-                    vk_write = vk_write
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                        .descriptor_count(1);
-                    if buf_idx < buffer_infos.len() {
-                        vk_write = vk_write.buffer_info(&buffer_infos[buf_idx..=buf_idx]);
-                        buf_idx += 1;
-                        descriptor_writes.push(vk_write);
-                    }
-                }
-                i3_gfx::graph::pipeline::BindingType::StorageBuffer => {
-                    vk_write = vk_write
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .descriptor_count(1);
-                    if buf_idx < buffer_infos.len() {
-                        vk_write = vk_write.buffer_info(&buffer_infos[buf_idx..=buf_idx]);
-                        buf_idx += 1;
-                        descriptor_writes.push(vk_write);
-                    }
-                }
-                i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
-                    vk_write = vk_write
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count(1);
-                    if img_idx < image_infos.len() {
-                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
-                        img_idx += 1;
-                        descriptor_writes.push(vk_write);
-                    }
-                }
-                i3_gfx::graph::pipeline::BindingType::Texture => {
-                    // Sampled Image
-                    vk_write = vk_write
-                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                        .descriptor_count(1);
-                    if img_idx < image_infos.len() {
-                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
-                        img_idx += 1;
-                        descriptor_writes.push(vk_write);
-                    }
-                }
-                i3_gfx::graph::pipeline::BindingType::StorageTexture => {
-                    vk_write = vk_write
-                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                        .descriptor_count(1);
-                    if img_idx < image_infos.len() {
-                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
-                        img_idx += 1;
-                        descriptor_writes.push(vk_write);
-                    }
-                }
-                i3_gfx::graph::pipeline::BindingType::Sampler => {
-                    vk_write = vk_write
-                        .descriptor_type(vk::DescriptorType::SAMPLER)
-                        .descriptor_count(1);
-                    if img_idx < image_infos.len() {
-                        vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
-                        img_idx += 1;
-                        descriptor_writes.push(vk_write);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        unsafe {
-            self.get_device()
-                .handle
-                .update_descriptor_sets(&descriptor_writes, &[]);
-        }
+        crate::descriptors::update_descriptor_set(self, set, writes);
     }
 }
 impl Drop for VulkanBackend {
@@ -3271,220 +2124,7 @@ impl Drop for VulkanBackend {
         }
     }
 }
-
-pub struct VulkanPassContext {
-    pub cmd: vk::CommandBuffer,
-    pub device: Arc<crate::device::VulkanDevice>,
-    pub present_request: Option<ImageHandle>,
-    pub backend: *mut VulkanBackend,
-    pub pipeline: Option<PhysicalPipeline>,
-    pub descriptor_pool: vk::DescriptorPool,
-    pub current_pipeline_layout: vk::PipelineLayout,
-    pub current_bind_point: vk::PipelineBindPoint,
-    pub pending_descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
-}
-
-impl VulkanPassContext {
-    pub fn backend(&self) -> &VulkanBackend {
-        unsafe { &*self.backend }
-    }
-
-    pub fn backend_mut(&mut self) -> &mut VulkanBackend {
-        unsafe { &mut *self.backend }
-    }
-
-    pub fn flush_descriptors(&mut self) {
-        if self.pending_descriptor_sets.is_empty() {
-            return;
-        }
-
-        let pipe = if let Some(p) = &self.pipeline {
-            p.clone()
-        } else {
-            return;
-        };
-
-        let sets = std::mem::take(&mut self.pending_descriptor_sets);
-        let cmd = self.cmd;
-
-        for (set_index, writes) in sets {
-            if (pipe.pushable_sets_mask & (1 << set_index)) != 0 {
-                // Push Descriptor Path
-                let mut buffer_infos = Vec::with_capacity(writes.len());
-                let mut image_infos = Vec::with_capacity(writes.len());
-
-                // Pass 1: Resolve and collect infos
-                for write in writes.iter() {
-                    match write.descriptor_type {
-                        i3_gfx::graph::pipeline::BindingType::UniformBuffer
-                        | i3_gfx::graph::pipeline::BindingType::StorageBuffer
-                        | i3_gfx::graph::pipeline::BindingType::RawBuffer
-                        | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
-                            if let Some(info) = &write.buffer_info {
-                                let pid = self.backend().resolve_buffer(info.buffer).0;
-                                if let Some(buf) = self.backend().buffers.get(pid) {
-                                    buffer_infos.push(vk::DescriptorBufferInfo {
-                                        buffer: buf.buffer,
-                                        offset: info.offset,
-                                        range: if info.range == 0 {
-                                            vk::WHOLE_SIZE
-                                        } else {
-                                            info.range
-                                        },
-                                    });
-                                }
-                            }
-                        }
-                        i3_gfx::graph::pipeline::BindingType::CombinedImageSampler
-                        | i3_gfx::graph::pipeline::BindingType::Texture
-                        | i3_gfx::graph::pipeline::BindingType::StorageTexture
-                        | i3_gfx::graph::pipeline::BindingType::Sampler => {
-                            if let Some(info) = &write.image_info {
-                                let pid = self.backend().resolve_image(info.image).0;
-                                if let Some(img) = self.backend().images.get(pid) {
-                                    let layout = match info.image_layout {
-                                        i3_gfx::graph::backend::DescriptorImageLayout::General => {
-                                            vk::ImageLayout::GENERAL
-                                        }
-                                        i3_gfx::graph::backend::DescriptorImageLayout::ShaderReadOnlyOptimal => {
-                                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-                                        }
-                                    };
-                                    let vk_sampler = if let Some(sampler_handle) = info.sampler {
-                                        self.backend()
-                                            .samplers
-                                            .get(sampler_handle.0)
-                                            .cloned()
-                                            .unwrap_or(vk::Sampler::null())
-                                    } else {
-                                        vk::Sampler::null()
-                                    };
-                                    image_infos.push(vk::DescriptorImageInfo {
-                                        sampler: vk_sampler,
-                                        image_view: img.view,
-                                        image_layout: layout,
-                                    });
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Pass 2: Build writes
-                let mut descriptor_writes = Vec::with_capacity(writes.len());
-                let mut buf_ptr = 0;
-                let mut img_ptr = 0;
-
-                for write in writes.iter() {
-                    let mut vk_write = vk::WriteDescriptorSet::default()
-                        .dst_binding(write.binding)
-                        .dst_array_element(write.array_element)
-                        .descriptor_count(1);
-
-                    match write.descriptor_type {
-                        i3_gfx::graph::pipeline::BindingType::UniformBuffer => {
-                            if buf_ptr < buffer_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                                    .buffer_info(std::slice::from_ref(&buffer_infos[buf_ptr]));
-                                buf_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        i3_gfx::graph::pipeline::BindingType::StorageBuffer
-                        | i3_gfx::graph::pipeline::BindingType::RawBuffer
-                        | i3_gfx::graph::pipeline::BindingType::MutableRawBuffer => {
-                            if buf_ptr < buffer_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                                    .buffer_info(std::slice::from_ref(&buffer_infos[buf_ptr]));
-                                buf_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        i3_gfx::graph::pipeline::BindingType::CombinedImageSampler => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        i3_gfx::graph::pipeline::BindingType::Texture => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        i3_gfx::graph::pipeline::BindingType::Sampler => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        i3_gfx::graph::pipeline::BindingType::StorageTexture => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                unsafe {
-                    self.device.push_descriptor.cmd_push_descriptor_set(
-                        cmd,
-                        pipe.bind_point,
-                        pipe.layout,
-                        set_index,
-                        &descriptor_writes,
-                    );
-                }
-            } else {
-                // Pool Path
-                let layout = {
-                    let p = self
-                        .backend()
-                        .pipeline_resources
-                        .get(pipe.physical_id)
-                        .unwrap();
-                    p.set_layouts[set_index as usize]
-                };
-
-                let layouts_to_alloc = [layout];
-                let alloc_info = vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(self.descriptor_pool)
-                    .set_layouts(&layouts_to_alloc);
-
-                let set = unsafe {
-                    self.device
-                        .handle
-                        .allocate_descriptor_sets(&alloc_info)
-                        .expect("Failed to allocate per-frame descriptor set")
-                }[0];
-
-                let backend = self.backend_mut();
-                let handle_id = backend.descriptor_sets.lock().unwrap().insert(set);
-                let set_handle = DescriptorSetHandle(handle_id);
-
-                backend.update_descriptor_set(set_handle, &writes);
-                self.bind_descriptor_set(set_index, set_handle);
-            }
-        }
-    }
-}
+use crate::commands::VulkanPassContext;
 
 impl VulkanBackend {
     pub fn create_semaphore_internal(&mut self) -> Result<(vk::Semaphore, u64), String> {
@@ -3508,311 +2148,11 @@ impl VulkanBackend {
         }
     }
 
-    fn unregister_swapchain_images(&mut self, images: &[vk::Image]) {
+    pub(crate) fn unregister_swapchain_images(&mut self, images: &[vk::Image]) {
         for &image in images {
             let vk_handle = image.as_raw();
             if let Some(arena_id) = self.external_to_physical.remove(&vk_handle) {
                 self.images.remove(arena_id);
-            }
-        }
-    }
-}
-
-impl PassContext for VulkanPassContext {
-    fn bind_pipeline(&mut self, pipeline: PipelineHandle) {
-        let p = if let Some(p) = self.backend().pipeline_resources.get(pipeline.0.0) {
-            p.clone()
-        } else {
-            return;
-        };
-
-        unsafe {
-            self.device
-                .handle
-                .cmd_bind_pipeline(self.cmd, p.bind_point, p.handle);
-        }
-        self.pipeline = Some(p.clone());
-        self.current_pipeline_layout = p.layout;
-        self.current_bind_point = p.bind_point;
-
-        self.flush_descriptors();
-    }
-
-    fn bind_pipeline_raw(&mut self, pipeline: BackendPipeline) {
-        let p = if let Some(p) = self.backend().pipeline_resources.get(pipeline.0) {
-            p.clone()
-        } else {
-            return;
-        };
-
-        unsafe {
-            self.device
-                .handle
-                .cmd_bind_pipeline(self.cmd, p.bind_point, p.handle);
-        }
-        self.pipeline = Some(p.clone());
-        self.current_pipeline_layout = p.layout;
-        self.current_bind_point = p.bind_point;
-
-        self.flush_descriptors();
-    }
-
-    fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
-        let physical_id = if let Some(&phy) = self.backend().external_buffer_to_physical.get(&handle.0.0) {
-            phy
-        } else {
-            handle.0.0
-        };
-
-        if let Some(buf) = self.backend().buffers.get(physical_id) {
-            unsafe {
-                self.device
-                    .handle
-                    .cmd_bind_vertex_buffers(self.cmd, binding, &[buf.buffer], &[0]);
-            }
-        }
-    }
-
-    fn bind_index_buffer(&mut self, handle: BufferHandle, index_type: IndexType) {
-        let physical_id = if let Some(&phy) = self.backend().external_buffer_to_physical.get(&handle.0.0) {
-            phy
-        } else {
-            handle.0.0
-        };
-
-        if let Some(buf) = self.backend().buffers.get(physical_id) {
-            let vk_type = match index_type {
-                IndexType::Uint16 => vk::IndexType::UINT16,
-                IndexType::Uint32 => vk::IndexType::UINT32,
-            };
-            unsafe {
-                self.device
-                    .handle
-                    .cmd_bind_index_buffer(self.cmd, buf.buffer, 0, vk_type);
-            }
-        }
-    }
-
-    fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle) {
-        if let Some(set) = self.backend().descriptor_sets.lock().unwrap().get(handle.0) {
-            unsafe {
-                self.device.handle.cmd_bind_descriptor_sets(
-                    self.cmd,
-                    self.current_bind_point,
-                    self.current_pipeline_layout,
-                    set_index,
-                    &[*set],
-                    &[],
-                );
-            }
-        }
-    }
-
-    fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
-        // Engine Convention: Vulkan uses Negative Viewport to flip Y-Up → Y-Down.
-        // (see engine_conventions.md §2). The caller passes logical (Y-Up) values;
-        // the backend transparently applies the flip.
-        let viewport = vk::Viewport {
-            x,
-            y: y + height,
-            width,
-            height: -height,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        unsafe {
-            self.device
-                .handle
-                .cmd_set_viewport(self.cmd, 0, &[viewport]);
-        }
-    }
-
-    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32) {
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x, y },
-            extent: vk::Extent2D { width, height },
-        };
-        unsafe {
-            self.device.handle.cmd_set_scissor(self.cmd, 0, &[scissor]);
-        }
-    }
-
-    fn draw(&mut self, vertex_count: u32, first_vertex: u32) {
-        unsafe {
-            self.device
-                .handle
-                .cmd_draw(self.cmd, vertex_count, 1, first_vertex, 0);
-        }
-    }
-
-    fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32) {
-        unsafe {
-            self.device.handle.cmd_draw_indexed(
-                self.cmd,
-                index_count,
-                1,
-                first_index,
-                vertex_offset,
-                0,
-            );
-        }
-    }
-
-    fn push_bytes(
-        &mut self,
-        stages: i3_gfx::graph::pipeline::ShaderStageFlags,
-        offset: u32,
-        data: &[u8],
-    ) {
-        unsafe {
-            self.device.handle.cmd_push_constants(
-                self.cmd,
-                self.current_pipeline_layout,
-                crate::convert::convert_shader_stage_flags(stages),
-                offset,
-                data,
-            );
-        }
-    }
-
-    fn dispatch(&mut self, x: u32, y: u32, z: u32) {
-        unsafe {
-            let device = self.backend().get_device();
-            device.handle.cmd_dispatch(self.cmd, x, y, z);
-        }
-    }
-
-    fn clear_buffer(&mut self, buffer: i3_gfx::graph::types::BufferHandle, clear_value: u32) {
-        let physical_id = if let Some(&phy) = self.backend().external_buffer_to_physical.get(&buffer.0.0) {
-            phy
-        } else {
-            buffer.0.0
-        };
-
-        if let Some(buf) = self.backend().buffers.get(physical_id) {
-            unsafe {
-                let device = self.backend().get_device();
-                device.handle.cmd_fill_buffer(
-                    self.cmd,
-                    buf.buffer,
-                    0,
-                    ash::vk::WHOLE_SIZE,
-                    clear_value,
-                );
-            }
-
-            // Update state to reflect TRANSFER_WRITE
-            if let Some(buf) = self.backend_mut().buffers.get_mut(physical_id) {
-                buf.last_access = vk::AccessFlags2::TRANSFER_WRITE;
-                buf.last_stage = vk::PipelineStageFlags2::TRANSFER;
-            }
-        }
-    }
-
-    fn present(&mut self, image: i3_gfx::graph::types::ImageHandle) {
-        let physical_id = if let Some(&phy) = self.backend().external_to_physical.get(&image.0.0) {
-            phy
-        } else {
-            image.0.0
-        };
-        self.present_request = Some(i3_gfx::graph::types::ImageHandle(i3_gfx::graph::types::SymbolId(physical_id)));
-    }
-
-    fn copy_buffer(
-        &mut self,
-        src: BufferHandle,
-        dst: BufferHandle,
-        src_offset: u64,
-        dst_offset: u64,
-        size: u64,
-    ) {
-        let src_buf = self.backend().resolve_buffer(src);
-        let dst_buf = self.backend().resolve_buffer(dst);
-
-        let src_vk = self.backend().buffers.get(src_buf.0).unwrap().buffer;
-        let dst_vk = self.backend().buffers.get(dst_buf.0).unwrap().buffer;
-
-        let region = vk::BufferCopy::default()
-            .src_offset(src_offset)
-            .dst_offset(dst_offset)
-            .size(size);
-
-        unsafe {
-            self.device
-                .handle
-                .cmd_copy_buffer(self.cmd, src_vk, dst_vk, &[region]);
-        }
-
-        // Update destination state to reflect TRANSFER_WRITE
-        if let Some(buf) = self.backend_mut().buffers.get_mut(dst_buf.0) {
-            buf.last_access = vk::AccessFlags2::TRANSFER_WRITE;
-            buf.last_stage = vk::PipelineStageFlags2::TRANSFER;
-        }
-    }
-
-    fn map_buffer(&mut self, handle: BufferHandle) -> *mut u8 {
-        let device = self.device.clone();
-        let buf_id = self.backend_mut().resolve_buffer(handle).0;
-        let physical = self.backend_mut().buffers.get_mut(buf_id).unwrap();
-
-        if let Some(alloc) = &mut physical.allocation {
-            let allocator = device.allocator.lock().unwrap();
-            unsafe { allocator.map_memory(alloc).unwrap() }
-        } else {
-            std::ptr::null_mut()
-        }
-    }
-
-    fn create_descriptor_set(
-        &mut self,
-        pipeline: BackendPipeline,
-        set_index: u32,
-        writes: &[DescriptorWrite],
-    ) -> DescriptorSetHandle {
-        let pipeline_id = pipeline.0;
-        let layout = {
-            let p = self
-                .backend()
-                .pipeline_resources
-                .get(pipeline_id)
-                .expect("Pipeline not found");
-            p.set_layouts[set_index as usize]
-        };
-
-        let layouts_to_alloc = [layout];
-        let alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(self.descriptor_pool)
-            .set_layouts(&layouts_to_alloc);
-
-        let set = unsafe {
-            self.device
-                .handle
-                .allocate_descriptor_sets(&alloc_info)
-                .expect("Failed to allocate per-frame descriptor set")
-        }[0];
-
-        let backend = self.backend_mut();
-        let handle_id = backend.descriptor_sets.lock().unwrap().insert(set);
-        let set_handle = DescriptorSetHandle(handle_id);
-
-        backend.update_descriptor_set(set_handle, writes);
-        set_handle
-    }
-
-    fn bind_descriptor_set_raw(&mut self, set_index: u32, handle: u64) {
-        self.bind_descriptor_set(set_index, DescriptorSetHandle(handle));
-    }
-
-    fn unmap_buffer(&mut self, handle: BufferHandle) {
-        let device = self.device.clone();
-        let buf_id = self.backend_mut().resolve_buffer(handle).0;
-        let physical = self.backend_mut().buffers.get_mut(buf_id).unwrap();
-
-        if let Some(alloc) = &mut physical.allocation {
-            let allocator = device.allocator.lock().unwrap();
-            unsafe {
-                let _ = allocator.flush_allocation(alloc, 0, vk::WHOLE_SIZE);
-                allocator.unmap_memory(alloc);
             }
         }
     }
