@@ -1,3 +1,38 @@
+//! # Vulkan Backend - Main Orchestration
+//!
+//! This module is the main entry point for the Vulkan rendering backend.
+//! It orchestrates all the sub-modules and implements the [`RenderBackend`] trait.
+//!
+//! ## Architecture
+//!
+//! The backend is organized into several focused modules:
+//!
+//! - [`resource_arena`]: Generational index system for safe resource handles
+//! - [`sync`]: Barrier management and synchronization
+//! - [`submission`]: Queue submission and timeline semaphores
+//! - [`commands`]: Pass recording and command buffer management
+//! - [`pipeline_cache`]: Pipeline creation and caching
+//! - [`descriptors`]: Bindless descriptor set management
+//! - [`window_context`]: Window and swapchain management
+//! - [`resources`]: Resource creation and destruction
+//! - [`debug`]: Debug labeling and naming
+//!
+//! ## Frame Lifecycle
+//!
+//! ```text
+//! begin_frame() → acquire_swapchain_image() → prepare_pass() → record_pass() → submit() → end_frame()
+//! ```
+//!
+//! ## Resource Management
+//!
+//! Resources are tracked using generational indices ([`ResourceArena`]).
+//! This provides O(1) access and automatic use-after-free detection.
+//!
+//! ## Synchronization
+//!
+//! The backend uses timeline semaphores for CPU-GPU synchronization and
+//! binary semaphores for GPU-GPU synchronization (acquire → render → present).
+
 use ash::vk;
 use ash::vk::Handle;
 use i3_gfx::graph::backend::RenderBackendInternal;
@@ -12,15 +47,22 @@ use tracing::{debug, info};
 use vk_mem::Alloc;
 
 use crate::resource_arena::{PhysicalBuffer, PhysicalImage, PhysicalPipeline, ResourceArena};
+use crate::window_context::WindowContext;
 
-// ...
-
+/// Per-thread command pool for parallel command recording.
+///
+/// Each thread gets its own command pool to avoid synchronization overhead.
+/// The pool is reset at the beginning of each frame.
 pub(crate) struct ThreadCommandPool {
     pub(crate) pool: vk::CommandPool,
     pub(crate) allocated: Vec<vk::CommandBuffer>,
     pub(crate) cursor: usize,
 }
 
+/// Per-frame context for managing command buffers and descriptor pools.
+///
+/// The backend uses multiple frame contexts (typically 2-3) to allow the CPU
+/// to record commands while the GPU is still processing previous frames.
 pub(crate) struct VulkanFrameContext {
     pub(crate) command_pool: vk::CommandPool,
     pub(crate) descriptor_pool: vk::DescriptorPool,
@@ -31,23 +73,7 @@ pub(crate) struct VulkanFrameContext {
     pub(crate) per_thread_pools: Vec<std::sync::Mutex<ThreadCommandPool>>,
 }
 
-pub(crate) struct WindowContext {
-    // Order matters for drop: swapchain must be dropped BEFORE raw (surface)
-    pub(crate) swapchain: Option<crate::swapchain::VulkanSwapchain>,
-    pub(crate) raw: crate::window::VulkanWindow,
-    pub(crate) config: SwapchainConfig,
-    // Semaphores for acquire (per frame in flight)
-    pub(crate) acquire_semaphores: Vec<vk::Semaphore>,
-    pub(crate) acquire_semaphore_ids: Vec<u64>,
-    // Semaphores for present (per frame in flight)
-    pub(crate) present_semaphores: Vec<vk::Semaphore>,
-    #[allow(dead_code)]
-    pub(crate) present_semaphore_ids: Vec<u64>,
-    // Track the current frame's acquire semaphore to pair it with the image
-    pub(crate) current_acquire_sem_id: Option<u64>,
-    pub(crate) current_image_index: Option<u32>,
-}
-
+/// Domain of a prepared pass (graphics, compute, transfer, or CPU).
 pub enum PreparedDomain {
     Graphics {
         color_attachments: [vk::RenderingAttachmentInfo<'static>; 8],
@@ -59,6 +85,10 @@ pub enum PreparedDomain {
     Cpu,
 }
 
+/// Prepared pass ready for recording.
+///
+/// This struct contains all the information needed to record a render pass,
+/// including barriers, attachments, and descriptor sets.
 pub struct VulkanPreparedPass {
     pub name: String,
     pub domain: PreparedDomain,
@@ -72,6 +102,14 @@ pub struct VulkanPreparedPass {
 unsafe impl Send for VulkanPreparedPass {}
 unsafe impl Sync for VulkanPreparedPass {}
 
+/// Main Vulkan backend struct.
+///
+/// This struct contains all the state needed for rendering, including:
+/// - Window management
+/// - Resource arenas
+/// - Synchronization primitives
+/// - Descriptor pools
+/// - Frame contexts
 pub struct VulkanBackend {
     // Window Management
     pub(crate) windows: HashMap<u64, WindowContext>,
@@ -138,6 +176,17 @@ unsafe impl Send for VulkanBackend {}
 unsafe impl Sync for VulkanBackend {}
 
 impl VulkanBackend {
+    /// Create a new Vulkan backend instance.
+    ///
+    /// This function initializes:
+    /// - Vulkan instance
+    /// - SDL2 context
+    /// - Resource arenas
+    /// - Frame contexts (for frame-in-flight management)
+    ///
+    /// # Returns
+    ///
+    /// A new VulkanBackend instance, or an error if initialization fails
     pub fn new() -> Result<Self, String> {
         let instance = crate::instance::VulkanInstance::new()?;
         let sdl = sdl2::init()?;
@@ -198,61 +247,7 @@ impl VulkanBackend {
         dst_access: vk::AccessFlags2,
         dst_stage: vk::PipelineStageFlags2,
     ) -> Option<vk::ImageMemoryBarrier2<'static>> {
-        if let Some(img) = self.images.get_mut(physical_id) {
-            // Optimization: Skip only for Read-After-Read (RAR) where layout and stage already match
-            let is_write = |access: vk::AccessFlags2| {
-                access.intersects(
-                    vk::AccessFlags2::SHADER_WRITE
-                        | vk::AccessFlags2::SHADER_STORAGE_WRITE
-                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
-                        | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE
-                        | vk::AccessFlags2::TRANSFER_WRITE
-                        | vk::AccessFlags2::MEMORY_WRITE,
-                )
-            };
-
-            let needs_barrier =
-                img.last_layout != new_layout || is_write(img.last_access) || is_write(dst_access);
-
-            if !needs_barrier && (img.last_stage & dst_stage) == dst_stage {
-                return None;
-            }
-
-            debug!(
-                "Transition Image {:?}: {:?} -> {:?}",
-                physical_id, img.last_layout, new_layout
-            );
-
-            let aspect_mask = if img.format == vk::Format::D32_SFLOAT {
-                vk::ImageAspectFlags::DEPTH
-            } else {
-                vk::ImageAspectFlags::COLOR
-            };
-
-            let barrier = vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(img.last_stage)
-                .src_access_mask(img.last_access)
-                .dst_stage_mask(dst_stage)
-                .dst_access_mask(dst_access)
-                .old_layout(img.last_layout)
-                .new_layout(new_layout)
-                .image(img.image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-
-            img.last_layout = new_layout;
-            img.last_access = dst_access;
-            img.last_stage = dst_stage;
-
-            Some(barrier)
-        } else {
-            None
-        }
+        crate::sync::get_image_barrier(self, physical_id, new_layout, dst_access, dst_stage)
     }
 
     pub fn get_buffer_barrier(
@@ -261,44 +256,7 @@ impl VulkanBackend {
         dst_access: vk::AccessFlags2,
         dst_stage: vk::PipelineStageFlags2,
     ) -> Option<vk::BufferMemoryBarrier2<'static>> {
-        if let Some(buf) = self.buffers.get_mut(physical_id) {
-            // Optimization: Skip only for Read-After-Read (RAR) where state already matches
-            let is_write = |access: vk::AccessFlags2| {
-                access.intersects(
-                    vk::AccessFlags2::SHADER_WRITE
-                        | vk::AccessFlags2::SHADER_STORAGE_WRITE
-                        | vk::AccessFlags2::TRANSFER_WRITE
-                        | vk::AccessFlags2::MEMORY_WRITE,
-                )
-            };
-
-            let needs_barrier = is_write(buf.last_access) || is_write(dst_access);
-
-            if !needs_barrier && (buf.last_stage & dst_stage) == dst_stage {
-                return None;
-            }
-
-            debug!(
-                "Transition Buffer {:?}: {:?} -> {:?} / {:?} -> {:?}",
-                physical_id, buf.last_stage, dst_stage, buf.last_access, dst_access
-            );
-
-            let barrier = vk::BufferMemoryBarrier2::default()
-                .src_stage_mask(buf.last_stage)
-                .src_access_mask(buf.last_access)
-                .dst_stage_mask(dst_stage)
-                .dst_access_mask(dst_access)
-                .buffer(buf.buffer)
-                .offset(0)
-                .size(vk::WHOLE_SIZE);
-
-            buf.last_access = dst_access;
-            buf.last_stage = dst_stage;
-
-            Some(barrier)
-        } else {
-            None
-        }
+        crate::sync::get_buffer_barrier(self, physical_id, dst_access, dst_stage)
     }
 
     pub fn get_image_state(
@@ -307,57 +265,7 @@ impl VulkanBackend {
         is_write: bool,
         bind_point: vk::PipelineBindPoint,
     ) -> (vk::ImageLayout, vk::AccessFlags2, vk::PipelineStageFlags2) {
-        let mut layout = vk::ImageLayout::GENERAL;
-        let mut access = vk::AccessFlags2::empty();
-        let mut stage = vk::PipelineStageFlags2::NONE;
-
-        if usage.intersects(ResourceUsage::COLOR_ATTACHMENT) {
-            layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
-            access = vk::AccessFlags2::COLOR_ATTACHMENT_WRITE;
-            if !is_write {
-                access |= vk::AccessFlags2::COLOR_ATTACHMENT_READ;
-            }
-            stage = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
-        } else if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
-            if is_write || usage.intersects(ResourceUsage::WRITE) {
-                layout = vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-                access = vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE
-                    | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
-            } else {
-                layout = vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                access = vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
-            }
-            stage = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
-                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
-        } else if usage.intersects(ResourceUsage::SHADER_WRITE) {
-            layout = vk::ImageLayout::GENERAL;
-            access = vk::AccessFlags2::SHADER_STORAGE_WRITE
-                | vk::AccessFlags2::SHADER_STORAGE_READ
-                | vk::AccessFlags2::SHADER_WRITE;
-            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
-                vk::PipelineStageFlags2::COMPUTE_SHADER
-            } else {
-                vk::PipelineStageFlags2::FRAGMENT_SHADER
-            };
-        } else if usage.intersects(ResourceUsage::SHADER_READ) {
-            layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-            access = vk::AccessFlags2::SHADER_READ;
-            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
-                vk::PipelineStageFlags2::COMPUTE_SHADER
-            } else {
-                vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER
-            };
-        } else if usage.intersects(ResourceUsage::TRANSFER_WRITE) {
-            layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
-            access = vk::AccessFlags2::TRANSFER_WRITE;
-            stage = vk::PipelineStageFlags2::TRANSFER;
-        } else if usage.intersects(ResourceUsage::TRANSFER_READ) {
-            layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
-            access = vk::AccessFlags2::TRANSFER_READ;
-            stage = vk::PipelineStageFlags2::TRANSFER;
-        }
-
-        (layout, access, stage)
+        crate::sync::get_image_state(usage, is_write, bind_point)
     }
 
     pub fn get_buffer_state(
@@ -365,40 +273,12 @@ impl VulkanBackend {
         usage: ResourceUsage,
         bind_point: vk::PipelineBindPoint,
     ) -> (vk::AccessFlags2, vk::PipelineStageFlags2) {
-        let mut access = vk::AccessFlags2::empty();
-        let mut stage = vk::PipelineStageFlags2::NONE;
-
-        if usage.intersects(ResourceUsage::SHADER_WRITE) {
-            access = vk::AccessFlags2::SHADER_STORAGE_WRITE
-                | vk::AccessFlags2::SHADER_STORAGE_READ
-                | vk::AccessFlags2::SHADER_WRITE;
-            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
-                vk::PipelineStageFlags2::COMPUTE_SHADER
-            } else {
-                vk::PipelineStageFlags2::FRAGMENT_SHADER
-            };
-        } else if usage.intersects(ResourceUsage::SHADER_READ) {
-            access = vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::UNIFORM_READ;
-            stage = if bind_point == vk::PipelineBindPoint::COMPUTE {
-                vk::PipelineStageFlags2::COMPUTE_SHADER
-            } else {
-                vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER
-            };
-        } else if usage.intersects(ResourceUsage::TRANSFER_WRITE) {
-            access = vk::AccessFlags2::TRANSFER_WRITE;
-            stage = vk::PipelineStageFlags2::TRANSFER;
-        } else if usage.intersects(ResourceUsage::TRANSFER_READ) {
-            access = vk::AccessFlags2::TRANSFER_READ;
-            stage = vk::PipelineStageFlags2::TRANSFER;
-        }
-
-        (access, stage)
+        crate::sync::get_buffer_state(usage, bind_point)
     }
 
     #[allow(dead_code)]
     pub fn create_semaphore(&mut self) -> u64 {
-        let sem = self.create_semaphore_raw();
-        self.semaphores.insert(sem)
+        crate::sync::create_semaphore(self)
     }
 
     pub fn next_id(&mut self) -> u64 {
@@ -407,36 +287,8 @@ impl VulkanBackend {
         id
     }
 
-    fn create_semaphore_raw(&mut self) -> vk::Semaphore {
-        if let Some(recycled) = self.recycled_semaphores.pop() {
-            recycled
-        } else {
-            let device = self.get_device();
-            let create_info = vk::SemaphoreCreateInfo::default();
-            unsafe { device.handle.create_semaphore(&create_info, None) }.unwrap()
-        }
-    }
-
     pub fn window_size(&self, window: WindowHandle) -> Option<(u32, u32)> {
-        self.windows
-            .get(&window.0)
-            .map(|ctx| ctx.raw.handle.drawable_size())
-    }
-
-    fn sdl_to_keycode(sdl: sdl2::keyboard::Keycode) -> Option<KeyCode> {
-        match sdl {
-            sdl2::keyboard::Keycode::Escape => Some(KeyCode::Escape),
-            sdl2::keyboard::Keycode::Tab => Some(KeyCode::Tab),
-            sdl2::keyboard::Keycode::Space => Some(KeyCode::Space),
-            sdl2::keyboard::Keycode::W => Some(KeyCode::W),
-            sdl2::keyboard::Keycode::A => Some(KeyCode::A),
-            sdl2::keyboard::Keycode::S => Some(KeyCode::S),
-            sdl2::keyboard::Keycode::D => Some(KeyCode::D),
-            sdl2::keyboard::Keycode::Z => Some(KeyCode::Z),
-            sdl2::keyboard::Keycode::Q => Some(KeyCode::Q),
-            sdl2::keyboard::Keycode::LShift => Some(KeyCode::LShift),
-            _ => None,
-        }
+        crate::window_context::window_size(self, window)
     }
 }
 
@@ -723,74 +575,11 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn create_window(&mut self, desc: WindowDesc) -> Result<WindowHandle, String> {
-        let window_handle = self
-            .video
-            .window(&desc.title, desc.width, desc.height)
-            .position_centered()
-            .resizable()
-            .vulkan()
-            .build()
-            .map_err(|e| e.to_string())?;
-
-        let vulkan_window = crate::window::VulkanWindow::new(self.instance.clone(), window_handle)?;
-
-        let _id = self.next_window_id;
-        self.next_window_id += 1;
-
-        // Create Semaphores per frame for this window (typically 3 for triple buffering)
-        let win_id = self.next_window_id;
-        self.next_window_id += 1;
-
-        let mut acquire_sems = Vec::new();
-        let mut acquire_sem_ids = Vec::new();
-        let mut present_sems = Vec::new();
-        let mut present_sem_ids = Vec::new();
-        let _device_handle = self.get_device().handle.clone();
-
-        for _ in 0..3 {
-            let a_id = self.create_semaphore();
-            let p_id = self.create_semaphore();
-
-            let a_sem = self.semaphores.get(a_id).cloned().unwrap();
-            let p_sem = self.semaphores.get(p_id).cloned().unwrap();
-
-            acquire_sems.push(a_sem);
-            acquire_sem_ids.push(a_id);
-
-            present_sems.push(p_sem);
-            present_sem_ids.push(p_id);
-        }
-
-        let context = WindowContext {
-            raw: vulkan_window,
-            swapchain: None, // This will be created later
-            config: SwapchainConfig {
-                vsync: false,
-                srgb: true,
-                min_image: 3,
-            }, // Default
-            acquire_semaphores: acquire_sems,
-            acquire_semaphore_ids: acquire_sem_ids,
-            present_semaphores: present_sems,
-            present_semaphore_ids: present_sem_ids,
-            current_acquire_sem_id: None,
-            current_image_index: None,
-        };
-
-        self.windows.insert(win_id, context);
-        Ok(WindowHandle(win_id))
+        crate::window_context::create_window(self, desc)
     }
 
     fn destroy_window(&mut self, window: WindowHandle) {
-        if let Some(mut ctx) = self.windows.remove(&window.0) {
-            if let Some(sc) = ctx.swapchain.take() {
-                let device = self.get_device();
-                unsafe {
-                    device.handle.device_wait_idle().ok();
-                }
-                self.unregister_swapchain_images(&sc.images);
-            }
-        }
+        crate::window_context::destroy_window(self, window)
     }
 
     fn configure_window(
@@ -798,116 +587,11 @@ impl RenderBackend for VulkanBackend {
         window: WindowHandle,
         config: SwapchainConfig,
     ) -> Result<(), String> {
-        let sc_opt = if let Some(ctx) = self.windows.get_mut(&window.0) {
-            ctx.config = config;
-            // Invalidate swapchain so it recreates on next acquire
-            ctx.swapchain.take()
-        } else {
-            return Err("Invalid window handle".to_string());
-        };
-
-        if let Some(sc) = sc_opt {
-            let device = self.get_device();
-            unsafe {
-                device.handle.device_wait_idle().ok();
-            }
-            self.unregister_swapchain_images(&sc.images);
-        }
-        Ok(())
+        crate::window_context::configure_window(self, window, config)
     }
 
     fn poll_events(&mut self) -> Vec<Event> {
-        let mut events = Vec::new();
-        let mut resize_happened = false;
-        if let Some(pump) = &mut self.event_pump {
-            for event in pump.poll_iter() {
-                match event {
-                    sdl2::event::Event::Quit { .. } => events.push(Event::Quit),
-                    sdl2::event::Event::KeyDown {
-                        keycode: Some(kd), ..
-                    } => {
-                        if let Some(key) = Self::sdl_to_keycode(kd) {
-                            events.push(Event::KeyDown { key });
-                        }
-                    }
-                    sdl2::event::Event::KeyUp {
-                        keycode: Some(kd), ..
-                    } => {
-                        if let Some(key) = Self::sdl_to_keycode(kd) {
-                            events.push(Event::KeyUp { key });
-                        }
-                    }
-                    sdl2::event::Event::Window {
-                        win_event: sdl2::event::WindowEvent::Resized(w, h),
-                        ..
-                    } => {
-                        events.push(Event::Resize {
-                            width: w as u32,
-                            height: h as u32,
-                        });
-                        resize_happened = true;
-                    }
-                    sdl2::event::Event::MouseButtonDown {
-                        mouse_btn, x, y, ..
-                    } => {
-                        events.push(Event::MouseDown {
-                            button: match mouse_btn {
-                                sdl2::mouse::MouseButton::Left => 1,
-                                sdl2::mouse::MouseButton::Right => 2,
-                                sdl2::mouse::MouseButton::Middle => 3,
-                                _ => 0,
-                            },
-                            x,
-                            y,
-                        });
-                    }
-                    sdl2::event::Event::MouseButtonUp {
-                        mouse_btn, x, y, ..
-                    } => {
-                        events.push(Event::MouseUp {
-                            button: match mouse_btn {
-                                sdl2::mouse::MouseButton::Left => 1,
-                                sdl2::mouse::MouseButton::Right => 2,
-                                sdl2::mouse::MouseButton::Middle => 3,
-                                _ => 0,
-                            },
-                            x,
-                            y,
-                        });
-                    }
-                    sdl2::event::Event::MouseMotion { x, y, .. } => {
-                        events.push(Event::MouseMove { x, y });
-                    }
-                    sdl2::event::Event::MouseWheel { y, .. } => {
-                        events.push(Event::MouseWheel { x: 0, y });
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if resize_happened {
-            let mut to_unregister = if self.windows.len() > 0 {
-                Vec::with_capacity(self.windows.len())
-            } else {
-                Vec::new()
-            };
-            for ctx in self.windows.values_mut() {
-                if let Some(sc) = ctx.swapchain.take() {
-                    to_unregister.push(sc);
-                }
-            }
-            if !to_unregister.is_empty() {
-                let device = self.get_device();
-                unsafe {
-                    device.handle.device_wait_idle().ok();
-                }
-                for sc in to_unregister {
-                    self.unregister_swapchain_images(&sc.images);
-                }
-            }
-        }
-        events
+        crate::window_context::poll_events(self)
     }
 
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage {
@@ -989,121 +673,23 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn destroy_image(&mut self, handle: BackendImage) {
-        if let Some(physical) = self.images.remove(handle.0) {
-            if let (Some(image), Some(allocation)) = (Some(physical.image), physical.allocation) {
-                self.dead_images
-                    .push((self.frame_count, image, physical.view, allocation));
-            }
-        }
+        crate::resources::destroy_image(self, handle)
     }
 
     fn create_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer {
-        let device = self.get_device().clone();
-
-        let usage = crate::convert::convert_buffer_usage_flags(desc.usage);
-
-        let create_info = vk::BufferCreateInfo::default()
-            .size(desc.size.max(1)) // Vulkan doesn't like 0 size
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let (mem_usage, alloc_flags) = match desc.memory {
-            MemoryType::GpuOnly => (
-                vk_mem::MemoryUsage::AutoPreferDevice,
-                vk_mem::AllocationCreateFlags::empty(),
-            ),
-            MemoryType::CpuToGpu => (
-                vk_mem::MemoryUsage::AutoPreferHost,
-                vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                    | vk_mem::AllocationCreateFlags::MAPPED,
-            ),
-            MemoryType::GpuToCpu => (
-                vk_mem::MemoryUsage::AutoPreferHost,
-                vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
-                    | vk_mem::AllocationCreateFlags::MAPPED,
-            ),
-        };
-
-        let allocation_info = vk_mem::AllocationCreateInfo {
-            usage: mem_usage,
-            flags: alloc_flags,
-            ..Default::default()
-        };
-
-        let (buffer, allocation) = unsafe {
-            let allocator = device.allocator.lock().unwrap();
-            allocator
-                .create_buffer(&create_info, &allocation_info)
-                .expect("Failed to create buffer")
-        };
-
-        let id = self.buffers.insert(PhysicalBuffer {
-            buffer,
-            allocation: Some(allocation),
-            desc: *desc,
-            last_access: vk::AccessFlags2::empty(),
-            last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
-        });
-        BackendBuffer(id)
+        crate::resources::create_buffer(self, desc)
     }
 
     fn destroy_buffer(&mut self, handle: BackendBuffer) {
-        if let Some(physical) = self.buffers.remove(handle.0) {
-            if let Some(allocation) = physical.allocation {
-                self.dead_buffers
-                    .push((self.frame_count, physical.buffer, allocation));
-            }
-        }
+        crate::resources::destroy_buffer(self, handle)
     }
 
     fn create_sampler(&mut self, desc: &SamplerDesc) -> SamplerHandle {
-        let mag_filter = match desc.mag_filter {
-            Filter::Nearest => vk::Filter::NEAREST,
-            Filter::Linear => vk::Filter::LINEAR,
-        };
-        let min_filter = match desc.min_filter {
-            Filter::Nearest => vk::Filter::NEAREST,
-            Filter::Linear => vk::Filter::LINEAR,
-        };
-        let mipmap_mode = match desc.mipmap_mode {
-            i3_gfx::graph::types::MipmapMode::Nearest => vk::SamplerMipmapMode::NEAREST,
-            i3_gfx::graph::types::MipmapMode::Linear => vk::SamplerMipmapMode::LINEAR,
-        };
-
-        let convert_address = |mode: AddressMode| match mode {
-            AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
-            AddressMode::MirroredRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
-            AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            AddressMode::ClampToBorder => vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            AddressMode::MirrorClampToEdge => vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE,
-        };
-
-        let create_info = vk::SamplerCreateInfo::default()
-            .mag_filter(mag_filter)
-            .min_filter(min_filter)
-            .mipmap_mode(mipmap_mode)
-            .address_mode_u(convert_address(desc.address_mode_u))
-            .address_mode_v(convert_address(desc.address_mode_v))
-            .address_mode_w(convert_address(desc.address_mode_w))
-            .max_anisotropy(1.0)
-            .min_lod(0.0)
-            .max_lod(vk::LOD_CLAMP_NONE);
-
-        let sampler = unsafe {
-            self.get_device()
-                .handle
-                .create_sampler(&create_info, None)
-                .expect("Failed to create sampler")
-        };
-
-        let handle = self.samplers.insert(sampler);
-        SamplerHandle(handle)
+        crate::resources::create_sampler(self, desc)
     }
 
     fn destroy_sampler(&mut self, handle: SamplerHandle) {
-        if let Some(sampler) = self.samplers.remove(handle.0) {
-            self.dead_samplers.push((self.frame_count, sampler));
-        }
+        crate::resources::destroy_sampler(self, handle)
     }
 
     fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineCreateInfo) -> BackendPipeline {
@@ -1120,33 +706,7 @@ impl RenderBackend for VulkanBackend {
         data: &[u8],
         offset: u64,
     ) -> Result<(), String> {
-        let device = self.get_device().clone();
-        if let Some(buf) = self.buffers.get_mut(handle.0) {
-            if let Some(alloc) = &mut buf.allocation {
-                unsafe {
-                    let allocator = device.allocator.lock().unwrap();
-                    let ptr = allocator.map_memory(alloc).map_err(|e| e.to_string())?;
-
-                    std::ptr::copy_nonoverlapping(
-                        data.as_ptr(),
-                        ptr.add(offset as usize),
-                        data.len(),
-                    );
-
-                    let _ = allocator.flush_allocation(alloc, offset, data.len() as u64);
-                    allocator.unmap_memory(alloc);
-                }
-
-                // Update state to reflect HOST_WRITE
-                buf.last_access = vk::AccessFlags2::HOST_WRITE;
-                buf.last_stage = vk::PipelineStageFlags2::HOST;
-                Ok(())
-            } else {
-                Err("Buffer has no allocation (external?)".to_string())
-            }
-        } else {
-            Err(format!("Buffer not found: {:?}", handle))
-        }
+        crate::resources::upload_buffer(self, handle, data, offset)
     }
 
     fn upload_image(
@@ -1156,181 +716,7 @@ impl RenderBackend for VulkanBackend {
         mip_level: u32,
         array_layer: u32,
     ) -> Result<(), String> {
-        let device = self.get_device().clone();
-
-        let physical = self
-            .images
-            .get(handle.0)
-            .ok_or_else(|| format!("Image not found: {:?}", handle))?;
-
-        let image = physical.image;
-        let width = physical.desc.width;
-        let height = physical.desc.height;
-        let depth = physical.desc.depth;
-
-        // 1. Create Staging Buffer
-        let create_info = vk::BufferCreateInfo::default()
-            .size(data.len() as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let allocation_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::AutoPreferHost,
-            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                | vk_mem::AllocationCreateFlags::MAPPED,
-            ..Default::default()
-        };
-
-        let (staging_buffer, mut staging_alloc) = unsafe {
-            let allocator = device.allocator.lock().unwrap();
-            let mut res = allocator
-                .create_buffer(&create_info, &allocation_info)
-                .map_err(|e| e.to_string())?;
-
-            // 2. Copy Data
-            let ptr = allocator
-                .map_memory(&mut res.1)
-                .map_err(|e| e.to_string())?;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-            allocator.unmap_memory(&mut res.1);
-            res
-        };
-
-        // 3. Command Buffer for Transfer
-        unsafe {
-            let pool_info = vk::CommandPoolCreateInfo::default()
-                .queue_family_index(device.graphics_family)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-
-            let cmd_pool = device
-                .handle
-                .create_command_pool(&pool_info, None)
-                .map_err(|e| e.to_string())?;
-
-            let alloc_info = vk::CommandBufferAllocateInfo::default()
-                .command_pool(cmd_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-
-            let cmd = device
-                .handle
-                .allocate_command_buffers(&alloc_info)
-                .map_err(|e| e.to_string())?[0];
-
-            let begin_info = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-            device
-                .handle
-                .begin_command_buffer(cmd, &begin_info)
-                .map_err(|e| e.to_string())?;
-
-            // Transition to TRANSFER_DST
-            let barrier_to_dst = vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
-                .src_access_mask(vk::AccessFlags2::empty())
-                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .image(image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: mip_level,
-                    level_count: 1,
-                    base_array_layer: array_layer,
-                    layer_count: 1,
-                });
-
-            let barriers = [barrier_to_dst];
-            let dependency = vk::DependencyInfo::default().image_memory_barriers(&barriers);
-            device.handle.cmd_pipeline_barrier2(cmd, &dependency);
-
-            // Copy Buffer to Image
-            let region = vk::BufferImageCopy::default()
-                .buffer_offset(0)
-                .buffer_row_length(0)
-                .buffer_image_height(0)
-                .image_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level,
-                    base_array_layer: array_layer,
-                    layer_count: 1,
-                })
-                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D {
-                    width: (width >> mip_level).max(1),
-                    height: (height >> mip_level).max(1),
-                    depth: (depth >> mip_level).max(1),
-                });
-
-            device.handle.cmd_copy_buffer_to_image(
-                cmd,
-                staging_buffer,
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[region],
-            );
-
-            // Transition to SHADER_READ
-            let barrier_to_read = vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(
-                    vk::PipelineStageFlags2::FRAGMENT_SHADER
-                        | vk::PipelineStageFlags2::COMPUTE_SHADER,
-                )
-                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image(image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: mip_level,
-                    level_count: 1,
-                    base_array_layer: array_layer,
-                    layer_count: 1,
-                });
-
-            let barriers2 = [barrier_to_read];
-            let dependency2 = vk::DependencyInfo::default().image_memory_barriers(&barriers2);
-            device.handle.cmd_pipeline_barrier2(cmd, &dependency2);
-
-            device
-                .handle
-                .end_command_buffer(cmd)
-                .map_err(|e| e.to_string())?;
-
-            // Submit
-            let cmd_bufs = [cmd];
-            let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
-
-            device
-                .handle
-                .queue_submit(device.graphics_queue, &[submit_info], vk::Fence::null())
-                .map_err(|e| e.to_string())?;
-
-            device
-                .handle
-                .device_wait_idle()
-                .map_err(|e| e.to_string())?;
-
-            // Cleanup
-            device.handle.destroy_command_pool(cmd_pool, None);
-
-            let allocator = device.allocator.lock().unwrap();
-            allocator.destroy_buffer(staging_buffer, &mut staging_alloc);
-        }
-
-        // Update tracking state
-        if let Some(img) = self.images.get_mut(handle.0) {
-            img.last_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-            img.last_access = vk::AccessFlags2::SHADER_READ;
-            img.last_stage =
-                vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
-        }
-
-        Ok(())
+        crate::resources::upload_image(self, handle, data, mip_level, array_layer)
     }
 
     fn get_bindless_set_handle(&self) -> u64 {
@@ -1454,34 +840,12 @@ impl RenderBackend for VulkanBackend {
 
     #[cfg(debug_assertions)]
     fn set_image_name(&mut self, image: BackendImage, name: &str) {
-        if let Some(img) = self.images.get(image.0) {
-            let c_name = std::ffi::CString::new(name).unwrap();
-            let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
-                .object_handle(img.image)
-                .object_name(&c_name);
-            unsafe {
-                self.get_device()
-                    .debug_utils
-                    .set_debug_utils_object_name(&name_info)
-                    .ok();
-            }
-        }
+        crate::debug::set_image_name(self, image, name);
     }
 
     #[cfg(debug_assertions)]
     fn set_buffer_name(&mut self, buffer: BackendBuffer, name: &str) {
-        if let Some(buf) = self.buffers.get(buffer.0) {
-            let c_name = std::ffi::CString::new(name).unwrap();
-            let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
-                .object_handle(buf.buffer)
-                .object_name(&c_name);
-            unsafe {
-                self.get_device()
-                    .debug_utils
-                    .set_debug_utils_object_name(&name_info)
-                    .ok();
-            }
-        }
+        crate::debug::set_buffer_name(self, buffer, name);
     }
 }
 
@@ -1985,12 +1349,7 @@ impl RenderBackendInternal for VulkanBackend {
     }
 
     fn mark_image_as_presented(&mut self, handle: ImageHandle) {
-        let pid = self.resolve_image(handle).0;
-        if let Some(img) = self.images.get_mut(pid) {
-            img.last_layout = vk::ImageLayout::PRESENT_SRC_KHR;
-            img.last_access = vk::AccessFlags2::empty();
-            img.last_stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
-        }
+        crate::commands::mark_image_as_presented(self, handle)
     }
 
     fn allocate_descriptor_set(

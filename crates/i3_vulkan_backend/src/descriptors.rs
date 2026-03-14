@@ -1,3 +1,33 @@
+//! # Descriptors - Bindless System
+//!
+//! This module manages Vulkan descriptor sets, with a focus on the **bindless** approach.
+//!
+//! ## Bindless Architecture
+//!
+//! Instead of binding descriptor sets per-draw, the bindless approach uses a single
+//! large descriptor set containing all textures, buffers, and samplers. Shaders
+//! access resources via indices passed as push constants or vertex attributes.
+//!
+//! ## Benefits
+//!
+//! - **Reduced CPU overhead**: No need to bind descriptor sets per draw call
+//! - **Flexible resource access**: Shaders can dynamically index into arrays
+//! - **Simplified state management**: Fewer pipeline layouts and descriptor sets
+//!
+//! ## Descriptor Set Layout
+//!
+//! The bindless set typically contains:
+//! - Binding 0: Array of sampled images (textures)
+//! - Binding 1: Array of storage images
+//! - Binding 2: Array of samplers
+//! - Binding 3: Array of uniform buffers
+//! - Binding 4: Array of storage buffers
+//!
+//! ## Thread Safety
+//!
+//! Descriptor set allocation uses a mutex-protected arena to allow safe
+//! concurrent access from multiple threads.
+
 use ash::vk;
 use i3_gfx::graph::backend::*;
 use i3_gfx::graph::pipeline::*;
@@ -7,6 +37,18 @@ use tracing::error;
 use crate::backend::VulkanBackend;
 
 /// Update a bindless texture in the global bindless descriptor set.
+///
+/// This function updates a single texture entry in the bindless descriptor set.
+/// The texture can then be accessed in shaders via its index.
+///
+/// # Arguments
+///
+/// * `backend` - Mutable reference to the backend
+/// * `texture` - Handle to the image to bind
+/// * `sampler` - Handle to the sampler to use (currently unused)
+/// * `index` - Index in the descriptor array
+/// * `set` - Handle to the descriptor set
+/// * `binding` - Binding point in the descriptor set
 pub fn update_bindless_texture(
     backend: &mut VulkanBackend,
     texture: ImageHandle,
@@ -64,6 +106,19 @@ pub fn update_bindless_texture_raw(
 }
 
 /// Allocate a descriptor set from the static pool.
+///
+/// This function allocates a descriptor set from the static descriptor pool.
+/// The pool is pre-allocated at initialization time and reused across frames.
+///
+/// # Arguments
+///
+/// * `backend` - Mutable reference to the backend
+/// * `pipeline` - Handle to the pipeline (used to get the descriptor set layout)
+/// * `set_index` - Index of the descriptor set to allocate
+///
+/// # Returns
+///
+/// Handle to the allocated descriptor set, or an error if allocation fails
 pub fn allocate_descriptor_set(
     backend: &mut VulkanBackend,
     pipeline: PipelineHandle,
@@ -108,6 +163,20 @@ pub fn allocate_descriptor_set(
 }
 
 /// Update a descriptor set with the given writes.
+///
+/// This function updates a descriptor set with new buffer and image bindings.
+/// It resolves virtual resource handles to physical Vulkan resources.
+///
+/// # Arguments
+///
+/// * `backend` - Mutable reference to the backend
+/// * `set` - Handle to the descriptor set to update
+/// * `writes` - Array of descriptor writes to apply
+///
+/// # Resource Resolution
+///
+/// The function resolves virtual handles (ImageHandle, BufferHandle) to physical
+/// Vulkan resources (VkImage, VkBuffer) before updating the descriptor set.
 pub fn update_descriptor_set(
     backend: &mut VulkanBackend,
     set: DescriptorSetHandle,

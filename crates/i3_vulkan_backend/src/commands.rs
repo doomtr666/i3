@@ -1,3 +1,33 @@
+//! # Command Recording - Pass Context
+//!
+//! This module implements the [`PassContext`] trait for Vulkan, providing the interface
+//! for render passes to record GPU commands.
+//!
+//! ## PassContext Pattern
+//!
+//! The [`VulkanPassContext`] is passed to each render pass during execution.
+//! It provides methods for:
+//! - Binding pipelines and descriptor sets
+//! - Recording draw and dispatch commands
+//! - Managing push constants
+//! - Handling presentation requests
+//!
+//! ## Descriptor Set Management
+//!
+//! The context supports two descriptor set strategies:
+//! - **Push descriptors**: For frequently updated sets (no allocation needed)
+//! - **Pool allocation**: For static sets (allocated from a per-frame pool)
+//!
+//! ## Command Buffer Lifecycle
+//!
+//! ```text
+//! prepare_pass() → record_pass() → submit()
+//!      ↓               ↓              ↓
+//!  Create context   Record commands  Submit to queue
+//!  Bind pipeline    Set viewport     Signal timeline
+//!  Set barriers     Draw/dispatch    Present
+//! ```
+
 use ash::vk;
 use ash::vk::Handle;
 use i3_gfx::graph::backend::*;
@@ -14,6 +44,18 @@ use crate::resource_arena::PhysicalPipeline;
 ///
 /// This context is passed to each render pass during execution and provides
 /// methods for binding pipelines, descriptor sets, and recording draw/dispatch commands.
+///
+/// # Fields
+///
+/// * `cmd` - Vulkan command buffer for recording
+/// * `device` - Reference to the Vulkan device
+/// * `present_request` - Optional image handle to present after the pass
+/// * `backend` - Raw pointer to the backend (for resource access)
+/// * `pipeline` - Currently bound pipeline
+/// * `descriptor_pool` - Per-frame descriptor pool for allocation
+/// * `current_pipeline_layout` - Layout of the currently bound pipeline
+/// * `current_bind_point` - Current pipeline bind point (graphics/compute)
+/// * `pending_descriptor_sets` - Descriptor set writes pending flush
 pub struct VulkanPassContext {
     pub cmd: vk::CommandBuffer,
     pub device: Arc<crate::device::VulkanDevice>,
@@ -50,6 +92,19 @@ impl VulkanPassContext {
     /// This method processes all pending descriptor set writes and either
     /// pushes them directly (for push descriptor sets) or allocates and
     /// updates descriptor sets from the pool.
+    ///
+    /// # Push Descriptors vs Pool Allocation
+    ///
+    /// - **Push descriptors**: Used when `pushable_sets_mask` has the bit set for the set index.
+    ///   These are pushed directly to the command buffer without allocation.
+    /// - **Pool allocation**: Used for static descriptor sets. Allocated from the per-frame
+    ///   descriptor pool and updated via `vkUpdateDescriptorSets`.
+    ///
+    /// # Performance Note
+    ///
+    /// Push descriptors are more efficient for frequently updated sets (e.g., per-draw data)
+    /// because they avoid allocation overhead. Pool allocation is better for static sets
+    /// that don't change often.
     pub fn flush_descriptors(&mut self) {
         if self.pending_descriptor_sets.is_empty() {
             return;
@@ -544,6 +599,22 @@ use std::collections::HashMap;
 use crate::backend::{PreparedDomain, VulkanPreparedPass};
 
 /// Prepare a pass for recording by resolving resources and building barriers.
+///
+/// This function is called before recording a render pass. It:
+/// 1. Resolves virtual resource handles to physical IDs
+/// 2. Determines the viewport extent from the first render target
+/// 3. Generates image and buffer barriers for synchronization
+/// 4. Prepares attachment info for rendering
+///
+/// # Barrier Generation
+///
+/// Barriers are generated based on the resource usage declared in the pass descriptor.
+/// The function uses the [`sync`] module to determine optimal barrier placement.
+///
+/// # Viewport Detection
+///
+/// The viewport extent is determined from the first image write target.
+/// If the target is a swapchain image, the swapchain extent is used.
 pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> VulkanPreparedPass {
     // Clear scratch vectors for this pass
     backend.image_barrier_scratch.clear();
@@ -851,6 +922,29 @@ pub fn end_debug_label(backend: &VulkanBackend, command_buffer: BackendCommandBu
 }
 
 /// Record a pass for execution.
+///
+/// This function records the actual rendering commands for a pass. It:
+/// 1. Allocates a command buffer from the thread pool
+/// 2. Sets up dynamic viewport and scissor
+/// 3. Begins dynamic rendering (if graphics pass)
+/// 4. Executes the user's render pass code
+/// 5. Ends dynamic rendering
+/// 6. Handles presentation transitions
+///
+/// # Thread Pool
+///
+/// Command buffers are allocated from a per-frame, per-thread pool to avoid
+/// synchronization overhead. The pool is reset at the beginning of each frame.
+///
+/// # Dynamic Rendering
+///
+/// The backend uses VK_KHR_dynamic_rendering to avoid render pass objects.
+/// This simplifies the code and allows more flexible attachment management.
+///
+/// # Presentation
+///
+/// If the pass requests presentation (via `present()`), the image is transitioned
+/// to `PRESENT_SRC_KHR` layout at the end of the command buffer.
 pub fn record_pass(
     backend: &VulkanBackend,
     prepared: &VulkanPreparedPass,

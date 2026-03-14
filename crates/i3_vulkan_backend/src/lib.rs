@@ -1,15 +1,19 @@
 pub mod backend;
 pub mod commands;
 pub mod convert;
+pub mod debug;
 pub mod descriptors;
 pub mod device;
 pub mod instance;
 pub mod pipeline_cache;
 pub mod prelude;
 pub mod resource_arena;
+pub mod resources;
 pub mod submission;
 pub mod swapchain;
+pub mod sync;
 pub mod window;
+pub mod window_context;
 
 pub use backend::VulkanBackend;
 pub use device::VulkanDevice;

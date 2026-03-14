@@ -1,3 +1,32 @@
+//! # Queue Submission - Timeline Semaphores
+//!
+//! This module handles GPU queue submission and frame lifecycle management.
+//! It uses **timeline semaphores** (VK_KHR_timeline_semaphore) for efficient
+//! CPU-GPU synchronization without busy-waiting.
+//!
+//! ## Timeline Semaphores
+//!
+//! Timeline semaphores are monotonically increasing counters that can be waited on
+//! by both CPU and GPU. This is more efficient than binary semaphores because:
+//! - No need to recreate semaphores each frame
+//! - Can wait for specific values (not just signaled/unsignaled)
+//! - Enables precise frame-in-flight management
+//!
+//! ## Frame Lifecycle
+//!
+//! ```text
+//! begin_frame() → acquire_swapchain_image() → record_pass() → submit() → end_frame()
+//!       ↓                                                                    ↓
+//!   Wait for previous frame                                          Garbage collection
+//!   Reset command pools
+//! ```
+//!
+//! ## Frame-in-Flight
+//!
+//! The backend uses multiple frame contexts (typically 2-3) to allow the CPU
+//! to record commands while the GPU is still processing previous frames.
+//! Each frame context has its own command pool and descriptor pool.
+
 use ash::vk;
 use ash::vk::Handle;
 use i3_gfx::graph::backend::*;
@@ -7,6 +36,19 @@ use tracing::debug;
 use crate::backend::VulkanBackend;
 
 /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
+///
+/// This is a blocking wait that stalls the CPU until the GPU has completed
+/// all work up to the specified timeline value.
+///
+/// # Arguments
+///
+/// * `backend` - Reference to the backend
+/// * `value` - Timeline value to wait for
+/// * `timeout_ns` - Timeout in nanoseconds (u64::MAX for infinite)
+///
+/// # Returns
+///
+/// `Ok(())` if the timeline was reached, `Err` on timeout or error
 pub fn wait_for_timeline(
     backend: &VulkanBackend,
     value: u64,
@@ -27,6 +69,25 @@ pub fn wait_for_timeline(
 }
 
 /// Begin a new frame: wait for previous frame to complete, reset pools.
+///
+/// This function implements the frame-in-flight synchronization pattern:
+///
+/// 1. **Wait for previous frame**: Uses timeline semaphore to wait until the GPU
+///    has finished processing the previous frame that used this slot
+/// 2. **Reset pools**: Resets command pools and descriptor pools for reuse
+/// 3. **Update timeline**: Increments the CPU timeline value
+///
+/// # Frame-in-Flight Pattern
+///
+/// The backend uses multiple frame contexts (typically 2-3) to allow the CPU
+/// to record commands while the GPU is still processing previous frames.
+/// Each frame context has its own command pool and descriptor pool.
+///
+/// ```text
+/// Frame 0: [Record] → [Submit] → [GPU Process] → [Wait] → [Reset] → [Record] ...
+/// Frame 1:            [Record] → [Submit] → [GPU Process] → [Wait] → [Reset] ...
+/// Frame 2:                       [Record] → [Submit] → [GPU Process] → [Wait] ...
+/// ```
 pub fn begin_frame(backend: &mut VulkanBackend) {
     if backend.frame_started {
         return;
@@ -81,12 +142,42 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
 }
 
 /// End the current frame: run garbage collection.
+///
+/// This function performs cleanup of resources that are no longer needed:
+/// - Destroys images, buffers, and samplers that were marked for deletion
+/// - Recycles semaphores for reuse
+/// - Cleans up dead descriptor sets
+///
+/// # Garbage Collection Strategy
+///
+/// Resources are not destroyed immediately when they become unused.
+/// Instead, they are marked for deletion and destroyed at the end of the frame
+/// when it's safe to do so (no GPU work is using them).
 pub fn end_frame(backend: &mut VulkanBackend) {
     backend.garbage_collect();
     backend.frame_started = false;
 }
 
 /// Acquire the next swapchain image for a window.
+///
+/// This function acquires the next available image from the swapchain for rendering.
+/// It handles swapchain recreation when the window is resized or becomes suboptimal.
+///
+/// # Arguments
+///
+/// * `backend` - Mutable reference to the backend
+/// * `window` - Handle to the window
+///
+/// # Returns
+///
+/// `Ok(Some((image, semaphore_id, image_index)))` if an image was acquired,
+/// `Ok(None)` if the window is minimized (zero extent),
+/// `Err` on failure
+///
+/// # Swapchain Recreation
+///
+/// If the swapchain becomes suboptimal (e.g., window resized), it is invalidated
+/// and recreated on the next call. This ensures optimal presentation performance.
 pub fn acquire_swapchain_image(
     backend: &mut VulkanBackend,
     window: WindowHandle,
@@ -212,6 +303,33 @@ pub fn acquire_swapchain_image(
 }
 
 /// Submit a command batch to the GPU.
+///
+/// This function submits recorded command buffers to the graphics queue and
+/// presents the rendered images to the screen.
+///
+/// # Submission Flow
+///
+/// 1. **Advance timeline**: Increment the CPU timeline value
+/// 2. **Collect semaphores**: Gather binary semaphores from windows that acquired images
+/// 3. **Submit to queue**: Submit command buffers with timeline and binary semaphore synchronization
+/// 4. **Present**: Present rendered images to all active windows
+///
+/// # Synchronization
+///
+/// The submission uses a combination of:
+/// - **Timeline semaphore**: For CPU-GPU synchronization (wait for previous frame)
+/// - **Binary semaphores**: For GPU-GPU synchronization (acquire → render → present)
+///
+/// # Arguments
+///
+/// * `backend` - Mutable reference to the backend
+/// * `batch` - Command batch containing command buffers to submit
+/// * `_wait_sems` - Unused (reserved for future use)
+/// * `_signal_sems` - Unused (reserved for future use)
+///
+/// # Returns
+///
+/// The timeline value that will be signaled when this submission completes
 pub fn submit(
     backend: &mut VulkanBackend,
     batch: CommandBatch,

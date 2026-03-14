@@ -1,7 +1,47 @@
+//! # Resource Arena - Generational Index System
+//!
+//! This module implements a resource management system based on **generational indices**.
+//! This is a critical pattern for memory safety in a rendering engine.
+//!
+//! ## Concept
+//!
+//! Each resource receives a `u64` handle that encodes two pieces of information:
+//! - **Index** (lower 32 bits): position in the `slots` array
+//! - **Generation** (upper 32 bits): counter incremented each time the slot is reused
+//!
+//! ```text
+//! Handle u64 = [Generation (32 bits) | Index (32 bits)]
+//! ```
+//!
+//! ## Safety
+//!
+//! When a resource is deleted, its slot is marked as `Free` and its generation is incremented.
+//! If an old handle is used after deletion, the generation will no longer match and
+//! access will return `None` instead of corrupting memory.
+//!
+//! ## Performance
+//!
+//! - Insertion: O(1) amortized (reuses free slots via a linked list)
+//! - Access: O(1) (direct indexing into the vector)
+//! - Removal: O(1)
+//!
+//! ## Typical Usage
+//!
+//! ```ignore
+//! let arena: ResourceArena<PhysicalImage> = ResourceArena::new();
+//! let handle = arena.insert(physical_image);  // Returns u64
+//! let image = arena.get(handle);              // Option<&PhysicalImage>
+//! arena.remove(handle);                       // Frees the slot
+//! ```
+
 use ash::vk;
 use i3_gfx::graph::types::*;
 
-/// Physical pipeline resource tracked by the backend.
+/// Physical representation of a Vulkan pipeline.
+///
+/// Contains the raw Vulkan handle and metadata needed for binding.
+/// The `pushable_sets_mask` indicates which descriptor sets can be updated
+/// via push constants to avoid descriptor set allocations.
 #[derive(Clone)]
 pub struct PhysicalPipeline {
     pub handle: vk::Pipeline,
@@ -12,7 +52,11 @@ pub struct PhysicalPipeline {
     pub physical_id: u64,
 }
 
-/// Physical image resource tracked by the backend.
+/// Physical representation of a Vulkan image.
+///
+/// Contains the image, its view, and synchronization state.
+/// The `last_*` fields track the last known state for automatic
+/// memory barrier generation.
 pub struct PhysicalImage {
     pub image: vk::Image,
     pub view: vk::ImageView,
@@ -20,13 +64,19 @@ pub struct PhysicalImage {
     pub desc: ImageDesc,
     pub format: vk::Format,
 
+    /// Last known layout (for image transitions)
     pub last_layout: vk::ImageLayout,
+    /// Last access flags (for memory barriers)
     pub last_access: vk::AccessFlags2,
+    /// Last pipeline stage (for memory barriers)
     pub last_stage: vk::PipelineStageFlags2,
+    /// Frame count at last write (for load op)
     pub last_write_frame: u64,
 }
 
-/// Physical buffer resource tracked by the backend.
+/// Physical representation of a Vulkan buffer.
+///
+/// Similar to PhysicalImage but for buffers.
 pub struct PhysicalBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Option<vk_mem::Allocation>,
@@ -37,7 +87,7 @@ pub struct PhysicalBuffer {
     pub last_stage: vk::PipelineStageFlags2,
 }
 
-/// Slot in the resource arena - either occupied with data or free with generation tracking.
+/// Slot in the arena - either occupied with data or free with generation tracking.
 enum Slot<T> {
     Occupied {
         data: T,
@@ -49,11 +99,11 @@ enum Slot<T> {
     },
 }
 
-/// Generic resource arena with generational indices for safe handle-based access.
+/// Arène de ressources générique avec indices générationnels pour un accès sûr via handles.
 ///
-/// Resources are inserted and receive a u64 handle encoding both an index and generation.
-/// This allows detecting use-after-free: if a handle's generation doesn't match the slot's
-/// generation, the access returns None.
+/// Les ressources sont insérées et reçoivent un handle u64 encodant à la fois un index et une génération.
+/// Cela permet de détecter les use-after-free : si la génération d'un handle ne correspond pas à
+/// celle du slot, l'accès retourne None.
 pub struct ResourceArena<T> {
     slots: Vec<Slot<T>>,
     free_head: Option<u32>,

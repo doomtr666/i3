@@ -1,3 +1,29 @@
+//! # Pipeline Cache - Pipeline Creation and Caching
+//!
+//! This module handles the creation of Vulkan graphics and compute pipelines.
+//! Pipelines are expensive to create, so they are cached and reused.
+//!
+//! ## Pipeline Creation
+//!
+//! Pipeline creation involves:
+//! 1. **Shader module creation**: Compiling SPIR-V bytecode into GPU-executable code
+//! 2. **Vertex input setup**: Defining vertex attributes and bindings
+//! 3. **Rasterization state**: Configuring culling, depth testing, etc.
+//! 4. **Color blend state**: Configuring color attachment blending
+//! 5. **Descriptor set layout**: Creating layouts for shader resource binding
+//! 6. **Pipeline layout**: Combining descriptor layouts and push constant ranges
+//!
+//! ## Caching Strategy
+//!
+//! Pipelines are stored in the [`ResourceArena`] and can be looked up by handle.
+//! The backend does not currently implement disk-based pipeline caching (VkPipelineCache),
+//! but this could be added for faster startup times.
+//!
+//! ## Dynamic State
+//!
+//! The backend uses dynamic state for viewport and scissor to avoid recreating
+//! pipelines when the window is resized.
+
 use ash::vk;
 use i3_gfx::graph::backend::BackendPipeline;
 use i3_gfx::graph::pipeline::*;
@@ -9,6 +35,27 @@ use crate::convert::*;
 use crate::resource_arena::PhysicalPipeline;
 
 /// Create a graphics pipeline from the given description.
+///
+/// This function creates a complete graphics pipeline including:
+/// - Shader modules (vertex, fragment, etc.)
+/// - Vertex input state
+/// - Input assembly state
+/// - Rasterization state
+/// - Multisample state
+/// - Depth stencil state
+/// - Color blend state
+/// - Dynamic state (viewport, scissor)
+/// - Descriptor set layouts
+/// - Pipeline layout
+///
+/// # Arguments
+///
+/// * `backend` - Mutable reference to the backend
+/// * `desc` - Pipeline creation description
+///
+/// # Returns
+///
+/// Handle to the created pipeline in the ResourceArena
 pub fn create_graphics_pipeline(
     backend: &mut VulkanBackend,
     desc: &GraphicsPipelineCreateInfo,
@@ -351,6 +398,18 @@ pub fn create_graphics_pipeline(
 }
 
 /// Create a compute pipeline from the given description.
+///
+/// Compute pipelines are simpler than graphics pipelines because they only have
+/// a single shader stage and no fixed-function state (rasterization, blending, etc.).
+///
+/// # Arguments
+///
+/// * `backend` - Mutable reference to the backend
+/// * `desc` - Compute pipeline creation description
+///
+/// # Returns
+///
+/// Handle to the created pipeline in the ResourceArena
 pub fn create_compute_pipeline(
     backend: &mut VulkanBackend,
     desc: &ComputePipelineCreateInfo,
