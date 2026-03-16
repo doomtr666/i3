@@ -47,7 +47,7 @@ void main(uint3 gl_GlobalInvocationID : SV_DispatchThreadID, uint gl_LocalInvoca
     if (gl_GlobalInvocationID.x < texDimensions.x && gl_GlobalInvocationID.y < texDimensions.y) {
         float3 color = hdrImage.Load(int3(gl_GlobalInvocationID.xy, 0)).rgb;
         
-        float prev_ex = exposure_buffer[0].prev_exposure;
+        float prev_ex = exposure_buffer[0].new_exposure;
         if (prev_ex == 0.0) { prev_ex = 1.0; }
         color /= prev_ex;
         

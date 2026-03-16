@@ -574,7 +574,8 @@ pub fn create_graphics_pipeline_from_baked(
     bytecode: &[u8],
 ) -> BackendPipeline {
     use i3_gfx::graph::pipeline::ShaderReflection;
-    let reflection: ShaderReflection = postcard::from_bytes(reflection_bytes).expect("Failed to deserialize reflection");
+    let reflection: ShaderReflection =
+        postcard::from_bytes(reflection_bytes).expect("Failed to deserialize reflection");
 
     let device = backend.get_device().clone();
     let _id = backend.next_id();
@@ -582,10 +583,7 @@ pub fn create_graphics_pipeline_from_baked(
 
     // 1. Shader Module
     let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
-        std::slice::from_raw_parts(
-            bytecode.as_ptr() as *const u32,
-            bytecode.len() / 4,
-        )
+        std::slice::from_raw_parts(bytecode.as_ptr() as *const u32, bytecode.len() / 4)
     });
 
     let module = unsafe { device.handle.create_shader_module(&create_info, None) }
@@ -593,7 +591,8 @@ pub fn create_graphics_pipeline_from_baked(
     backend.shader_modules.push(module);
 
     let mut stages = Vec::new();
-    let entry_points: Vec<std::ffi::CString> = reflection.entry_points
+    let entry_points: Vec<std::ffi::CString> = reflection
+        .entry_points
         .iter()
         .map(|e| std::ffi::CString::new(e.name.as_str()).unwrap())
         .collect();
@@ -616,25 +615,39 @@ pub fn create_graphics_pipeline_from_baked(
         }
     }
 
-    debug!("Baked Pipeline: {} stages, {} bindings, {} attributes, {} targets", 
-        stages.len(), baked.vertex_binding_count, baked.vertex_attribute_count, baked.color_target_count);
+    debug!(
+        "Baked Pipeline: {} stages, {} bindings, {} attributes, {} targets",
+        stages.len(),
+        baked.vertex_binding_count,
+        baked.vertex_attribute_count,
+        baked.color_target_count
+    );
 
     for i in 0..baked.color_target_count as usize {
         let fmt = convert_u32_format(baked.color_targets[i].format);
-        debug!("  Target[{}]: format index {}, vk::Format {:?}", i, baked.color_targets[i].format, fmt);
+        debug!(
+            "  Target[{}]: format index {}, vk::Format {:?}",
+            i, baked.color_targets[i].format, fmt
+        );
     }
 
     // 2. Vertex Input
-    let vk_vertex_bindings: Vec<vk::VertexInputBindingDescription> = baked.vertex_bindings[..baked.vertex_binding_count as usize]
+    let vk_vertex_bindings: Vec<vk::VertexInputBindingDescription> = baked.vertex_bindings
+        [..baked.vertex_binding_count as usize]
         .iter()
         .map(|b| vk::VertexInputBindingDescription {
             binding: b.binding,
             stride: b.stride,
-            input_rate: if b.input_rate == 1 { vk::VertexInputRate::INSTANCE } else { vk::VertexInputRate::VERTEX },
+            input_rate: if b.input_rate == 1 {
+                vk::VertexInputRate::INSTANCE
+            } else {
+                vk::VertexInputRate::VERTEX
+            },
         })
         .collect();
 
-    let vk_vertex_attributes: Vec<vk::VertexInputAttributeDescription> = baked.vertex_attributes[..baked.vertex_attribute_count as usize]
+    let vk_vertex_attributes: Vec<vk::VertexInputAttributeDescription> = baked.vertex_attributes
+        [..baked.vertex_attribute_count as usize]
         .iter()
         .map(|a| vk::VertexInputAttributeDescription {
             location: a.location,
@@ -653,8 +666,11 @@ pub fn create_graphics_pipeline_from_baked(
         .primitive_restart_enable(baked.primitive_restart_enable != 0);
 
     let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic_state = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-    let viewport = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
+    let dynamic_state =
+        vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+    let viewport = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
 
     let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
         .depth_clamp_enable(baked.rasterization.depth_clamp_enable != 0)
@@ -699,11 +715,16 @@ pub fn create_graphics_pipeline_from_baked(
         .min_depth_bounds(baked.depth_stencil.min_depth_bounds)
         .max_depth_bounds(baked.depth_stencil.max_depth_bounds);
 
-    let color_blend_attachments: Vec<vk::PipelineColorBlendAttachmentState> = baked.color_targets[..baked.color_target_count as usize]
+    let color_blend_attachments: Vec<vk::PipelineColorBlendAttachmentState> = baked.color_targets
+        [..baked.color_target_count as usize]
         .iter()
         .map(|target| {
-            let mut attachment = vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G | vk::ColorComponentFlags::B | vk::ColorComponentFlags::A);
+            let mut attachment = vk::PipelineColorBlendAttachmentState::default().color_write_mask(
+                vk::ColorComponentFlags::R
+                    | vk::ColorComponentFlags::G
+                    | vk::ColorComponentFlags::B
+                    | vk::ColorComponentFlags::A,
+            );
             if target.blend_enable != 0 {
                 attachment = attachment
                     .blend_enable(true)
@@ -718,63 +739,86 @@ pub fn create_graphics_pipeline_from_baked(
         })
         .collect();
 
-    let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(&color_blend_attachments);
+    let color_blend =
+        vk::PipelineColorBlendStateCreateInfo::default().attachments(&color_blend_attachments);
 
     // 3. Layout
     let mut set_bindings: HashMap<u32, Vec<vk::DescriptorSetLayoutBinding>> = HashMap::new();
     for binding in &reflection.bindings {
         let vk_binding = vk::DescriptorSetLayoutBinding::default()
             .binding(binding.binding)
-            .descriptor_type(convert_binding_type_to_descriptor(binding.binding_type.clone()))
+            .descriptor_type(convert_binding_type_to_descriptor(
+                binding.binding_type.clone(),
+            ))
             .descriptor_count(binding.count)
             .stage_flags(convert_shader_stage_flags(ShaderStageFlags::All));
-        set_bindings.entry(binding.set).or_default().push(vk_binding);
+        set_bindings
+            .entry(binding.set)
+            .or_default()
+            .push(vk_binding);
     }
 
     let mut descriptor_set_layouts = Vec::new();
     let mut pushable_sets_mask = 0;
-    
+
     // Ensure Set 2 is available for bindless
     let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
     for i in 0..=max_set {
         let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
-        
+
         let layout = if i == 2 && backend.bindless_set_layout != vk::DescriptorSetLayout::null() {
             backend.bindless_set_layout
         } else {
             let mut binding_flags = Vec::with_capacity(bindings.len());
             for b in bindings {
                 if b.descriptor_count >= 1000 || b.descriptor_count == 0 {
-                    binding_flags.push(vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND);
+                    binding_flags.push(
+                        vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                            | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+                    );
                 } else {
                     binding_flags.push(vk::DescriptorBindingFlags::empty());
                 }
             }
-            let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+            let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
+                .binding_flags(&binding_flags);
             let mut layout_info = vk::DescriptorSetLayoutCreateInfo::default()
                 .bindings(bindings)
                 .push_next(&mut flags_info);
-            
-            if i == 0 && !bindings.is_empty() {
-                layout_info = layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
+
+            // Heuristic: only use Push Descriptors if the set is not too complex.
+            // Some drivers (Intel) crash when combining many push descriptors and large push constants.
+            if i == 0 && !bindings.is_empty() && bindings.len() < 8 {
+                layout_info =
+                    layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
                 pushable_sets_mask |= 1 << 0;
             }
-            if binding_flags.iter().any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND)) {
+            if binding_flags
+                .iter()
+                .any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND))
+            {
                 layout_info.flags |= vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL;
             }
 
-            let layout = unsafe { device.handle.create_descriptor_set_layout(&layout_info, None).unwrap() };
+            let layout = unsafe {
+                device
+                    .handle
+                    .create_descriptor_set_layout(&layout_info, None)
+                    .unwrap()
+            };
             backend.descriptor_set_layouts.push(layout);
             layout
         };
         descriptor_set_layouts.push(layout);
     }
 
-    let pc_ranges: Vec<vk::PushConstantRange> = reflection.push_constants
+    let pc_ranges: Vec<vk::PushConstantRange> = reflection
+        .push_constants
         .iter()
         .map(|pc| vk::PushConstantRange {
-            stage_flags: convert_shader_stage_flags(ShaderStageFlags::from_bits_truncate(pc.stage_flags.bits())),
+            stage_flags: convert_shader_stage_flags(ShaderStageFlags::from_bits_truncate(
+                pc.stage_flags.bits(),
+            )),
             offset: pc.offset,
             size: pc.size,
         })
@@ -783,10 +827,18 @@ pub fn create_graphics_pipeline_from_baked(
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&descriptor_set_layouts)
         .push_constant_ranges(&pc_ranges);
-    let pipeline_layout = unsafe { device.handle.create_pipeline_layout(&layout_info, None).unwrap() };
+    let pipeline_layout = unsafe {
+        device
+            .handle
+            .create_pipeline_layout(&layout_info, None)
+            .unwrap()
+    };
 
     // 4. Rendering Info
-    let color_formats: Vec<vk::Format> = baked.color_targets[..baked.color_target_count as usize].iter().map(|t| convert_u32_format(t.format)).collect();
+    let color_formats: Vec<vk::Format> = baked.color_targets[..baked.color_target_count as usize]
+        .iter()
+        .map(|t| convert_u32_format(t.format))
+        .collect();
     let depth_format = convert_u32_format(baked.depth_stencil_format);
     let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
         .color_attachment_formats(&color_formats)
@@ -805,7 +857,12 @@ pub fn create_graphics_pipeline_from_baked(
         .layout(pipeline_layout)
         .push_next(&mut rendering_info);
 
-    let pipeline = unsafe { device.handle.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None).unwrap()[0] };
+    let pipeline = unsafe {
+        device
+            .handle
+            .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+            .unwrap()[0]
+    };
 
     let physical_handle = backend.pipeline_resources.insert(PhysicalPipeline {
         handle: pipeline,
@@ -815,7 +872,11 @@ pub fn create_graphics_pipeline_from_baked(
         pushable_sets_mask,
         physical_id: 0,
     });
-    backend.pipeline_resources.get_mut(physical_handle).unwrap().physical_id = physical_handle;
+    backend
+        .pipeline_resources
+        .get_mut(physical_handle)
+        .unwrap()
+        .physical_id = physical_handle;
     BackendPipeline(physical_handle)
 }
 
@@ -831,7 +892,12 @@ pub fn create_compute_pipeline_from_baked(
     let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
         std::slice::from_raw_parts(bytecode.as_ptr() as *const u32, bytecode.len() / 4)
     });
-    let module = unsafe { device.handle.create_shader_module(&create_info, None).unwrap() };
+    let module = unsafe {
+        device
+            .handle
+            .create_shader_module(&create_info, None)
+            .unwrap()
+    };
     backend.shader_modules.push(module);
 
     let entry_point = std::ffi::CString::new("main").unwrap();
@@ -843,17 +909,27 @@ pub fn create_compute_pipeline_from_baked(
     // 2. Layout (Reuse logic from create_graphics_pipeline_from_baked if possible, but keep simple for now)
     // Actually, I'll need the reflection from the baked asset.
     // In Compute case, BakeableGraphicsPipeline might only have common parts.
-    
+
     // Simplified for now: assume no bindings or use a default layout.
     // Real implementation should parse bindings from 'baked'.
-    
+
     let layout_info = vk::PipelineLayoutCreateInfo::default();
-    let pipeline_layout = unsafe { device.handle.create_pipeline_layout(&layout_info, None).unwrap() };
+    let pipeline_layout = unsafe {
+        device
+            .handle
+            .create_pipeline_layout(&layout_info, None)
+            .unwrap()
+    };
 
     let pipeline_info = vk::ComputePipelineCreateInfo::default()
         .stage(stage_info)
         .layout(pipeline_layout);
-    let pipeline = unsafe { device.handle.create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None).unwrap()[0] };
+    let pipeline = unsafe {
+        device
+            .handle
+            .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+            .unwrap()[0]
+    };
 
     let physical_handle = backend.pipeline_resources.insert(PhysicalPipeline {
         handle: pipeline,
@@ -863,6 +939,10 @@ pub fn create_compute_pipeline_from_baked(
         pushable_sets_mask: 0,
         physical_id: 0,
     });
-    backend.pipeline_resources.get_mut(physical_handle).unwrap().physical_id = physical_handle;
+    backend
+        .pipeline_resources
+        .get_mut(physical_handle)
+        .unwrap()
+        .physical_id = physical_handle;
     BackendPipeline(physical_handle)
 }

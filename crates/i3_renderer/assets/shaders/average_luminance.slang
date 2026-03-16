@@ -19,7 +19,8 @@ struct PushConstants {
 PushConstants pc;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> histogram;
-[[vk::binding(1, 0)]] RWStructuredBuffer<ExposureData> exposure_buffer;
+[[vk::binding(1, 0)]] StructuredBuffer<ExposureData> history_buffer;
+[[vk::binding(2, 0)]] RWStructuredBuffer<ExposureData> exposure_buffer;
 
 groupshared float sharedWeightedLogLum[GROUP_SIZE];
 groupshared uint sharedCount[GROUP_SIZE];
@@ -67,7 +68,8 @@ void main(uint3 gl_LocalInvocationID : SV_GroupThreadID)
         
         targetExposure = clamp(targetExposure, 0.001, 1000.0);
         
-        float prevExposure = exposure_buffer[0].new_exposure;
+        // Read from history_buffer instead of exposure_buffer
+        float prevExposure = history_buffer[0].new_exposure;
         if (prevExposure <= 0.0) {
             prevExposure = targetExposure;
         }
@@ -76,8 +78,8 @@ void main(uint3 gl_LocalInvocationID : SV_GroupThreadID)
         float newExposure = lerp(targetExposure, prevExposure, factor);
         
         ExposureData data;
-        data.prev_exposure = newExposure; 
-        data.new_exposure = newExposure; 
+        data.prev_exposure = prevExposure; // Store what was used in the previous frame
+        data.new_exposure = newExposure;   // Store the newly computed exposure
         exposure_buffer[0] = data;
     }
 }

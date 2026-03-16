@@ -140,7 +140,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         color = float3(density, 0.0, 1.0 - density);
     }
 
-    float prev_ex = exposure_buffer[0].prev_exposure;
+    float prev_ex = exposure_buffer[0].new_exposure;
     if (prev_ex == 0.0) prev_ex = 1.0;
     color *= prev_ex;
 

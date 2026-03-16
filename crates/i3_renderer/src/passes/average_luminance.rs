@@ -19,6 +19,7 @@ pub struct AverageLuminancePass {
     // Resolved handles (updated in record)
     histogram_buffer: BufferHandle,
     exposure_buffer: BufferHandle,
+    history_buffer: BufferHandle,
 
     // Persistence
     shader: Option<ShaderModule>,
@@ -32,6 +33,7 @@ impl AverageLuminancePass {
         Self {
             histogram_buffer: dummy_buffer,
             exposure_buffer: dummy_buffer,
+            history_buffer: dummy_buffer,
             shader: None,
             pipeline: None,
             push_constants: None,
@@ -74,6 +76,7 @@ impl RenderPass for AverageLuminancePass {
         // Resolve target handles by name
         self.histogram_buffer = builder.resolve_buffer("HistogramBuffer");
         self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
+        self.history_buffer = builder.read_buffer_history("ExposureBuffer");
 
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
         let dt = *builder.consume::<f32>("TimeDelta");
@@ -89,8 +92,9 @@ impl RenderPass for AverageLuminancePass {
             pad2: 0,
         });
 
-        // Read histogram, read/write exposure
+        // Read histogram, read history, write exposure
         builder.read_buffer(self.histogram_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.history_buffer, ResourceUsage::SHADER_READ);
         builder.write_buffer(self.exposure_buffer, ResourceUsage::SHADER_WRITE);
 
         builder.bind_descriptor_set(
@@ -109,6 +113,17 @@ impl RenderPass for AverageLuminancePass {
                 },
                 DescriptorWrite {
                     binding: 1,
+                    array_element: 0,
+                    descriptor_type: BindingType::StorageBuffer,
+                    buffer_info: Some(DescriptorBufferInfo {
+                        buffer: self.history_buffer,
+                        offset: 0,
+                        range: 0,
+                    }),
+                    image_info: None,
+                },
+                DescriptorWrite {
+                    binding: 2,
                     array_element: 0,
                     descriptor_type: BindingType::StorageBuffer,
                     buffer_info: Some(DescriptorBufferInfo {

@@ -129,7 +129,7 @@ impl RenderPass for DeferredResolvePass {
         self.lights = builder.resolve_buffer("LightBuffer");
         self.cluster_grid = builder.resolve_buffer("ClusterGrid");
         self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
-        self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
+        self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
 
         let (common, grid_size, debug_mode) = {
             let c = *builder.consume::<crate::render_graph::CommonData>("Common");

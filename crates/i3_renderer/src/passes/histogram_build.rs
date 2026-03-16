@@ -80,7 +80,7 @@ impl RenderPass for HistogramBuildPass {
         // Resolve target handles by name
         self.hdr_image = builder.resolve_image(&self.hdr_image_name);
         self.histogram_buffer = builder.resolve_buffer("HistogramBuffer");
-        self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
+        self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
 
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
         self.width = common.screen_width;
