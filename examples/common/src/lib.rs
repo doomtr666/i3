@@ -81,6 +81,7 @@ pub trait ExampleApp {
     fn update(&mut self, delta: Duration);
     fn render(&mut self);
     fn poll_events(&mut self) -> Vec<i3_gfx::graph::backend::Event>;
+    fn handle_event(&mut self, event: &i3_gfx::graph::backend::Event);
 }
 
 pub fn main_loop<T: ExampleApp>(mut app: T) {
@@ -97,6 +98,7 @@ pub fn main_loop<T: ExampleApp>(mut app: T) {
                 } => break 'running,
                 _ => {}
             }
+            app.handle_event(&event);
         }
 
         let delta = stats.update();

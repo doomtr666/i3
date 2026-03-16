@@ -189,7 +189,8 @@ pub fn create_sampler(backend: &mut VulkanBackend, desc: &SamplerDesc) -> Sample
         .address_mode_u(convert_address(desc.address_mode_u))
         .address_mode_v(convert_address(desc.address_mode_v))
         .address_mode_w(convert_address(desc.address_mode_w))
-        .max_anisotropy(1.0)
+        .anisotropy_enable(desc.anisotropy > 1)
+        .max_anisotropy(desc.anisotropy as f32)
         .min_lod(0.0)
         .max_lod(vk::LOD_CLAMP_NONE);
 

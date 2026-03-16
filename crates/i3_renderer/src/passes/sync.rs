@@ -13,7 +13,7 @@ pub struct ObjectSyncPass {
 impl ObjectSyncPass {
     pub fn new(max_objects: usize) -> Self {
         Self {
-            object_buffer: BufferHandle(SymbolId(0)),
+            object_buffer: BufferHandle::INVALID,
             max_objects,
             staging_buffer: None,
             objects: Vec::new(),
@@ -126,7 +126,7 @@ pub struct MaterialSyncPass {
 impl MaterialSyncPass {
     pub fn new(max_materials: usize) -> Self {
         Self {
-            material_buffer: BufferHandle(SymbolId(0)),
+            material_buffer: BufferHandle::INVALID,
             max_materials,
             staging_buffer: None,
             materials: Vec::new(),

@@ -119,6 +119,17 @@ pub fn configure_window(
     Ok(())
 }
 
+pub fn set_fullscreen(backend: &mut VulkanBackend, window: WindowHandle, fullscreen: bool) {
+    if let Some(ctx) = backend.windows.get_mut(&window.0) {
+        let mode = if fullscreen {
+            sdl2::video::FullscreenType::Desktop
+        } else {
+            sdl2::video::FullscreenType::Off
+        };
+        let _ = ctx.raw.handle.set_fullscreen(mode);
+    }
+}
+
 pub fn poll_events(backend: &mut VulkanBackend) -> Vec<Event> {
     let mut events = Vec::new();
     let mut resize_happened = false;
@@ -182,7 +193,7 @@ pub fn poll_events(backend: &mut VulkanBackend) -> Vec<Event> {
                     events.push(Event::MouseMove { x, y });
                 }
                 sdl2::event::Event::MouseWheel { y, .. } => {
-                    events.push(Event::MouseWheel { x: 0, y });
+                    events.push(Event::MouseWheel { x: 0, y: y });
                 }
                 _ => {}
             }
@@ -231,6 +242,8 @@ pub fn sdl_to_keycode(sdl: sdl2::keyboard::Keycode) -> Option<KeyCode> {
         sdl2::keyboard::Keycode::D => Some(KeyCode::D),
         sdl2::keyboard::Keycode::Z => Some(KeyCode::Z),
         sdl2::keyboard::Keycode::Q => Some(KeyCode::Q),
+        sdl2::keyboard::Keycode::F11 => Some(KeyCode::F11),
+        sdl2::keyboard::Keycode::Return => Some(KeyCode::Return),
         sdl2::keyboard::Keycode::LShift => Some(KeyCode::LShift),
         _ => None,
     }

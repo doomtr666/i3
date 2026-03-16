@@ -131,6 +131,10 @@ impl RenderBackend for NullBackend {
         Ok(())
     }
 
+    fn set_fullscreen(&mut self, window: i3_gfx::graph::types::WindowHandle, fullscreen: bool) {
+        info!(?window, fullscreen, "Set Fullscreen Null Window");
+    }
+
     fn poll_events(&mut self) -> Vec<i3_gfx::graph::backend::Event> {
         Vec::new()
     }

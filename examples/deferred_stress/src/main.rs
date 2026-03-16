@@ -19,6 +19,7 @@ struct DeferredStressApp {
     dt: f32,
     light_indices: Vec<i3_renderer::scene::LightId>,
     camera: examples_common::camera_controller::CameraController,
+    is_fullscreen: bool,
 }
 
 impl ExampleApp for DeferredStressApp {
@@ -82,11 +83,18 @@ impl ExampleApp for DeferredStressApp {
     }
 
     fn poll_events(&mut self) -> Vec<Event> {
-        let events = self.backend.poll_events();
-        for event in &events {
-            self.camera.handle_event(event);
+        self.backend.poll_events()
+    }
+
+    fn handle_event(&mut self, event: &Event) {
+        self.camera.handle_event(event);
+
+        if let Event::KeyDown { key } = event {
+            if *key == KeyCode::F11 {
+                self.is_fullscreen = !self.is_fullscreen;
+                self.backend.set_fullscreen(self.window, self.is_fullscreen);
+            }
         }
-        events
     }
 }
 
@@ -185,6 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dt: 0.016,
         light_indices,
         camera: examples_common::camera_controller::CameraController::new(),
+        is_fullscreen: false,
     };
     main_loop(app);
 

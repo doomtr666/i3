@@ -1,5 +1,5 @@
 use i3_gfx::prelude::*;
-use i3_slang::prelude::*;
+
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -20,7 +20,6 @@ pub struct HistogramBuildPass {
     exposure_buffer: BufferHandle,
 
     // Persistence
-    shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
     width: u32,
     height: u32,
@@ -29,14 +28,11 @@ pub struct HistogramBuildPass {
 
 impl HistogramBuildPass {
     pub fn new() -> Self {
-        let dummy_image = ImageHandle(SymbolId(0));
-        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            hdr_image: dummy_image,
-            histogram_buffer: dummy_buffer,
-            exposure_buffer: dummy_buffer,
+            hdr_image: ImageHandle::INVALID,
+            histogram_buffer: BufferHandle::INVALID,
+            exposure_buffer: BufferHandle::INVALID,
             hdr_image_name: "HDR_Target".to_string(),
-            shader: None,
             pipeline: None,
             width: 0,
             height: 0,
@@ -44,10 +40,19 @@ impl HistogramBuildPass {
         }
     }
 
-    pub fn create_pipeline_info(&self) -> ComputePipelineCreateInfo {
-        ComputePipelineCreateInfo {
-            shader_module: self.shader.clone().expect("Shader not compiled"),
+    pub fn init_from_baked(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        asset: &i3_io::pipeline_asset::PipelineAsset,
+    ) {
+        if self.pipeline.is_some() {
+            return;
         }
+
+        self.pipeline = Some(backend.create_compute_pipeline_from_baked(
+            &asset.reflection_data,
+            &asset.bytecode,
+        ));
     }
 }
 
@@ -56,24 +61,8 @@ impl RenderPass for HistogramBuildPass {
         "HistogramBuildPass"
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        // 1. Compile Shader
-        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
-        let shader_dir = "crates/i3_renderer/shaders";
-
-        self.shader = Some(
-            slang
-                .compile_file("histogram_build", ShaderTarget::Spirv, &[shader_dir])
-                .expect("Failed to compile HistogramBuild shader"),
-        );
-
-        // 2. Create Pipeline
-        let info = self.create_pipeline_info();
-        self.pipeline = Some(backend.create_compute_pipeline(&info));
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {
+        // Handled by init_from_baked
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {

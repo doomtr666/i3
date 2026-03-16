@@ -1,5 +1,5 @@
 use i3_gfx::prelude::*;
-use i3_slang::prelude::*;
+
 use nalgebra_glm as glm;
 
 #[repr(C)]
@@ -16,7 +16,6 @@ pub struct DeferredResolvePushConstants {
     pub _pad: u32,
 }
 
-/// Deferred resolve pass struct implementing the RenderPass trait.
 pub struct DeferredResolvePass {
     pub sampler: SamplerHandle,
 
@@ -33,28 +32,24 @@ pub struct DeferredResolvePass {
     exposure_buffer: BufferHandle,
 
     // Persistence
-    shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
     push_constants: Option<DeferredResolvePushConstants>,
 }
 
 impl DeferredResolvePass {
     pub fn new(sampler: SamplerHandle) -> Self {
-        let dummy_image = ImageHandle(SymbolId(0));
-        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
             sampler,
-            hdr_target: dummy_image,
-            gbuffer_albedo: dummy_image,
-            gbuffer_normal: dummy_image,
-            gbuffer_roughmetal: dummy_image,
-            gbuffer_emissive: dummy_image,
-            depth_buffer: dummy_image,
-            lights: dummy_buffer,
-            cluster_grid: dummy_buffer,
-            cluster_light_indices: dummy_buffer,
-            exposure_buffer: dummy_buffer,
-            shader: None,
+            hdr_target: ImageHandle::INVALID,
+            gbuffer_albedo: ImageHandle::INVALID,
+            gbuffer_normal: ImageHandle::INVALID,
+            gbuffer_roughmetal: ImageHandle::INVALID,
+            gbuffer_emissive: ImageHandle::INVALID,
+            depth_buffer: ImageHandle::INVALID,
+            lights: BufferHandle::INVALID,
+            cluster_grid: BufferHandle::INVALID,
+            cluster_light_indices: BufferHandle::INVALID,
+            exposure_buffer: BufferHandle::INVALID,
             pipeline: None,
             push_constants: None,
         }
@@ -76,20 +71,6 @@ impl DeferredResolvePass {
             &asset.bytecode,
         ));
     }
-
-    pub fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
-        GraphicsPipelineCreateInfo {
-            shader_module: self.shader.clone().expect("Shader not compiled"),
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![RenderTargetInfo {
-                    format: Format::R16G16B16A16_SFLOAT,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
 }
 
 impl RenderPass for DeferredResolvePass {
@@ -97,24 +78,8 @@ impl RenderPass for DeferredResolvePass {
         "DeferredResolvePass"
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        // 1. Compile Shader
-        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
-        let shader_dir = "crates/i3_renderer/shaders";
-
-        self.shader = Some(
-            slang
-                .compile_file("deferred_resolve", ShaderTarget::Spirv, &[shader_dir])
-                .expect("Failed to compile DeferredResolve shader"),
-        );
-
-        // 2. Create Pipeline
-        let info = self.create_pipeline_info();
-        self.pipeline = Some(backend.create_graphics_pipeline(&info));
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {
+        // Handled by init_from_baked
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {

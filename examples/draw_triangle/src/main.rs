@@ -33,6 +33,7 @@ struct TriangleApp {
     backend: VulkanBackend,
     window: WindowHandle,
     pass: Arc<Mutex<TrianglePass>>,
+    is_fullscreen: bool,
 }
 
 impl ExampleApp for TriangleApp {
@@ -63,6 +64,15 @@ impl ExampleApp for TriangleApp {
 
     fn poll_events(&mut self) -> Vec<Event> {
         self.backend.poll_events()
+    }
+
+    fn handle_event(&mut self, event: &Event) {
+        if let Event::KeyDown { key } = event {
+            if *key == KeyCode::F11 {
+                self.is_fullscreen = !self.is_fullscreen;
+                self.backend.set_fullscreen(self.window, self.is_fullscreen);
+            }
+        }
     }
 }
 
@@ -152,6 +162,7 @@ fn main() -> Result<(), String> {
         backend,
         window,
         pass,
+        is_fullscreen: false,
     };
     main_loop(app);
 

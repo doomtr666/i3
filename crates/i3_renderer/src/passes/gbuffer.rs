@@ -1,5 +1,5 @@
 use i3_gfx::prelude::*;
-use i3_slang::prelude::*;
+
 
 /// A single draw command extracted from the scene for the GBuffer pass.
 #[derive(Clone, Copy, Debug)]
@@ -39,7 +39,6 @@ impl Default for GBufferPushConstants {
     }
 }
 
-/// GBuffer pass struct implementing the RenderPass trait.
 pub struct GBufferPass {
     pub bindless_set: u64,
 
@@ -52,28 +51,22 @@ pub struct GBufferPass {
     material_buffer: BufferHandle,
 
     // Persistence
-    shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
     draw_commands: Vec<DrawCommand>,
-    is_baked: bool,
 }
 
 impl GBufferPass {
     pub fn new() -> Self {
-        let dummy_image = ImageHandle(SymbolId(0));
-        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            depth_buffer: dummy_image,
-            gbuffer_albedo: dummy_image,
-            gbuffer_normal: dummy_image,
-            gbuffer_roughmetal: dummy_image,
-            gbuffer_emissive: dummy_image,
-            material_buffer: dummy_buffer,
+            depth_buffer: ImageHandle::INVALID,
+            gbuffer_albedo: ImageHandle::INVALID,
+            gbuffer_normal: ImageHandle::INVALID,
+            gbuffer_roughmetal: ImageHandle::INVALID,
+            gbuffer_emissive: ImageHandle::INVALID,
+            material_buffer: BufferHandle::INVALID,
             bindless_set: 0,
-            shader: None,
             pipeline: None,
             draw_commands: Vec::new(),
-            is_baked: false,
         }
     }
 
@@ -92,82 +85,6 @@ impl GBufferPass {
             &asset.reflection_data,
             &asset.bytecode,
         ));
-        self.is_baked = true;
-    }
-    
-    // ... existing init ...
-
-    /// Helper to create the pipeline info for this pass.
-    fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
-        GraphicsPipelineCreateInfo {
-            shader_module: self.shader.clone().expect("Shader not compiled"),
-            vertex_input: VertexInputState {
-                bindings: vec![VertexInputBinding {
-                    binding: 0,
-                    stride: std::mem::size_of::<GBufferVertex>() as u32,
-                    input_rate: VertexInputRate::Vertex,
-                }],
-                attributes: vec![
-                    VertexInputAttribute {
-                        location: 0,
-                        binding: 0,
-                        format: VertexFormat::Float3,
-                        offset: 0,
-                    },
-                    VertexInputAttribute {
-                        location: 1,
-                        binding: 0,
-                        format: VertexFormat::Float3,
-                        offset: 12,
-                    },
-                    VertexInputAttribute {
-                        location: 2,
-                        binding: 0,
-                        format: VertexFormat::Float2,
-                        offset: 24,
-                    },
-                    VertexInputAttribute {
-                        location: 3,
-                        binding: 0,
-                        format: VertexFormat::Float4,
-                        offset: 32,
-                    },
-                ],
-            },
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![
-                    RenderTargetInfo {
-                        format: Format::R8G8B8A8_SRGB,
-                        ..Default::default()
-                    },
-                    RenderTargetInfo {
-                        format: Format::R16G16_SFLOAT,
-                        ..Default::default()
-                    },
-                    RenderTargetInfo {
-                        format: Format::R8G8_UNORM,
-                        ..Default::default()
-                    },
-                    RenderTargetInfo {
-                        format: Format::R11G11B10_UFLOAT,
-                        ..Default::default()
-                    },
-                ],
-                depth_stencil_format: Some(Format::D32_FLOAT),
-                logic_op: None,
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::Back,
-                ..Default::default()
-            },
-            depth_stencil_state: DepthStencilState {
-                depth_test_enable: true,
-                depth_write_enable: true,
-                depth_compare_op: CompareOp::Less,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
     }
 }
 
@@ -176,27 +93,8 @@ impl RenderPass for GBufferPass {
         "GBufferPass"
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        // 1. Compile Shader
-        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
-        // For now, we assume a relative path or fixed location for shaders.
-        // In a real scenario, this might be configurable.
-        let shader_dir = "crates/i3_renderer/shaders";
-
-        self.shader = Some(
-            slang
-                .compile_file("gbuffer", ShaderTarget::Spirv, &[shader_dir])
-                .expect("Failed to compile GBuffer shader"),
-        );
-
-        // 2. Create Pipeline
-        let info = self.create_pipeline_info();
-        self.pipeline = Some(backend.create_graphics_pipeline(&info));
-        self.is_baked = false;
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {
+        // Handled by init_from_baked
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {

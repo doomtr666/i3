@@ -54,7 +54,8 @@ pub struct DefaultRenderGraph {
     pub post_process_group: Arc<Mutex<PostProcessGroup>>,
     pub debug_viz_pass: Arc<Mutex<DebugVizPass>>,
 
-    pub sampler: SamplerHandle,
+    pub linear_sampler: SamplerHandle,
+    pub material_sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
     pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
@@ -70,19 +71,30 @@ pub struct RenderConfig {
 impl DefaultRenderGraph {
     /// Creates the render graph resources (passes and groups).
     pub fn new(_backend: &mut dyn RenderBackend, _config: &RenderConfig) -> Self {
-        // Create shared sampler
-        let sampler = _backend.create_sampler(&SamplerDesc {
+        // Linear sampler for post-processing (ClampToEdge, no anisotropy)
+        let linear_sampler = _backend.create_sampler(&SamplerDesc {
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+            anisotropy: 1,
+            ..Default::default()
+        });
+
+        // Material sampler for bindless textures (Repeat, Anisotropy 16)
+        let material_sampler = _backend.create_sampler(&SamplerDesc {
+            address_mode_u: AddressMode::Repeat,
+            address_mode_v: AddressMode::Repeat,
+            address_mode_w: AddressMode::Repeat,
+            anisotropy: 16,
             ..Default::default()
         });
 
         let gbuffer_pass = Arc::new(Mutex::new(GBufferPass::new()));
         let sky_pass = Arc::new(Mutex::new(SkyPass::new()));
         let clustering_group = Arc::new(Mutex::new(ClusteringGroup::new()));
-        let deferred_resolve_pass = Arc::new(Mutex::new(DeferredResolvePass::new(sampler)));
-        let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(sampler)));
-        let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(sampler, DebugChannel::Lit)));
+        let deferred_resolve_pass = Arc::new(Mutex::new(DeferredResolvePass::new(linear_sampler)));
+        let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(linear_sampler)));
+        let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(linear_sampler, DebugChannel::Lit)));
 
         // Mount system bundle and try to load baked pipelines
         let mut vfs = i3_io::vfs::Vfs::new();
@@ -107,9 +119,29 @@ impl DefaultRenderGraph {
                     tracing::info!("Sky pipeline loaded from system bundle");
                 }
 
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build").wait_loaded() {
+                    clustering_group.lock().unwrap().cluster_build_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("ClusterBuild pipeline loaded from system bundle");
+                }
+
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("light_cull").wait_loaded() {
+                    clustering_group.lock().unwrap().light_cull_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("LightCull pipeline loaded from system bundle");
+                }
+
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
                     deferred_resolve_pass.lock().unwrap().init_from_baked(_backend, &handle);
                     tracing::info!("Lighting pipeline loaded from system bundle");
+                }
+
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("histogram_build").wait_loaded() {
+                    post_process_group.lock().unwrap().histogram_build_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("HistogramBuild pipeline loaded from system bundle");
+                }
+
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("average_luminance").wait_loaded() {
+                    post_process_group.lock().unwrap().average_luminance_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("AverageLuminance pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("tonemap").wait_loaded() {
@@ -117,7 +149,6 @@ impl DefaultRenderGraph {
                     tracing::info!("Tonemap pipeline loaded from system bundle");
                 }
 
-                // debug_viz might be missing from the bundle for now
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("debug_viz").wait_loaded() {
                     debug_viz_pass.lock().unwrap().init_from_baked(_backend, &handle);
                     tracing::info!("DebugViz pipeline loaded from system bundle");
@@ -134,7 +165,7 @@ impl DefaultRenderGraph {
 
         let mut bindless_manager = crate::bindless::BindlessManager::new(
             1000, // Capacity for 1000 bindless global textures
-            sampler,
+            material_sampler,
         );
         bindless_manager.bindless_set = _backend.get_bindless_set_handle();
 
@@ -163,7 +194,8 @@ impl DefaultRenderGraph {
             deferred_resolve_pass,
             post_process_group,
             debug_viz_pass,
-            sampler,
+            linear_sampler,
+            material_sampler,
             debug_channel: DebugChannel::Lit,
             gpu_buffers,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),

@@ -1,5 +1,5 @@
 use i3_gfx::prelude::*;
-use i3_slang::prelude::*;
+
 use nalgebra_glm as glm;
 
 #[repr(C)]
@@ -13,7 +13,6 @@ pub struct ClusterBuildPushConstants {
     pub pad: u32,
 }
 
-/// Cluster build pass struct implementing the RenderPass trait.
 pub struct ClusterBuildPass {
     pub push_constants: ClusterBuildPushConstants,
 
@@ -21,14 +20,13 @@ pub struct ClusterBuildPass {
     cluster_aabbs: BufferHandle,
 
     // Persistence
-    shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
 }
 
 impl ClusterBuildPass {
     pub fn new() -> Self {
         Self {
-            cluster_aabbs: BufferHandle(SymbolId(0)),
+            cluster_aabbs: BufferHandle::INVALID,
             push_constants: ClusterBuildPushConstants {
                 inv_projection: nalgebra_glm::identity(),
                 grid_size: [0, 0, 0],
@@ -37,9 +35,23 @@ impl ClusterBuildPass {
                 screen_dimensions: [0.0, 0.0],
                 pad: 0,
             },
-            shader: None,
             pipeline: None,
         }
+    }
+
+    pub fn init_from_baked(
+        &mut self,
+        _backend: &mut dyn RenderBackend,
+        asset: &i3_io::pipeline_asset::PipelineAsset,
+    ) {
+        if self.pipeline.is_some() {
+            return;
+        }
+
+        self.pipeline = Some(_backend.create_compute_pipeline_from_baked(
+            &asset.reflection_data,
+            &asset.bytecode,
+        ));
     }
 }
 
@@ -48,25 +60,8 @@ impl RenderPass for ClusterBuildPass {
         "ClusterBuild"
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        // 1. Compile Shader
-        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
-        let shader_dir = "crates/i3_renderer/shaders";
-
-        self.shader = Some(
-            slang
-                .compile_file("cluster_build", ShaderTarget::Spirv, &[shader_dir])
-                .expect("Failed to compile ClusterBuild shader"),
-        );
-
-        // 2. Create Pipeline
-        self.pipeline = Some(backend.create_compute_pipeline(&ComputePipelineCreateInfo {
-            shader_module: self.shader.clone().expect("Shader not compiled"),
-        }));
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {
+        // Handled by init_from_baked
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {

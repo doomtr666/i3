@@ -35,6 +35,8 @@ pub enum KeyCode {
     D,
     Z,
     Q,
+    F11,
+    Return,
     LShift,
     // Add more as needed
 }
@@ -203,6 +205,8 @@ pub trait RenderBackend {
         config: SwapchainConfig,
     ) -> Result<(), String>;
 
+    fn set_fullscreen(&mut self, window: crate::graph::types::WindowHandle, fullscreen: bool);
+
     /// Poll events from the windowing system.
     fn poll_events(&mut self) -> Vec<Event>;
 
@@ -232,6 +236,7 @@ pub trait RenderBackend {
 
     fn create_compute_pipeline_from_baked(
         &mut self,
+        _reflection: &[u8],
         _bytecode: &[u8],
     ) -> BackendPipeline {
         unimplemented!("Backend does not support baked pipelines yet")

@@ -1,5 +1,5 @@
 use i3_gfx::prelude::*;
-use i3_slang::prelude::*;
+
 
 /// Which GBuffer channel to display in the debug visualization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,23 +43,20 @@ pub struct DebugVizPass {
     gbuffer_emissive: ImageHandle,
 
     // Persistence
-    shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
 }
 
 impl DebugVizPass {
     pub fn new(sampler: SamplerHandle, channel: DebugChannel) -> Self {
-        let dummy_image = ImageHandle(SymbolId(0));
         Self {
-            backbuffer: dummy_image,
-            gbuffer_albedo: dummy_image,
-            gbuffer_normal: dummy_image,
-            gbuffer_roughmetal: dummy_image,
-            gbuffer_emissive: dummy_image,
+            backbuffer: ImageHandle::INVALID,
+            gbuffer_albedo: ImageHandle::INVALID,
+            gbuffer_normal: ImageHandle::INVALID,
+            gbuffer_roughmetal: ImageHandle::INVALID,
+            gbuffer_emissive: ImageHandle::INVALID,
             sampler,
             channel,
             backbuffer_name: "Backbuffer".to_string(),
-            shader: None,
             pipeline: None,
         }
     }
@@ -80,47 +77,11 @@ impl DebugVizPass {
             &asset.bytecode,
         ));
     }
-
-    pub fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
-        GraphicsPipelineCreateInfo {
-            shader_module: self.shader.clone().expect("Shader not compiled"),
-            vertex_input: VertexInputState::default(),
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![RenderTargetInfo {
-                    format: Format::B8G8R8A8_SRGB, // Backbuffer format
-                    ..Default::default()
-                }],
-                depth_stencil_format: None,
-                ..Default::default()
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::None,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
 }
 
 impl RenderPass for DebugVizPass {
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        // 1. Compile Shader
-        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
-        let shader_dir = "crates/i3_renderer/shaders";
-
-        self.shader = Some(
-            slang
-                .compile_file("debug_viz", ShaderTarget::Spirv, &[shader_dir])
-                .expect("Failed to compile DebugViz shader"),
-        );
-
-        // 2. Create Pipeline
-        let info = self.create_pipeline_info();
-        self.pipeline = Some(backend.create_graphics_pipeline(&info));
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {
+        // Handled by init_from_baked
     }
 
     fn name(&self) -> &str {

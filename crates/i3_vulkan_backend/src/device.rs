@@ -85,7 +85,9 @@ impl VulkanDevice {
         let mut features11 =
             vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
 
-        let features10 = vk::PhysicalDeviceFeatures::default().fill_mode_non_solid(true);
+        let features10 = vk::PhysicalDeviceFeatures::default()
+            .fill_mode_non_solid(true)
+            .sampler_anisotropy(true);
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features10)

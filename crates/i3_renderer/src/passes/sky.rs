@@ -1,5 +1,5 @@
 use i3_gfx::prelude::*;
-use i3_slang::prelude::*;
+
 use nalgebra_glm as glm;
 
 #[repr(C)]
@@ -21,18 +21,15 @@ pub struct SkyPass {
     depth_buffer: ImageHandle,
 
     // Persistence
-    shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
     push_constants: Option<SkyPushConstants>,
 }
 
 impl SkyPass {
     pub fn new() -> Self {
-        let dummy_image = ImageHandle(SymbolId(0));
         Self {
-            hdr_target: dummy_image,
-            depth_buffer: dummy_image,
-            shader: None,
+            hdr_target: ImageHandle::INVALID,
+            depth_buffer: ImageHandle::INVALID,
             pipeline: None,
             push_constants: None,
         }
@@ -54,31 +51,6 @@ impl SkyPass {
             &asset.bytecode,
         ));
     }
-
-    pub fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
-        GraphicsPipelineCreateInfo {
-            shader_module: self.shader.clone().expect("Shader not compiled"),
-            render_targets: RenderTargetsInfo {
-                color_targets: vec![RenderTargetInfo {
-                    format: Format::R16G16B16A16_SFLOAT,
-                    ..Default::default()
-                }],
-                depth_stencil_format: Some(Format::D32_FLOAT),
-                ..Default::default()
-            },
-            rasterization_state: RasterizationState {
-                cull_mode: CullMode::None,
-                ..Default::default()
-            },
-            depth_stencil_state: DepthStencilState {
-                depth_test_enable: true,
-                depth_write_enable: false, // Sky is at infinity
-                depth_compare_op: CompareOp::LessOrEqual,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
 }
 
 impl RenderPass for SkyPass {
@@ -86,24 +58,8 @@ impl RenderPass for SkyPass {
         "SkyPass"
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        // 1. Compile Shader
-        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
-        let shader_dir = "crates/i3_renderer/shaders";
-
-        self.shader = Some(
-            slang
-                .compile_file("sky", ShaderTarget::Spirv, &[shader_dir])
-                .expect("Failed to compile Sky shader"),
-        );
-
-        // 2. Create Pipeline
-        let info = self.create_pipeline_info();
-        self.pipeline = Some(backend.create_graphics_pipeline(&info));
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {
+        // Handled by init_from_baked
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {

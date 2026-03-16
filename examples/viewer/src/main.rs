@@ -27,6 +27,7 @@ struct DeferredGltfApp {
     time: f32,
     dt: f32,
     camera: examples_common::camera_controller::CameraController,
+    is_fullscreen: bool,
 }
 
 impl ExampleApp for DeferredGltfApp {
@@ -76,11 +77,18 @@ impl ExampleApp for DeferredGltfApp {
     }
 
     fn poll_events(&mut self) -> Vec<Event> {
-        let events = self.backend.poll_events();
-        for event in &events {
-            self.camera.handle_event(event);
+        self.backend.poll_events()
+    }
+
+    fn handle_event(&mut self, event: &Event) {
+        self.camera.handle_event(event);
+
+        if let Event::KeyDown { key } = event {
+            if *key == KeyCode::F11 {
+                self.is_fullscreen = !self.is_fullscreen;
+                self.backend.set_fullscreen(self.window, self.is_fullscreen);
+            }
         }
-        events
     }
 }
 
@@ -183,6 +191,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 f if f == TextureFormat::BC7_SRGB as u32 => Format::BC7_SRGB,
                                 f if f == TextureFormat::BC7_UNORM as u32 => Format::BC7_UNORM,
                                 f if f == TextureFormat::BC5_UNORM as u32 => Format::BC5_UNORM,
+                                f if f == TextureFormat::BC1_RGB_SRGB as u32 => Format::BC1_RGB_SRGB,
+                                f if f == TextureFormat::BC1_RGB_UNORM as u32 => Format::BC1_RGB_UNORM,
+                                f if f == TextureFormat::BC3_SRGB as u32 => Format::BC3_SRGB,
+                                f if f == TextureFormat::BC3_UNORM as u32 => Format::BC3_UNORM,
                                 _ => Format::R8G8B8A8_SRGB,
                             };
 
@@ -205,10 +217,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mip_width = (width >> mip).max(1);
                                 let mip_height = (height >> mip).max(1);
 
-                                // All baked formats (BC5, BC7) currently use 16 bytes per 4x4 block
                                 let blocks_x = (mip_width + 3) / 4;
                                 let blocks_y = (mip_height + 3) / 4;
-                                let mip_size = (blocks_x * blocks_y) as usize * 16;
+                                
+                                let bpb = match format {
+                                    Format::BC1_RGB_SRGB | Format::BC1_RGB_UNORM => 8,
+                                    Format::R8G8B8A8_SRGB | Format::R8G8B8A8_UNORM => 0, // Not block based
+                                    _ => 16,
+                                };
+
+                                let mip_size = if bpb == 0 {
+                                    (mip_width * mip_height * 4) as usize
+                                } else {
+                                    (blocks_x * blocks_y) as usize * bpb
+                                };
 
                                 if current_offset + mip_size <= tex_asset.data.len() {
                                     let _ = RenderBackend::upload_image(
@@ -268,6 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         time: 0.0,
         dt: 0.016,
         camera,
+        is_fullscreen: false,
     };
     main_loop(app);
 

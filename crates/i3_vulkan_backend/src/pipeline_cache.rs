@@ -882,9 +882,13 @@ pub fn create_graphics_pipeline_from_baked(
 
 pub fn create_compute_pipeline_from_baked(
     backend: &mut VulkanBackend,
-    _baked: &BakeableGraphicsPipeline, // We use reflection from it
+    reflection_bytes: &[u8],
     bytecode: &[u8],
 ) -> BackendPipeline {
+    use i3_gfx::graph::pipeline::ShaderReflection;
+    let reflection: ShaderReflection =
+        postcard::from_bytes(reflection_bytes).expect("Failed to deserialize reflection");
+
     let device = backend.get_device().clone();
     debug!("Creating Baked Compute Pipeline");
 
@@ -892,12 +896,8 @@ pub fn create_compute_pipeline_from_baked(
     let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
         std::slice::from_raw_parts(bytecode.as_ptr() as *const u32, bytecode.len() / 4)
     });
-    let module = unsafe {
-        device
-            .handle
-            .create_shader_module(&create_info, None)
-            .unwrap()
-    };
+    let module = unsafe { device.handle.create_shader_module(&create_info, None) }
+        .expect("Shader module creation failed");
     backend.shader_modules.push(module);
 
     let entry_point = std::ffi::CString::new("main").unwrap();
@@ -906,21 +906,96 @@ pub fn create_compute_pipeline_from_baked(
         .module(module)
         .name(&entry_point);
 
-    // 2. Layout (Reuse logic from create_graphics_pipeline_from_baked if possible, but keep simple for now)
-    // Actually, I'll need the reflection from the baked asset.
-    // In Compute case, BakeableGraphicsPipeline might only have common parts.
+    // 2. Layout
+    let mut set_bindings: HashMap<u32, Vec<vk::DescriptorSetLayoutBinding>> = HashMap::new();
+    for binding in &reflection.bindings {
+        let vk_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(binding.binding)
+            .descriptor_type(convert_binding_type_to_descriptor(
+                binding.binding_type.clone(),
+            ))
+            .descriptor_count(binding.count)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE);
+        set_bindings
+            .entry(binding.set)
+            .or_default()
+            .push(vk_binding);
+    }
 
-    // Simplified for now: assume no bindings or use a default layout.
-    // Real implementation should parse bindings from 'baked'.
+    let mut descriptor_set_layouts = Vec::new();
+    let mut pushable_sets_mask = 0;
 
-    let layout_info = vk::PipelineLayoutCreateInfo::default();
+    if !set_bindings.is_empty() {
+        let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
+        for i in 0..=max_set {
+            let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
+
+            let layout = if i == 2 && backend.bindless_set_layout != vk::DescriptorSetLayout::null() {
+                backend.bindless_set_layout
+            } else {
+                let mut binding_flags = Vec::with_capacity(bindings.len());
+                for b in bindings {
+                    if b.descriptor_count >= 1000 || b.descriptor_count == 0 {
+                        binding_flags.push(
+                            vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                                | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+                        );
+                    } else {
+                        binding_flags.push(vk::DescriptorBindingFlags::empty());
+                    }
+                }
+                let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
+                    .binding_flags(&binding_flags);
+                let mut layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+                    .bindings(bindings)
+                    .push_next(&mut flags_info);
+
+                if i == 0 && !bindings.is_empty() && bindings.len() < 8 {
+                    layout_info =
+                        layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
+                    pushable_sets_mask |= 1 << 0;
+                }
+                if binding_flags
+                    .iter()
+                    .any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND))
+                {
+                    layout_info.flags |= vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL;
+                }
+
+                let layout = unsafe {
+                    device
+                        .handle
+                        .create_descriptor_set_layout(&layout_info, None)
+                        .unwrap()
+                };
+                backend.descriptor_set_layouts.push(layout);
+                layout
+            };
+            descriptor_set_layouts.push(layout);
+        }
+    }
+
+    let pc_ranges: Vec<vk::PushConstantRange> = reflection
+        .push_constants
+        .iter()
+        .map(|pc| vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            offset: pc.offset,
+            size: pc.size,
+        })
+        .collect();
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&descriptor_set_layouts)
+        .push_constant_ranges(&pc_ranges);
     let pipeline_layout = unsafe {
         device
             .handle
             .create_pipeline_layout(&layout_info, None)
-            .unwrap()
+            .expect("Failed to create pipeline layout")
     };
 
+    // 3. Pipeline
     let pipeline_info = vk::ComputePipelineCreateInfo::default()
         .stage(stage_info)
         .layout(pipeline_layout);
@@ -928,15 +1003,15 @@ pub fn create_compute_pipeline_from_baked(
         device
             .handle
             .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
-            .unwrap()[0]
+            .expect("Compute pipeline creation failed")[0]
     };
 
     let physical_handle = backend.pipeline_resources.insert(PhysicalPipeline {
         handle: pipeline,
         layout: pipeline_layout,
         bind_point: vk::PipelineBindPoint::COMPUTE,
-        set_layouts: Vec::new(),
-        pushable_sets_mask: 0,
+        set_layouts: descriptor_set_layouts,
+        pushable_sets_mask,
         physical_id: 0,
     });
     backend

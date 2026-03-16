@@ -106,6 +106,7 @@ struct MandelbrotApp {
     is_dragging: bool,
     width: u32,
     height: u32,
+    is_fullscreen: bool,
 }
 
 impl MandelbrotApp {
@@ -165,6 +166,7 @@ impl MandelbrotApp {
             is_dragging: false,
             width,
             height,
+            is_fullscreen: false,
         }
     }
 }
@@ -202,37 +204,43 @@ impl ExampleApp for MandelbrotApp {
     }
 
     fn poll_events(&mut self) -> Vec<Event> {
-        let events = self.backend.poll_events();
-        for event in &events {
-            match *event {
-                Event::Resize { width, height, .. } => {
-                    self.width = width;
-                    self.height = height;
-                }
-                Event::MouseWheel { y, .. } => {
-                    let zoom_factor = if y > 0 { 0.95 } else { 1.05 };
-                    self.zoom *= zoom_factor;
-                }
-                Event::MouseDown { button: 1, .. } => {
-                    self.is_dragging = true;
-                }
-                Event::MouseUp { button: 1, .. } => {
-                    self.is_dragging = false;
-                }
-                Event::MouseMove { x, y, .. } => {
-                    let new_pos = glm::vec2(x as f32, y as f32);
-                    if self.is_dragging {
-                        let delta = new_pos - self.mouse_pos;
-                        let world_delta = delta * (self.zoom / (self.height as f32 / 2.0));
-                        self.center.x -= world_delta.x;
-                        self.center.y += world_delta.y;
-                    }
-                    self.mouse_pos = new_pos;
-                }
-                _ => {}
+        self.backend.poll_events()
+    }
+
+    fn handle_event(&mut self, event: &Event) {
+        match *event {
+            Event::Resize { width, height, .. } => {
+                self.width = width;
+                self.height = height;
             }
+            Event::MouseWheel { y, .. } => {
+                let zoom_factor = if y > 0 { 0.95 } else { 1.05 };
+                self.zoom *= zoom_factor;
+            }
+            Event::MouseDown { button: 1, .. } => {
+                self.is_dragging = true;
+            }
+            Event::MouseUp { button: 1, .. } => {
+                self.is_dragging = false;
+            }
+            Event::MouseMove { x, y, .. } => {
+                let new_pos = glm::vec2(x as f32, y as f32);
+                if self.is_dragging {
+                    let delta = new_pos - self.mouse_pos;
+                    let world_delta = delta * (self.zoom / (self.height as f32 / 2.0));
+                    self.center.x -= world_delta.x;
+                    self.center.y += world_delta.y;
+                }
+                self.mouse_pos = new_pos;
+            }
+            Event::KeyDown { key } => {
+                if key == KeyCode::F11 {
+                    self.is_fullscreen = !self.is_fullscreen;
+                    self.backend.set_fullscreen(self.window, self.is_fullscreen);
+                }
+            }
+            _ => {}
         }
-        events
     }
 }
 

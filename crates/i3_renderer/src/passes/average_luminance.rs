@@ -1,5 +1,5 @@
 use i3_gfx::prelude::*;
-use i3_slang::prelude::*;
+
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -22,28 +22,34 @@ pub struct AverageLuminancePass {
     history_buffer: BufferHandle,
 
     // Persistence
-    shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
     push_constants: Option<AverageLuminancePushConstants>,
 }
 
 impl AverageLuminancePass {
     pub fn new() -> Self {
-        let dummy_buffer = BufferHandle(SymbolId(0));
         Self {
-            histogram_buffer: dummy_buffer,
-            exposure_buffer: dummy_buffer,
-            history_buffer: dummy_buffer,
-            shader: None,
+            histogram_buffer: BufferHandle::INVALID,
+            exposure_buffer: BufferHandle::INVALID,
+            history_buffer: BufferHandle::INVALID,
             pipeline: None,
             push_constants: None,
         }
     }
 
-    pub fn create_pipeline_info(&self) -> ComputePipelineCreateInfo {
-        ComputePipelineCreateInfo {
-            shader_module: self.shader.clone().expect("Shader not compiled"),
+    pub fn init_from_baked(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        asset: &i3_io::pipeline_asset::PipelineAsset,
+    ) {
+        if self.pipeline.is_some() {
+            return;
         }
+
+        self.pipeline = Some(backend.create_compute_pipeline_from_baked(
+            &asset.reflection_data,
+            &asset.bytecode,
+        ));
     }
 }
 
@@ -52,24 +58,8 @@ impl RenderPass for AverageLuminancePass {
         "AverageLuminancePass"
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        // 1. Compile Shader
-        let slang = SlangCompiler::new().expect("Failed to create Slang compiler");
-        let shader_dir = "crates/i3_renderer/shaders";
-
-        self.shader = Some(
-            slang
-                .compile_file("average_luminance", ShaderTarget::Spirv, &[shader_dir])
-                .expect("Failed to compile AverageLuminance shader"),
-        );
-
-        // 2. Create Pipeline
-        let info = self.create_pipeline_info();
-        self.pipeline = Some(backend.create_compute_pipeline(&info));
+    fn init(&mut self, _backend: &mut dyn RenderBackend) {
+        // Handled by init_from_baked in render graph
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
