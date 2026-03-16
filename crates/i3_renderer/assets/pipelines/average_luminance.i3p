@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "average_luminance",
+    shader: Path("../shaders/average_luminance.slang"),
+    graphics: None,
+)

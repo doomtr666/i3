@@ -79,6 +79,12 @@ pub trait Importer: Send + Sync {
     /// Run all extractors on the imported data, producing baked assets.
     /// The default implementation calls each registered extractor.
     fn extract(&self, data: &dyn ImportedData, ctx: &BakeContext) -> Result<Vec<BakeOutput>>;
+
+    /// Returns a list of additional dependencies for a source file.
+    /// Used for incremental baking (mtime checks).
+    fn get_dependencies(&self, _source_path: &Path) -> Result<Vec<PathBuf>> {
+        Ok(Vec::new())
+    }
 }
 
 /// An extractor produces a specific output type from imported data.
@@ -151,6 +157,83 @@ impl BundleBaker {
         self
     }
 
+    /// Recursively scan a directory and add all pipelines (.i3p files) found.
+    pub fn add_pipelines(mut self, directory: impl AsRef<Path>) -> Result<Self> {
+        let dir = directory.as_ref();
+        if !dir.exists() {
+            return Err(crate::BakerError::Pipeline(format!(
+                "Directory not found: {:?}",
+                dir
+            )));
+        }
+
+        let importer = crate::importers::PipelineImporter::new();
+
+        for entry in std::fs::read_dir(dir).map_err(|e| crate::BakerError::Os {
+            path: dir.to_path_buf(),
+            source: e,
+        })? {
+            let entry = entry.map_err(|e| crate::BakerError::Os {
+                path: dir.to_path_buf(),
+                source: e,
+            })?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                self = self.add_pipelines(&path)?;
+            } else if path.extension().map_or(false, |ext| ext == "i3p") {
+                self.assets.push(AssetJob {
+                    source_path: path,
+                    importer: Box::new(importer),
+                });
+            }
+        }
+
+        Ok(self)
+    }
+
+    /// Recursively scan a directory and add all images found with the given options.
+    pub fn add_images(
+        mut self,
+        directory: impl AsRef<Path>,
+        options: crate::importers::image_importer::TextureImportOptions,
+    ) -> Result<Self> {
+        let dir = directory.as_ref();
+        if !dir.exists() {
+            return Err(crate::BakerError::Pipeline(format!(
+                "Directory not found: {:?}",
+                dir
+            )));
+        }
+
+        let importer = crate::importers::ImageImporter::new(options);
+        let extensions = importer.source_extensions();
+
+        for entry in std::fs::read_dir(dir).map_err(|e| crate::BakerError::Os {
+            path: dir.to_path_buf(),
+            source: e,
+        })? {
+            let entry = entry.map_err(|e| crate::BakerError::Os {
+                path: dir.to_path_buf(),
+                source: e,
+            })?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                self = self.add_images(&path, options)?;
+            } else if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                if extensions.iter().any(|&e| e == ext) {
+                    self.assets.push(AssetJob {
+                        source_path: path,
+                        importer: Box::new(importer),
+                    });
+                }
+            }
+        }
+
+        Ok(self)
+    }
+
     /// Execute the baking process.
     pub fn execute(self) -> Result<()> {
         println!("cargo:rerun-if-changed=build.rs");
@@ -186,21 +269,29 @@ impl BundleBaker {
                 })?;
 
             for asset in &self.assets {
-                if asset.source_path.exists() {
-                    let metadata = std::fs::metadata(&asset.source_path).map_err(|e| {
-                        crate::BakerError::Os {
-                            path: asset.source_path.clone(),
+                let mut all_deps = vec![asset.source_path.clone()];
+                if let Ok(deps) = asset.importer.get_dependencies(&asset.source_path) {
+                    all_deps.extend(deps);
+                }
+
+                for dep in all_deps {
+                    if dep.exists() {
+                        let metadata = std::fs::metadata(&dep).map_err(|e| crate::BakerError::Os {
+                            path: dep.clone(),
                             source: e,
+                        })?;
+                        if metadata.modified().map_err(|e| crate::BakerError::Os {
+                            path: dep.clone(),
+                            source: e,
+                        })? > output_mtime
+                        {
+                            needs_bake = true;
+                            break;
                         }
-                    })?;
-                    if metadata.modified().map_err(|e| crate::BakerError::Os {
-                        path: asset.source_path.clone(),
-                        source: e,
-                    })? > output_mtime
-                    {
-                        needs_bake = true;
-                        break;
                     }
+                }
+                if needs_bake {
+                    break;
                 }
             }
         }

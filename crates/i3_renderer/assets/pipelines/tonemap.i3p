@@ -1,0 +1,18 @@
+PipelineConfig(
+    name: "tonemap",
+    shader: Path("../shaders/tonemap.slang"),
+    graphics: Some(GraphicsConfig(
+        rasterization: (
+            cull_mode: None,
+        ),
+        depth_stencil: (
+            depth_test_enable: false,
+            depth_write_enable: false,
+        ),
+        depth_stencil_format: None,
+        topology: TriangleList,
+        targets: [
+            (format: B8G8R8A8_SRGB), // Backbuffer format
+        ],
+    ))
+)

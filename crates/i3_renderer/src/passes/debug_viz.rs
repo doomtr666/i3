@@ -64,6 +64,23 @@ impl DebugVizPass {
         }
     }
 
+    pub fn init_from_baked(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        asset: &i3_io::pipeline_asset::PipelineAsset,
+    ) {
+        if self.pipeline.is_some() {
+            return;
+        }
+
+        let state = asset.state.as_ref().expect("DebugViz asset missing state");
+        self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
+            state,
+            &asset.reflection_data,
+            &asset.bytecode,
+        ));
+    }
+
     pub fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
         GraphicsPipelineCreateInfo {
             shader_module: self.shader.clone().expect("Shader not compiled"),

@@ -1,0 +1,4 @@
+// test_include.slangh
+struct CommonData {
+    float4 color;
+};

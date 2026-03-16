@@ -221,6 +221,22 @@ pub trait RenderBackend {
         desc: &crate::graph::pipeline::ComputePipelineCreateInfo,
     ) -> BackendPipeline;
 
+    fn create_graphics_pipeline_from_baked(
+        &mut self,
+        _desc: &i3_io::pipeline_asset::BakeableGraphicsPipeline,
+        _reflection: &[u8],
+        _bytecode: &[u8],
+    ) -> BackendPipeline {
+        unimplemented!("Backend does not support baked pipelines yet")
+    }
+
+    fn create_compute_pipeline_from_baked(
+        &mut self,
+        _bytecode: &[u8],
+    ) -> BackendPipeline {
+        unimplemented!("Backend does not support baked pipelines yet")
+    }
+
     fn destroy_image(&mut self, handle: BackendImage);
     fn destroy_buffer(&mut self, handle: BackendBuffer);
     fn destroy_sampler(&mut self, handle: SamplerHandle);

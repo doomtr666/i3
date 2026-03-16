@@ -84,6 +84,47 @@ impl DefaultRenderGraph {
         let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(sampler)));
         let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(sampler, DebugChannel::Lit)));
 
+        // Mount system bundle and try to load baked pipelines
+        let mut vfs = i3_io::vfs::Vfs::new();
+        let catalog_path = "assets/system.i3c";
+        let blob_path = "assets/system.i3b";
+        
+        if std::path::Path::new(catalog_path).exists() && std::path::Path::new(blob_path).exists() {
+            if let Ok(bundle) = i3_io::vfs::BundleBackend::mount(catalog_path, blob_path) {
+                vfs.mount(Box::new(bundle));
+                tracing::info!("System bundle mounted successfully");
+                
+                let loader = i3_io::asset::AssetLoader::new(Arc::new(vfs));
+                
+                // Load GBuffer pipeline
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("gbuffer").wait_loaded() {
+                    gbuffer_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("GBuffer pipeline loaded from system bundle");
+                }
+
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("sky").wait_loaded() {
+                    sky_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("Sky pipeline loaded from system bundle");
+                }
+
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
+                    deferred_resolve_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("Lighting pipeline loaded from system bundle");
+                }
+
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("tonemap").wait_loaded() {
+                    post_process_group.lock().unwrap().tonemap_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("Tonemap pipeline loaded from system bundle");
+                }
+
+                // debug_viz might be missing from the bundle for now
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("debug_viz").wait_loaded() {
+                    debug_viz_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    tracing::info!("DebugViz pipeline loaded from system bundle");
+                }
+            }
+        }
+
         let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(_backend);
 
         let sync_group = Arc::new(Mutex::new(SyncGroup::new(

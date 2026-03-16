@@ -1,0 +1,18 @@
+PipelineConfig(
+    name: "deferred_resolve",
+    shader: Path("../shaders/deferred_resolve.slang"),
+    graphics: Some(GraphicsConfig(
+        rasterization: (
+            cull_mode: None,
+        ),
+        depth_stencil: (
+            depth_test_enable: false,
+            depth_write_enable: false,
+        ),
+        depth_stencil_format: None,
+        topology: TriangleList,
+        targets: [
+            (format: R16G16B16A16_SFLOAT), // HDR_Target
+        ],
+    ))
+)

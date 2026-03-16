@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "light_cull",
+    shader: Path("../shaders/light_cull.slang"),
+    graphics: None,
+)

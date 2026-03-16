@@ -1,0 +1,72 @@
+// assets/system/shaders/common.slangh
+
+// --- Shared Constants ---
+#define PI 3.14159265359
+
+// --- Common Data (Binding 0, Set 0) ---
+struct CommonData
+{
+    float4x4 view;
+    float4x4 projection;
+    float4x4 viewProjection;
+    float4x4 invProjection;
+    float4x4 invViewProjection;
+    float nearPlane;
+    float farPlane;
+    uint screenWidth;
+    uint screenHeight;
+    float3 cameraPos;
+    uint lightCount;
+};
+
+// --- Material Data (Standardized for GBuffer) ---
+struct MaterialData
+{
+    float4 baseColorFactor;
+    float4 emissiveFactorAndAlphaCutoff;
+    // x: metallic, y: roughness, zw: padding
+    float4 pbrFactors;
+    // x: albedo, y: normal, z: rmao, w: emissive
+    int4 textureIndices;
+};
+
+struct ExposureData
+{
+    float prev_exposure;
+    float new_exposure;
+};
+
+// --- Bindless Descriptor Set (Set 2) ---
+#ifndef BINDLESS_SET
+#define BINDLESS_SET 2
+#endif
+
+[[vk::binding(0, BINDLESS_SET)]]
+Texture2D bindlessTextures[4096];
+
+[[vk::binding(1, BINDLESS_SET)]]
+SamplerState globalSampler;
+
+// --- Helper Funcs ---
+float2 encodeOctahedral(float3 n)
+{
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z < 0.0)
+    {
+        float2 wrapped = (1.0 - abs(n.yx)) * float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+        n = float3(wrapped, n.z);
+    }
+    return n.xy * 0.5 + 0.5;
+}
+
+float3 decodeOctahedral(float2 e)
+{
+    e = e * 2.0 - 1.0;
+    float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0)
+    {
+        float2 wrapped = (1.0 - abs(n.yx)) * float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+        n = float3(wrapped, n.z);
+    }
+    return normalize(n);
+}

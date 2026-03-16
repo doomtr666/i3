@@ -456,7 +456,7 @@ impl SlangCompiler {
         }
 
         // 2. Add Root fallback (for cargo run)
-        final_search_paths.push("crates/i3_renderer/shaders".to_string());
+        final_search_paths.push("crates/i3_renderer/assets/shaders".to_string());
 
         let search_path_cstrings: Vec<_> = final_search_paths
             .iter()

@@ -1,16 +1,5 @@
-struct ClusterAABB {
-    float4 min_point;
-    float4 max_point;
-};
-
-struct LightData {
-    float3 position;
-    float radius;
-    float3 color;
-    float intensity;
-    float3 direction;
-    uint light_type;
-};
+// assets/system/shaders/light_cull.slang
+#include "lighting.slangh"
 
 struct PushConstants {
     float4x4 view_matrix;
@@ -26,11 +15,6 @@ StructuredBuffer<ClusterAABB> cluster_aabbs;
 
 [[vk::binding(1, 0)]]
 StructuredBuffer<LightData> lights;
-
-struct ClusterGridData {
-    uint offset;
-    uint count;
-};
 
 [[vk::binding(2, 0)]]
 RWStructuredBuffer<ClusterGridData> cluster_grid;

@@ -1,10 +1,11 @@
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 
 // --- Enums & Flags ---
 
 bitflags! {
     /// Shader stage flags for identifying shader stages.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct ShaderStageFlags: u32 {
         const Vertex = 0x1;
         const Fragment = 0x2;
@@ -19,7 +20,7 @@ bitflags! {
 
 // --- Shader Reflection & Module Types ---
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BindingType {
     Unknown,
     UniformBuffer,
@@ -32,7 +33,7 @@ pub enum BindingType {
     CombinedImageSampler,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Binding {
     pub name: String,
     pub binding: u32,
@@ -41,21 +42,21 @@ pub struct Binding {
     pub binding_type: BindingType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryPointInfo {
     pub name: String,
     pub stage: String, // "vertex", "fragment", etc.
     pub thread_group_size: Option<[u64; 3]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushConstantRange {
     pub stage_flags: ShaderStageFlags,
     pub offset: u32,
     pub size: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShaderReflection {
     pub entry_points: Vec<EntryPointInfo>,
     pub bindings: Vec<Binding>,
@@ -89,7 +90,7 @@ impl Default for ShaderModule {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IndexType {
     Uint16 = 0,
     Uint32 = 1,
@@ -101,7 +102,7 @@ pub enum MipmapMode {
     Linear = 1,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrimitiveTopology {
     PointList,
     LineList,
@@ -111,13 +112,13 @@ pub enum PrimitiveTopology {
     TriangleFan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VertexInputRate {
     Vertex,
     Instance,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VertexFormat {
     Float,
     Float2,
@@ -133,21 +134,21 @@ pub enum VertexFormat {
     UInt4,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PolygonMode {
     Fill,
     Line,
     Point,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CullMode {
     None,
     Front,
     Back,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SampleCount {
     Sample1 = 1,
     Sample2 = 2,
@@ -158,7 +159,7 @@ pub enum SampleCount {
     Sample64 = 64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CompareOp {
     Never,
     Less,
@@ -170,7 +171,7 @@ pub enum CompareOp {
     Always,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StencilOp {
     Keep,
     Zero,
@@ -182,7 +183,7 @@ pub enum StencilOp {
     DecrementAndWrap,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BlendFactor {
     Zero,
     One,
@@ -196,7 +197,7 @@ pub enum BlendFactor {
     OneMinusDstAlpha,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BlendOp {
     Add,
     Subtract,
@@ -205,7 +206,7 @@ pub enum BlendOp {
     Max,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LogicOp {
     Clear,
     And,
@@ -226,7 +227,7 @@ pub enum LogicOp {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct ColorComponentFlags: u8 {
         const R = 0x1;
         const G = 0x2;
@@ -245,14 +246,14 @@ impl Default for ColorComponentFlags {
 
 // --- Structs ---
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VertexInputBinding {
     pub binding: u32,
     pub stride: u32,
     pub input_rate: VertexInputRate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VertexInputAttribute {
     pub location: u32,
     pub binding: u32,
@@ -260,7 +261,7 @@ pub struct VertexInputAttribute {
     pub offset: u32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VertexInputState {
     pub bindings: Vec<VertexInputBinding>,
     pub attributes: Vec<VertexInputAttribute>,
@@ -294,7 +295,8 @@ impl Default for TessellationState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RasterizationState {
     pub depth_clamp_enable: bool,
     pub rasterizer_discard_enable: bool,
@@ -338,7 +340,7 @@ pub struct MultisampleState {
 */
 // That one is fine.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MultisampleState {
     pub sample_count: SampleCount,
     pub sample_shading_enable: bool,
@@ -355,7 +357,7 @@ impl Default for MultisampleState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StencilOpState {
     pub fail_op: StencilOp,
     pub pass_op: StencilOp,
@@ -380,7 +382,8 @@ impl Default for StencilOpState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DepthStencilState {
     pub depth_test_enable: bool,
     pub depth_write_enable: bool,
@@ -409,7 +412,8 @@ impl Default for DepthStencilState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BlendState {
     pub src_color_factor: BlendFactor,
     pub dst_color_factor: BlendFactor,

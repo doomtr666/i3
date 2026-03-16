@@ -1,0 +1,19 @@
+PipelineConfig(
+    name: "sky",
+    shader: Path("../shaders/sky.slang"),
+    graphics: Some(GraphicsConfig(
+        rasterization: (
+            cull_mode: None,
+        ),
+        depth_stencil: (
+            depth_test_enable: true,
+            depth_write_enable: false,
+            depth_compare_op: LessOrEqual,
+        ),
+        depth_stencil_format: Some(D32_FLOAT),
+        topology: TriangleList,
+        targets: [
+            (format: R16G16B16A16_SFLOAT), // HDR_Target
+        ],
+    ))
+)

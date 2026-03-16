@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "histogram_build",
+    shader: Path("../shaders/histogram_build.slang"),
+    graphics: None,
+)

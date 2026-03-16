@@ -6,6 +6,7 @@ use intel_tex_2;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+#[derive(Clone, Copy)]
 pub struct ImageImporter {
     options: TextureImportOptions,
 }

@@ -393,3 +393,160 @@ pub fn convert_vk_format(format: vk::Format) -> Format {
         _ => Format::Undefined,
     }
 }
+
+pub fn convert_u32_format(id: u32) -> vk::Format {
+    match id {
+        0 => vk::Format::UNDEFINED,
+        1 => vk::Format::R8G8B8A8_UNORM,
+        2 => vk::Format::R8G8B8A8_SRGB,
+        3 => vk::Format::B8G8R8A8_UNORM,
+        4 => vk::Format::B8G8R8A8_SRGB,
+        5 => vk::Format::R8G8_UNORM,
+        6 => vk::Format::R16G16_SFLOAT,
+        7 => vk::Format::R16G16B16A16_SFLOAT,
+        8 => vk::Format::B10G11R11_UFLOAT_PACK32,
+        9 => vk::Format::R32_SFLOAT, // Was R32G32B32A32_FLOAT? No, let's match types.rs
+        10 => vk::Format::R32G32B32A32_SFLOAT,
+        11 => vk::Format::D32_SFLOAT,
+        12 => vk::Format::R32_SINT,
+        13 => vk::Format::R32G32_SINT,
+        14 => vk::Format::R32G32B32_SINT,
+        15 => vk::Format::R32G32B32A32_SINT,
+        16 => vk::Format::R32_UINT,
+        17 => vk::Format::R32G32_UINT,
+        18 => vk::Format::R32G32B32_UINT,
+        19 => vk::Format::R32G32B32A32_UINT,
+        20 => vk::Format::R32_SFLOAT,
+        21 => vk::Format::R32G32_SFLOAT,
+        22 => vk::Format::R32G32B32_SFLOAT,
+        23 => vk::Format::R32G32B32A32_SFLOAT,
+        _ => vk::Format::UNDEFINED,
+    }
+}
+
+pub fn convert_u32_vertex_format(id: u32) -> vk::Format {
+    match id {
+        0 => vk::Format::R32_SFLOAT,
+        1 => vk::Format::R32G32_SFLOAT,
+        2 => vk::Format::R32G32B32_SFLOAT,
+        3 => vk::Format::R32G32B32A32_SFLOAT,
+        4 => vk::Format::R32_SINT,
+        5 => vk::Format::R32G32_SINT,
+        6 => vk::Format::R32G32B32_SINT,
+        7 => vk::Format::R32G32B32A32_SINT,
+        8 => vk::Format::R32_UINT,
+        9 => vk::Format::R32G32_UINT,
+        10 => vk::Format::R32G32B32_UINT,
+        11 => vk::Format::R32G32B32A32_UINT,
+        _ => vk::Format::UNDEFINED,
+    }
+}
+
+pub fn convert_u32_topology(id: u32) -> vk::PrimitiveTopology {
+    match id {
+        0 => vk::PrimitiveTopology::POINT_LIST,
+        1 => vk::PrimitiveTopology::LINE_LIST,
+        2 => vk::PrimitiveTopology::LINE_STRIP,
+        3 => vk::PrimitiveTopology::TRIANGLE_LIST,
+        4 => vk::PrimitiveTopology::TRIANGLE_STRIP,
+        5 => vk::PrimitiveTopology::TRIANGLE_FAN,
+        _ => vk::PrimitiveTopology::TRIANGLE_LIST,
+    }
+}
+
+pub fn convert_u32_polygon_mode(id: u32) -> vk::PolygonMode {
+    match id {
+        0 => vk::PolygonMode::FILL,
+        1 => vk::PolygonMode::LINE,
+        2 => vk::PolygonMode::POINT,
+        _ => vk::PolygonMode::FILL,
+    }
+}
+
+pub fn convert_u32_cull_mode(id: u32) -> vk::CullModeFlags {
+    match id {
+        0 => vk::CullModeFlags::NONE,
+        1 => vk::CullModeFlags::FRONT,
+        2 => vk::CullModeFlags::BACK,
+        3 => vk::CullModeFlags::FRONT_AND_BACK,
+        _ => vk::CullModeFlags::NONE,
+    }
+}
+
+pub fn convert_u32_compare_op(id: u32) -> vk::CompareOp {
+    match id {
+        0 => vk::CompareOp::NEVER,
+        1 => vk::CompareOp::LESS,
+        2 => vk::CompareOp::EQUAL,
+        3 => vk::CompareOp::LESS_OR_EQUAL,
+        4 => vk::CompareOp::GREATER,
+        5 => vk::CompareOp::NOT_EQUAL,
+        6 => vk::CompareOp::GREATER_OR_EQUAL,
+        7 => vk::CompareOp::ALWAYS,
+        _ => vk::CompareOp::ALWAYS,
+    }
+}
+
+pub fn convert_u32_blend_factor(id: u32) -> vk::BlendFactor {
+    match id {
+        0 => vk::BlendFactor::ZERO,
+        1 => vk::BlendFactor::ONE,
+        2 => vk::BlendFactor::SRC_COLOR,
+        3 => vk::BlendFactor::ONE_MINUS_SRC_COLOR,
+        4 => vk::BlendFactor::DST_COLOR,
+        5 => vk::BlendFactor::ONE_MINUS_DST_COLOR,
+        6 => vk::BlendFactor::SRC_ALPHA,
+        7 => vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+        8 => vk::BlendFactor::DST_ALPHA,
+        9 => vk::BlendFactor::ONE_MINUS_DST_ALPHA,
+        _ => vk::BlendFactor::ONE,
+    }
+}
+
+pub fn convert_u32_blend_op(id: u32) -> vk::BlendOp {
+    match id {
+        0 => vk::BlendOp::ADD,
+        1 => vk::BlendOp::SUBTRACT,
+        2 => vk::BlendOp::REVERSE_SUBTRACT,
+        3 => vk::BlendOp::MIN,
+        4 => vk::BlendOp::MAX,
+        _ => vk::BlendOp::ADD,
+    }
+}
+
+pub fn convert_u32_descriptor_type(id: u32) -> vk::DescriptorType {
+    match id {
+        0 => vk::DescriptorType::UNIFORM_BUFFER,
+        1 => vk::DescriptorType::STORAGE_BUFFER,
+        2 => vk::DescriptorType::SAMPLED_IMAGE,
+        3 => vk::DescriptorType::STORAGE_IMAGE,
+        4 => vk::DescriptorType::SAMPLER,
+        5 => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        _ => vk::DescriptorType::STORAGE_BUFFER,
+    }
+}
+
+pub fn convert_u32_shader_stage_flags(bits: u32) -> vk::ShaderStageFlags {
+    let mut flags = vk::ShaderStageFlags::empty();
+    if bits & 0x01 != 0 { flags |= vk::ShaderStageFlags::VERTEX; }
+    if bits & 0x02 != 0 { flags |= vk::ShaderStageFlags::FRAGMENT; }
+    if bits & 0x04 != 0 { flags |= vk::ShaderStageFlags::COMPUTE; }
+    if bits & 0x08 != 0 { flags |= vk::ShaderStageFlags::GEOMETRY; }
+    if bits & 0x10 != 0 { flags |= vk::ShaderStageFlags::TESSELLATION_CONTROL; }
+    if bits & 0x20 != 0 { flags |= vk::ShaderStageFlags::TESSELLATION_EVALUATION; }
+    flags
+}
+
+pub fn convert_u32_stencil_op(id: u32) -> vk::StencilOp {
+    match id {
+        0 => vk::StencilOp::KEEP,
+        1 => vk::StencilOp::ZERO,
+        2 => vk::StencilOp::REPLACE,
+        3 => vk::StencilOp::INCREMENT_AND_CLAMP,
+        4 => vk::StencilOp::DECREMENT_AND_CLAMP,
+        5 => vk::StencilOp::INVERT,
+        6 => vk::StencilOp::INCREMENT_AND_WRAP,
+        7 => vk::StencilOp::DECREMENT_AND_WRAP,
+        _ => vk::StencilOp::KEEP,
+    }
+}

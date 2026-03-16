@@ -1,6 +1,10 @@
+#[cfg(debug_assertions)]
 use ash::vk;
+
+#[cfg(debug_assertions)]
 use i3_gfx::graph::backend::{BackendBuffer, BackendImage};
 
+#[cfg(debug_assertions)]
 use crate::backend::VulkanBackend;
 
 /// Set a debug name for an image resource.

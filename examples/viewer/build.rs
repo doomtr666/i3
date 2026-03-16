@@ -27,13 +27,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .execute()?;
 
     // Copy shaders to target directory
-    let shader_src = manifest_path.join("../../crates/i3_renderer/shaders");
+    let shader_src = manifest_path.join("../../crates/i3_renderer/assets/shaders");
     let shader_dst = target_dir.join("shaders");
     copy_dir(&shader_src, &shader_dst)?;
 
     // Tell cargo to rerun if assets or shaders change
     println!("cargo:rerun-if-changed=../../assets");
-    println!("cargo:rerun-if-changed=../../crates/i3_renderer/shaders");
+    println!("cargo:rerun-if-changed=../../crates/i3_renderer/assets/shaders");
 
     Ok(())
 }

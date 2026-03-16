@@ -9,6 +9,8 @@ workspace = true
 
 [dependencies]
 i3_io.workspace = true
+i3_gfx.workspace = true
+i3_slang.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 rayon.workspace = true
@@ -20,3 +22,8 @@ nalgebra-glm.workspace = true
 image = "0.25.5"
 intel_tex_2 = "0.3.0"
 asset-importer = "0.7.0"
+ron = "0.8"
+regex = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+postcard = { workspace = true, features = ["alloc"] }

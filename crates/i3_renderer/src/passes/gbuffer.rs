@@ -55,6 +55,7 @@ pub struct GBufferPass {
     shader: Option<ShaderModule>,
     pipeline: Option<BackendPipeline>,
     draw_commands: Vec<DrawCommand>,
+    is_baked: bool,
 }
 
 impl GBufferPass {
@@ -72,8 +73,29 @@ impl GBufferPass {
             shader: None,
             pipeline: None,
             draw_commands: Vec::new(),
+            is_baked: false,
         }
     }
+
+    pub fn init_from_baked(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        asset: &i3_io::pipeline_asset::PipelineAsset,
+    ) {
+        if self.pipeline.is_some() {
+            return;
+        }
+
+        let state = asset.state.as_ref().expect("GBuffer asset missing state");
+        self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
+            state,
+            &asset.reflection_data,
+            &asset.bytecode,
+        ));
+        self.is_baked = true;
+    }
+    
+    // ... existing init ...
 
     /// Helper to create the pipeline info for this pass.
     fn create_pipeline_info(&self) -> GraphicsPipelineCreateInfo {
@@ -174,6 +196,7 @@ impl RenderPass for GBufferPass {
         // 2. Create Pipeline
         let info = self.create_pipeline_info();
         self.pipeline = Some(backend.create_graphics_pipeline(&info));
+        self.is_baked = false;
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {

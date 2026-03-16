@@ -12,3 +12,7 @@ i3_gfx.workspace = true
 i3_slang.workspace = true
 tracing.workspace = true
 nalgebra-glm.workspace = true
+i3_io.workspace = true
+
+[build-dependencies]
+i3_baker = { path = "../i3_baker" }

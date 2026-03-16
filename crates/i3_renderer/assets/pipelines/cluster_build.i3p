@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "cluster_build",
+    shader: Path("../shaders/cluster_build.slang"),
+    graphics: None,
+)

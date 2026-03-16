@@ -4,6 +4,7 @@ pub mod asset;
 pub mod error;
 pub mod material;
 pub mod mesh;
+pub mod pipeline_asset;
 pub mod scene_asset;
 pub mod texture;
 pub mod vfs;
@@ -13,7 +14,7 @@ pub use error::{IoError, Result};
 /// Fixed-size header for all assets stored in .i3b bundles.
 /// Total size: 64 bytes.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Default, PartialEq)]
 pub struct AssetHeader {
     pub magic: u64,             // 0..8   0x4933415353455400 ("I3ASSET\0")
     pub version: u32,           // 8..12  Current: 1

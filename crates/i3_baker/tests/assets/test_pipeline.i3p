@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "test_pipeline",
+    shader: Path("test_shader.slang"),
+    graphics: None
+)

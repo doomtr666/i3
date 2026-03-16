@@ -78,6 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Material"
         } else if asset_type == i3_io::texture::TEXTURE_ASSET_TYPE {
             "Texture"
+        } else if asset_type == i3_io::pipeline_asset::PIPELINE_ASSET_TYPE {
+            "Pipeline"
         } else {
             "Unknown"
         };

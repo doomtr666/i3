@@ -1,0 +1,19 @@
+PipelineConfig(
+    name: "debug_viz",
+    shader: Path("../shaders/debug_viz.slang"), // Note: We might need to copy/move this shader to the system folder
+    graphics: Some(GraphicsConfig(
+        rasterization: (
+            cull_mode: None,
+        ),
+        depth_stencil: (
+            depth_test_enable: false,
+            depth_write_enable: false,
+        ),
+        depth_stencil_format: None,
+        topology: TriangleList,
+        targets: [
+            (format: B8G8R8A8_SRGB), // Backbuffer format
+        ],
+        vertex_layout: None,
+    ))
+)

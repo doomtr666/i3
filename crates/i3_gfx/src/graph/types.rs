@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 use std::any::TypeId;
 use thiserror::Error;
 
@@ -82,7 +83,7 @@ pub enum SymbolLifetime {
     External,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum Format {
     Undefined,
@@ -150,14 +151,14 @@ impl Format {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImageType {
     Type1D,
     Type2D,
     Type3D,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImageViewType {
     Type1D,
     Type2D,
@@ -168,7 +169,7 @@ pub enum ImageViewType {
     TypeCubeArray,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ComponentSwizzle {
     Identity,
     Zero,
@@ -185,7 +186,7 @@ impl Default for ComponentSwizzle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct ComponentMapping {
     pub r: ComponentSwizzle,
     pub g: ComponentSwizzle,
@@ -328,7 +329,7 @@ pub use crate::graph::pipeline::SampleCount; // Re-export if needed or redefine?
 // I will change verify convert.rs imports later.
 
 // Added missing Enums for Sampler/ImageView
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AddressMode {
     Repeat,
     MirroredRepeat,
@@ -337,13 +338,13 @@ pub enum AddressMode {
     MirrorClampToEdge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Filter {
     Nearest,
     Linear,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MipmapMode {
     Nearest,
     Linear,
@@ -372,7 +373,7 @@ impl Default for SamplerDesc {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BorderColor {
     FloatTransparentBlack,
     IntTransparentBlack,

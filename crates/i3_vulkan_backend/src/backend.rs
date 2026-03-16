@@ -700,6 +700,59 @@ impl RenderBackend for VulkanBackend {
         crate::pipeline_cache::create_compute_pipeline(self, desc)
     }
 
+    fn create_graphics_pipeline_from_baked(
+        &mut self,
+        baked: &i3_io::pipeline_asset::BakeableGraphicsPipeline,
+        reflection: &[u8],
+        bytecode: &[u8],
+    ) -> BackendPipeline {
+        crate::pipeline_cache::create_graphics_pipeline_from_baked(self, baked, reflection, bytecode)
+    }
+
+    fn create_compute_pipeline_from_baked(
+        &mut self,
+        bytecode: &[u8],
+    ) -> BackendPipeline {
+        // Compute pipelines in i3 are currently just Spirit-V bytecode.
+        // We'll need a way to pass reflection if needed, but for now we create it directly.
+        // Actually, internal create_compute_pipeline_from_baked expects reflection if we want to be thorough.
+        // For now, let's use a dummy or minimal.
+        
+        let device = self.get_device().clone();
+        let create_info = ash::vk::ShaderModuleCreateInfo::default().code(unsafe {
+            std::slice::from_raw_parts(bytecode.as_ptr() as *const u32, bytecode.len() / 4)
+        });
+        let module = unsafe { device.handle.create_shader_module(&create_info, None).unwrap() };
+        self.shader_modules.push(module);
+
+        let entry_point = std::ffi::CString::new("main").unwrap();
+        let stage_info = ash::vk::PipelineShaderStageCreateInfo::default()
+            .stage(ash::vk::ShaderStageFlags::COMPUTE)
+            .module(module)
+            .name(&entry_point);
+
+        let layout_info = ash::vk::PipelineLayoutCreateInfo::default();
+        let pipeline_layout = unsafe { device.handle.create_pipeline_layout(&layout_info, None).unwrap() };
+
+        let pipeline_info = ash::vk::ComputePipelineCreateInfo::default()
+            .stage(stage_info)
+            .layout(pipeline_layout);
+        let pipeline = unsafe { 
+            device.handle.create_compute_pipelines(ash::vk::PipelineCache::null(), &[pipeline_info], None).unwrap()[0] 
+        };
+
+        let physical_handle = self.pipeline_resources.insert(crate::resource_arena::PhysicalPipeline {
+            handle: pipeline,
+            layout: pipeline_layout,
+            bind_point: ash::vk::PipelineBindPoint::COMPUTE,
+            set_layouts: Vec::new(),
+            pushable_sets_mask: 0,
+            physical_id: 0,
+        });
+        self.pipeline_resources.get_mut(physical_handle).unwrap().physical_id = physical_handle;
+        BackendPipeline(physical_handle)
+    }
+
     fn upload_buffer(
         &mut self,
         handle: BackendBuffer,
