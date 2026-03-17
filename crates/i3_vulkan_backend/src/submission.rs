@@ -227,19 +227,31 @@ pub fn acquire_swapchain_image(
             Ok((index, suboptimal)) => {
                 if suboptimal {
                     debug!("Swapchain is suboptimal, invalidating for recreation");
-                    let images_to_remove = {
-                        let ctx = backend.windows.get_mut(&window.0).unwrap();
-                        let sc = ctx.swapchain.take().unwrap();
-                        let imgs = sc.images.clone();
-                        ctx.swapchain = Some(sc); // Put it back if we still want to use it
-                        imgs
-                    };
+
                     unsafe {
                         backend.get_device().handle.device_wait_idle().ok();
                     }
+
+                    let (old_id, images_to_remove) = {
+                        let ctx = backend.windows.get_mut(&window.0).expect("Window context missing");
+                        let sc = ctx.swapchain.take().expect("Swapchain missing in suboptimal state");
+                        let old_id = ctx.acquire_semaphore_ids[frame_slot % ctx.acquire_semaphore_ids.len()];
+                        (old_id, sc.images.clone())
+                    };
+
+                    // Destroy old signaled semaphore and create a replacement
+                    backend.destroy_semaphore_internal(old_id);
+                    let new_id = backend.create_semaphore();
+                    let new_sem = backend.semaphores.get(new_id).cloned().unwrap();
+
+                    if let Some(ctx) = backend.windows.get_mut(&window.0) {
+                        let idx = frame_slot % ctx.acquire_semaphore_ids.len();
+                        ctx.acquire_semaphore_ids[idx] = new_id;
+                        ctx.acquire_semaphores[idx] = new_sem;
+                    }
+
                     backend.unregister_swapchain_images(&images_to_remove);
-                    let ctx = backend.windows.get_mut(&window.0).unwrap();
-                    ctx.swapchain = None;
+                    continue;
                 }
 
                 let ctx = backend.windows.get_mut(&window.0).unwrap();
@@ -375,6 +387,7 @@ pub fn submit(
 
     let wait_values = [0u64; 8];
     let mut signal_values = [0u64; 8];
+
     signal_values[0] = signal_value;
 
     let num_binary = signal_binary.len();

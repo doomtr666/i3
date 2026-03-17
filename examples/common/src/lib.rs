@@ -84,6 +84,31 @@ pub trait ExampleApp {
     fn handle_event(&mut self, event: &i3_gfx::graph::backend::Event);
 }
 
+pub fn get_gpu_index() -> u32 {
+    let args: Vec<String> = std::env::args().collect();
+    for i in 0..args.len() {
+        if (args[i] == "--gpu" || args[i] == "-g") && i + 1 < args.len() {
+            if let Ok(index) = args[i + 1].parse::<u32>() {
+                return index;
+            }
+        }
+    }
+    0
+}
+
+pub fn maybe_list_gpus(backend: &dyn i3_gfx::graph::backend::RenderBackend) {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--list-gpus" || arg == "-l") {
+        let devices = backend.enumerate_devices();
+        println!("\nAvailable GPUs:");
+        for dev in devices {
+            println!("  [{}] {} ({:?})", dev.id, dev.name, dev.device_type);
+        }
+        println!("");
+        std::process::exit(0);
+    }
+}
+
 pub fn main_loop<T: ExampleApp>(mut app: T) {
     info!("Starting main loop...");
     let mut stats = FrameStats::default();

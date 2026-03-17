@@ -112,7 +112,8 @@ struct MandelbrotApp {
 impl MandelbrotApp {
     fn new() -> Self {
         let mut backend = VulkanBackend::new().unwrap();
-        backend.initialize(0).unwrap();
+        examples_common::maybe_list_gpus(&backend);
+        backend.initialize(examples_common::get_gpu_index()).unwrap();
 
         let width = 1280;
         let height = 720;

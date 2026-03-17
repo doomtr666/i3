@@ -82,13 +82,8 @@ fn main() -> Result<(), String> {
 
     // 2. Initialize Backend & Window
     let mut backend = VulkanBackend::new()?;
-
-    // Choose the first discrete GPU or first available
-    // Note: enumerate_devices might act differently now, relying on new() default.
-    // If we want specific device, we'd need to inspect instance.
-    // backend.initialize(0)?; // initialize with default device for MVP
-
-    backend.initialize(0)?;
+    examples_common::maybe_list_gpus(&backend);
+    backend.initialize(examples_common::get_gpu_index())?;
 
     let window = backend.create_window(WindowDesc {
         title: "i3fx — Draw Triangle".to_string(),

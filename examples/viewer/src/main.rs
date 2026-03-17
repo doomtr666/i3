@@ -125,7 +125,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Initialize Backend
     let mut backend = VulkanBackend::new()?;
-    backend.initialize(0)?;
+    examples_common::maybe_list_gpus(&backend);
+    backend.initialize(examples_common::get_gpu_index())?;
 
     // 2. Create Window
     let window = backend.create_window(WindowDesc {

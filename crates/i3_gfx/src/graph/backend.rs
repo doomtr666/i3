@@ -55,6 +55,7 @@ pub enum Event {
 
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
+    /// Stable index for selection (returned by enumerate_devices).
     pub id: u32,
     pub name: String,
     pub device_type: DeviceType,

@@ -299,7 +299,8 @@ impl RenderBackend for VulkanBackend {
 
         pdevices
             .iter()
-            .map(|&p| {
+            .enumerate()
+            .map(|(id, &p)| {
                 let props = unsafe { self.instance.handle.get_physical_device_properties(p) };
                 let name = unsafe { std::ffi::CStr::from_ptr(props.device_name.as_ptr()) }
                     .to_string_lossy()
@@ -314,7 +315,7 @@ impl RenderBackend for VulkanBackend {
                 };
 
                 DeviceInfo {
-                    id: props.device_id,
+                    id: id as u32,
                     name,
                     device_type,
                 }
@@ -326,18 +327,24 @@ impl RenderBackend for VulkanBackend {
         let pdevices = unsafe { self.instance.handle.enumerate_physical_devices() }
             .map_err(|e| format!("Failed to enumerate physical devices: {}", e))?;
 
-        let physical_device = pdevices
-            .iter()
-            .find(|&p| {
-                let props = unsafe { self.instance.handle.get_physical_device_properties(*p) };
-                props.device_id == device_id
-            })
-            .or_else(|| pdevices.first())
-            .ok_or("No physical device found")?;
+        if pdevices.is_empty() {
+            return Err("No Vulkan physical devices found".to_string());
+        }
+
+        let physical_device = if (device_id as usize) < pdevices.len() {
+            pdevices[device_id as usize]
+        } else {
+            tracing::warn!(
+                "Requested GPU index {} is out of bounds (max {}). Falling back to GPU 0.",
+                device_id,
+                pdevices.len() - 1
+            );
+            pdevices[0]
+        };
 
         let device = crate::device::VulkanDevice::new_with_physical(
             self.instance.clone(),
-            *physical_device,
+            physical_device,
         )?;
         self.device = Some(Arc::new(device));
         self.event_pump = Some(self.sdl.event_pump()?);
