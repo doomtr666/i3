@@ -250,6 +250,10 @@ pub fn get_image_state(
         layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
         access = vk::AccessFlags2::TRANSFER_READ;
         stage = vk::PipelineStageFlags2::TRANSFER;
+    } else if usage.intersects(ResourceUsage::PRESENT) {
+        layout = vk::ImageLayout::PRESENT_SRC_KHR;
+        access = vk::AccessFlags2::empty();
+        stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
     }
 
     (layout, access, stage)

@@ -314,6 +314,7 @@ bitflags! {
         const SHADER_WRITE = 1 << 5;
         const TRANSFER_READ = 1 << 6;
         const TRANSFER_WRITE = 1 << 7;
+        const PRESENT = 1 << 8;
     }
 }
 

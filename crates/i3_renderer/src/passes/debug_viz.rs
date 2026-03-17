@@ -1,18 +1,17 @@
 use i3_gfx::prelude::*;
 
-
 /// Which GBuffer channel to display in the debug visualization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DebugChannel {
-    Lit,
-    LightDensity,
-    ClusterGrid,
-    Albedo,
-    Normal,
-    Roughness,
-    Metallic,
-    Emissive,
-    Depth,
+    Albedo = 0,
+    Normal = 1,
+    Roughness = 2,
+    Metallic = 3,
+    Emissive = 4,
+    Depth = 5,
+    Lit = 10,
+    LightDensity = 11,
+    ClusterGrid = 12,
 }
 
 /// Push constants for the debug visualization pass.
@@ -41,6 +40,7 @@ pub struct DebugVizPass {
     gbuffer_normal: ImageHandle,
     gbuffer_roughmetal: ImageHandle,
     gbuffer_emissive: ImageHandle,
+    gbuffer_depth: ImageHandle,
 
     // Persistence
     pipeline: Option<BackendPipeline>,
@@ -54,6 +54,7 @@ impl DebugVizPass {
             gbuffer_normal: ImageHandle::INVALID,
             gbuffer_roughmetal: ImageHandle::INVALID,
             gbuffer_emissive: ImageHandle::INVALID,
+            gbuffer_depth: ImageHandle::INVALID,
             sampler,
             channel,
             backbuffer_name: "Backbuffer".to_string(),
@@ -92,15 +93,15 @@ impl RenderPass for DebugVizPass {
         // Resolve configuration from blackboard
         let channel_u32 = builder.consume::<u32>("DebugChannel");
         self.channel = match *channel_u32 {
-            0 => DebugChannel::Lit,
-            1 => DebugChannel::LightDensity,
-            2 => DebugChannel::ClusterGrid,
-            3 => DebugChannel::Albedo,
-            4 => DebugChannel::Normal,
-            5 => DebugChannel::Roughness,
-            6 => DebugChannel::Metallic,
-            7 => DebugChannel::Emissive,
-            8 => DebugChannel::Depth,
+            0 => DebugChannel::Albedo,
+            1 => DebugChannel::Normal,
+            2 => DebugChannel::Roughness,
+            3 => DebugChannel::Metallic,
+            4 => DebugChannel::Emissive,
+            5 => DebugChannel::Depth,
+            10 => DebugChannel::Lit,
+            11 => DebugChannel::LightDensity,
+            12 => DebugChannel::ClusterGrid,
             _ => DebugChannel::Lit,
         };
 
@@ -109,6 +110,7 @@ impl RenderPass for DebugVizPass {
         self.gbuffer_normal = builder.resolve_image("GBuffer_Normal");
         self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
         self.gbuffer_emissive = builder.resolve_image("GBuffer_Emissive");
+        self.gbuffer_depth = builder.resolve_image("DepthBuffer");
         self.backbuffer = builder.resolve_image(&self.backbuffer_name);
 
         // Read GBuffer targets
@@ -116,6 +118,7 @@ impl RenderPass for DebugVizPass {
         builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_emissive, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_depth, ResourceUsage::SHADER_READ);
 
         // Write to backbuffer
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
@@ -164,6 +167,17 @@ impl RenderPass for DebugVizPass {
                     buffer_info: None,
                     image_info: Some(DescriptorImageInfo {
                         image: self.gbuffer_emissive,
+                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
+                        sampler: Some(self.sampler),
+                    }),
+                },
+                DescriptorWrite {
+                    binding: 4,
+                    array_element: 0,
+                    descriptor_type: BindingType::CombinedImageSampler,
+                    buffer_info: None,
+                    image_info: Some(DescriptorImageInfo {
+                        image: self.gbuffer_depth,
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),

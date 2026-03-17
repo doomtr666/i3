@@ -16,8 +16,10 @@ use nalgebra_glm as glm;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
 use uuid::Uuid;
+use i3_egui::egui;
+use i3_renderer::passes::debug_viz::DebugChannel;
+use tracing::{info, warn};
 
 struct DeferredGltfApp {
     backend: VulkanBackend,
@@ -38,6 +40,23 @@ impl ExampleApp for DeferredGltfApp {
     }
 
     fn render(&mut self) {
+        // --- Egui UI Definition ---
+        self.render_graph.egui.begin_frame();
+        let egui_ctx = self.render_graph.egui.context().clone();
+        egui::Window::new("Engine Debug").show(&egui_ctx, |ui| {
+            ui.heading("Renderer");
+            ui.label(format!("Frame time: {:.2}ms ({:.1} FPS)", self.dt * 1000.0, 1.0 / self.dt));
+            ui.separator();
+            ui.label("Debug Channel:");
+            ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Lit, "Lit (Final)");
+            ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Albedo, "Albedo");
+            ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Normal, "Normals");
+            ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Roughness, "Roughness");
+            ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Metallic, "Metallic");
+            ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Emissive, "Emissive");
+            ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Depth, "Depth");
+        });
+
         let view = self.camera.view_matrix();
         let (width, height) = self.backend.window_size(self.window).unwrap_or((1280, 720));
         let scene_diag = self.scene.bounds().diagonal_length();
@@ -81,13 +100,21 @@ impl ExampleApp for DeferredGltfApp {
     }
 
     fn handle_event(&mut self, event: &Event) {
-        self.camera.handle_event(event);
+        self.render_graph.egui.handle_event(event);
 
         if let Event::KeyDown { key } = event {
             if *key == KeyCode::F11 {
                 self.is_fullscreen = !self.is_fullscreen;
                 self.backend.set_fullscreen(self.window, self.is_fullscreen);
             }
+        }
+
+        // Only let camera handle event if egui doesn't want it
+        let wants_input = self.render_graph.egui.context().wants_pointer_input()
+            || self.render_graph.egui.context().wants_keyboard_input();
+
+        if !wants_input {
+            self.camera.handle_event(event);
         }
     }
 }
@@ -264,7 +291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     scene.load_baked_scene(&scene_asset);
 
     if scene_asset.mesh_refs.is_empty() {
-        warn!("Scene contains no meshes!");
+        tracing::warn!("Scene contains no meshes!");
     }
 
     scene.add_default_lights();

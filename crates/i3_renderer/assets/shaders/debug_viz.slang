@@ -32,6 +32,11 @@ Texture2D gbufferEmissive;
 [[vk::binding(3, 0)]]
 SamplerState emissiveSampler;
 
+[[vk::binding(4, 0)]]
+Texture2D gbufferDepth;
+[[vk::binding(4, 0)]]
+SamplerState depthSampler;
+
 struct VertexOutput
 {
     float4 position : SV_Position;
@@ -94,6 +99,18 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         break;
     case 4: // Emissive
         color = gbufferEmissive.Sample(emissiveSampler, uv).rgb;
+        break;
+    case 5: // Depth
+        {
+            float d = gbufferDepth.Sample(depthSampler, uv).r;
+            // Basic linearization for visualization (assuming [0,1] range, 
+            // focus on the first few units since SPONZA is small-ish)
+            float linearD = (2.0 * 0.1) / (100.0 + 0.1 - d * (100.0 - 0.1));
+            color = float3(d, d, d); // Just show raw depth for now, or 1-d
+            // Most people expect far = black, near = white
+            float v = 1.0 - d;
+            color = float3(v, v, v);
+        }
         break;
     default:
         color = float3(1.0, 0.0, 1.0); // Magenta = unsupported channel

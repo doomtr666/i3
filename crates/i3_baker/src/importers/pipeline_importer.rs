@@ -23,6 +23,7 @@ fn default_slang_path() -> String {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PipelineConfig {
     pub name: String,
     pub shader: ShaderSource,
@@ -30,6 +31,7 @@ pub struct PipelineConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GraphicsConfig {
     #[serde(default)]
     pub rasterization: i3_gfx::graph::pipeline::RasterizationState,
@@ -66,6 +68,7 @@ fn default_topology() -> i3_gfx::graph::pipeline::PrimitiveTopology {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetConfig {
     pub format: i3_gfx::graph::types::Format,
     #[serde(default)]
@@ -75,6 +78,7 @@ pub struct TargetConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VertexLayoutConfig {
     pub bindings: Vec<i3_gfx::graph::pipeline::VertexInputBinding>,
     pub attributes: Vec<i3_gfx::graph::pipeline::VertexInputAttribute>,

@@ -1,0 +1,13 @@
+[package]
+name = "i3_egui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+i3_gfx.workspace = true
+i3_io.workspace = true
+egui.workspace = true
+tracing.workspace = true
+bytemuck.workspace = true
+nalgebra-glm.workspace = true

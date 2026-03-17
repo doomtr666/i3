@@ -42,6 +42,25 @@ impl RenderPass for ClearBufferPass {
     }
 }
 
+/// Helper pass to present the backbuffer.
+struct PresentPass {
+    pub backbuffer: ImageHandle,
+}
+
+impl RenderPass for PresentPass {
+    fn name(&self) -> &str {
+        "PresentPass"
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        builder.read_image(self.backbuffer, ResourceUsage::PRESENT);
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        ctx.present(self.backbuffer);
+    }
+}
+
 /// The default render graph for deferred clustered shading.
 ///
 /// Owns persistent passes and groups. Geometry comes from the SceneProvider.
@@ -60,6 +79,7 @@ pub struct DefaultRenderGraph {
     pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
     pub bindless_manager: crate::bindless::BindlessManager,
+    pub egui: Arc<i3_egui::EguiIntegration>,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -96,11 +116,12 @@ impl DefaultRenderGraph {
         let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(linear_sampler)));
         let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(linear_sampler, DebugChannel::Lit)));
 
-        // Mount system bundle and try to load baked pipelines
+        let egui = Arc::new(i3_egui::EguiIntegration::new(_config.width, _config.height));
+
         let mut vfs = i3_io::vfs::Vfs::new();
         let catalog_path = "assets/system.i3c";
         let blob_path = "assets/system.i3b";
-        
+
         if std::path::Path::new(catalog_path).exists() && std::path::Path::new(blob_path).exists() {
             if let Ok(bundle) = i3_io::vfs::BundleBackend::mount(catalog_path, blob_path) {
                 vfs.mount(Box::new(bundle));
@@ -153,6 +174,11 @@ impl DefaultRenderGraph {
                     debug_viz_pass.lock().unwrap().init_from_baked(_backend, &handle);
                     tracing::info!("DebugViz pipeline loaded from system bundle");
                 }
+
+                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("egui").wait_loaded() {
+                    egui.init_from_baked(_backend, &handle);
+                    tracing::info!("Egui pipeline loaded from system bundle");
+                }
             }
         }
 
@@ -200,6 +226,7 @@ impl DefaultRenderGraph {
             gpu_buffers,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
+            egui,
         }
     }
 }
@@ -242,6 +269,9 @@ impl DefaultRenderGraph {
         if !gpu_lights.is_empty() {
             let _ = backend.upload_buffer_slice(self.gpu_buffers.light_buffer, &gpu_lights, 0);
         }
+
+        // Sync Egui textures (font atlas, etc.)
+        self.egui.update_textures(backend);
     }
 
     fn record_clustering(&self, builder: &mut PassBuilder) -> (u32, u32, u32) {
@@ -491,6 +521,14 @@ impl DefaultRenderGraph {
             } else {
                 builder.add_pass(self.debug_viz_pass.clone());
             }
+
+            // 6. Egui UI
+            if let Some(egui_pass) = self.egui.create_pass(backbuffer) {
+                builder.add_pass(egui_pass);
+            }
+
+            // 7. Final Presentation
+            builder.add_pass(PresentPass { backbuffer });
         });
     }
 

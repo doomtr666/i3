@@ -1,0 +1,37 @@
+PipelineConfig(
+    name: "egui",
+    shader: Path("../shaders/egui.slang"),
+    graphics: Some(GraphicsConfig(
+        rasterization: (
+            cull_mode: None,
+        ),
+        depth_stencil: (
+            depth_test_enable: false,
+            depth_write_enable: false,
+        ),
+        topology: TriangleList,
+        targets: [
+            (
+                format: B8G8R8A8_SRGB,
+                blend: Some((
+                    src_color_factor: One,
+                    dst_color_factor: OneMinusSrcAlpha,
+                    color_op: Add,
+                    src_alpha_factor: One,
+                    dst_alpha_factor: OneMinusSrcAlpha,
+                    alpha_op: Add,
+                )),
+            ),
+        ],
+        vertex_layout: Some(VertexLayoutConfig(
+            bindings: [
+                (binding: 0, stride: 20, input_rate: Vertex),
+            ],
+            attributes: [
+                (location: 0, binding: 0, format: Float2, offset: 0),
+                (location: 1, binding: 0, format: Float2, offset: 8),
+                (location: 2, binding: 0, format: UInt, offset: 16),
+            ],
+        )),
+    ))
+)

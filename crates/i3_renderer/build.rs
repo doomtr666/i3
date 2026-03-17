@@ -8,16 +8,20 @@ fn main() -> Result<()> {
     // Assets are collocated in the crate
     let input_dir = manifest_path.join("assets/pipelines");
     
-    // Output bundle to the workspace assets folder (at root)
-    // This maintains compatibility with the current VFS search paths
+    // Also include egui assets from crates/i3_egui
     let workspace_root = manifest_path.parent().unwrap().parent().unwrap();
+    let egui_assets = workspace_root.join("crates/i3_egui/assets/pipelines");
+    
+    // Output bundle to the workspace assets folder (at root)
     let output_dir = workspace_root.join("assets");
 
     println!("cargo:rerun-if-changed=assets");
+    println!("cargo:rerun-if-changed={}", egui_assets.display());
     
     BundleBaker::new("system")?
         .with_output_dir(output_dir)
         .add_pipelines(input_dir)?
+        .add_pipelines(egui_assets)?
         .execute()?;
 
     Ok(())

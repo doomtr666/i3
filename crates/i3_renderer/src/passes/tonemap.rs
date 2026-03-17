@@ -127,8 +127,8 @@ impl RenderPass for TonemapPass {
             );
             ctx.draw(3, 0); // Fullscreen triangle
 
-            // This is the final pass targeting the backbuffer, so we must present it here.
-            ctx.present(self.backbuffer);
+            // This is NO LONGER the final pass because of Egui/Debug UI.
+            // Present is now handled by a dedicated PresentPass.
         }
     }
 }

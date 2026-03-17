@@ -1077,40 +1077,6 @@ pub fn record_pass(
         }
     }
 
-    // Handle explicit transition for Present if requested
-    if let Some(handle) = ctx.present_request {
-        let pid = backend.resolve_image(handle).0;
-        if let Some(img) = backend.images.get(pid) {
-            let aspect_mask = if img.format == vk::Format::D32_SFLOAT {
-                vk::ImageAspectFlags::DEPTH
-            } else {
-                vk::ImageAspectFlags::COLOR
-            };
-
-            let barrier = vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(img.last_stage)
-                .src_access_mask(img.last_access)
-                .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
-                .dst_access_mask(vk::AccessFlags2::empty())
-                .old_layout(img.last_layout)
-                .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                .image(img.image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-
-            let barriers = [barrier];
-            let dependency_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
-            unsafe {
-                device.handle.cmd_pipeline_barrier2(cmd, &dependency_info);
-            }
-        }
-    }
-
     #[cfg(debug_assertions)]
     end_debug_label(backend, BackendCommandBuffer(cmd.as_raw()));
 

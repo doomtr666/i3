@@ -11,6 +11,7 @@ i3_gfx = { path = "../../crates/i3_gfx" }
 i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }
 i3_renderer = { path = "../../crates/i3_renderer" }
 i3_slang = { path = "../../crates/i3_slang" }
+i3_egui = { path = "../../crates/i3_egui" }
 i3_io = { path = "../../crates/i3_io" }
 examples_common = { path = "../common" }
 tracing = "0.1"

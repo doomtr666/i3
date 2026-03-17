@@ -238,7 +238,7 @@ pub fn create_graphics_pipeline(
 
     // Create Descriptor Set Layouts (filling gaps)
     let mut descriptor_set_layouts = Vec::new();
-    let mut pushable_sets_mask = 0;
+    let pushable_sets_mask = 0;
     if !set_bindings.is_empty() || backend.bindless_set_layout != vk::DescriptorSetLayout::null() {
         // Force at least 3 sets (0, 1, 2) to ensure Bindless is always at Set 2
         let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
@@ -264,11 +264,13 @@ pub fn create_graphics_pipeline(
                 .push_next(&mut binding_flags_info);
 
             // Enable Push Descriptors for Set 0 (implied by backend requirement)
+            /*
             if i == 0 && !bindings.is_empty() {
                 layout_info =
                     layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
                 pushable_sets_mask |= 1 << 0;
             }
+            */
 
             // If any binding has UPDATE_AFTER_BIND, the set layout itself needs the flag
             if binding_flags
@@ -458,7 +460,7 @@ pub fn create_compute_pipeline(
     }
 
     let mut descriptor_set_layouts = Vec::new();
-    let mut pushable_sets_mask = 0;
+    let pushable_sets_mask = 0;
     if !set_bindings.is_empty() {
         let max_set = *set_bindings.keys().max().unwrap();
         for i in 0..=max_set {
@@ -483,11 +485,13 @@ pub fn create_compute_pipeline(
                 .push_next(&mut binding_flags_info);
 
             // Enable Push Descriptors for Set 0 (implied by backend requirement)
+            /*
             if i == 0 {
                 layout_info =
                     layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
                 pushable_sets_mask |= 1 << 0;
             }
+            */
 
             // If any binding has UPDATE_AFTER_BIND, the set layout itself needs the flag
             if binding_flags
@@ -759,7 +763,7 @@ pub fn create_graphics_pipeline_from_baked(
     }
 
     let mut descriptor_set_layouts = Vec::new();
-    let mut pushable_sets_mask = 0;
+    let pushable_sets_mask = 0;
 
     // Ensure Set 2 is available for bindless
     let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
@@ -786,13 +790,12 @@ pub fn create_graphics_pipeline_from_baked(
                 .bindings(bindings)
                 .push_next(&mut flags_info);
 
-            // Heuristic: only use Push Descriptors if the set is not too complex.
-            // Some drivers (Intel) crash when combining many push descriptors and large push constants.
-            if i == 0 && !bindings.is_empty() && bindings.len() < 8 {
-                layout_info =
-                    layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
+            /*
+            if i == 0 && !bindings.is_empty() {
+                layout_info = layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
                 pushable_sets_mask |= 1 << 0;
             }
+            */
             if binding_flags
                 .iter()
                 .any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND))
@@ -930,7 +933,8 @@ pub fn create_compute_pipeline_from_baked(
         for i in 0..=max_set {
             let bindings = set_bindings.get(&i).map(|v| v.as_slice()).unwrap_or(&[]);
 
-            let layout = if i == 2 && backend.bindless_set_layout != vk::DescriptorSetLayout::null() {
+            let layout = if i == 2 && backend.bindless_set_layout != vk::DescriptorSetLayout::null()
+            {
                 backend.bindless_set_layout
             } else {
                 let mut binding_flags = Vec::with_capacity(bindings.len());

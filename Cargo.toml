@@ -11,6 +11,7 @@ members = [
     "tools/rust_diagnostics",
     "tools/vulkan_diagnostics", "crates/i3_baker", "crates/i3_io",
     "crates/i3_renderer",
+    "crates/i3_egui",
     "examples/viewer",
     "examples/deferred_stress",
 ]
@@ -39,6 +40,7 @@ rayon = "1.10"
 uuid = { version = "1.10", features = ["v4"] }
 bytemuck = { version = "1.18", features = ["derive"] }
 pathdiff = "0.2"
+egui = "0.29"
 
 # Internal
 i3_gfx = { path = "crates/i3_gfx" }

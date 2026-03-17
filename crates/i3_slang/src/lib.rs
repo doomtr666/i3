@@ -277,7 +277,8 @@ impl SlangCompiler {
     fn determine_binding_type(type_layout: &slang::reflection::TypeLayout) -> BindingType {
         let kind = type_layout.kind();
         use slang::TypeKind;
-        match kind {
+        
+        let result = match kind {
             TypeKind::ConstantBuffer => BindingType::UniformBuffer,
             TypeKind::Array => {
                 // For arrays like Texture2D[], recurse on the element type
@@ -302,13 +303,17 @@ impl SlangCompiler {
                         _ => BindingType::StorageBuffer,
                     }
                 } else {
-                    BindingType::Unknown
+                    // Try to deduce from type layout
+                    BindingType::Texture
                 }
             }
             TypeKind::ParameterBlock => BindingType::UniformBuffer,
             TypeKind::SamplerState => BindingType::Sampler,
             _ => BindingType::Unknown,
-        }
+        };
+
+        tracing::debug!("Reflected TypeKind::{:?} -> {:?}", kind, result);
+        result
     }
 
     /// Compile Slang shader from inline source code
