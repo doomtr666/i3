@@ -65,7 +65,7 @@ fn test_triangle_frame_flow() {
         let backbuffer = builder.acquire_backbuffer(window);
         builder.publish("SharedHandle", backbuffer);
 
-        builder.add_pass(TestPass {
+        builder.add_owned_pass(TestPass {
             name: "ClearPass".to_string(),
             record: |sub: &mut PassBuilder| {
                 let shared = *sub.consume::<ImageHandle>("SharedHandle");
@@ -103,14 +103,14 @@ fn test_complex_hierarchical_graph() {
 
         builder.publish("GlobalSettings", String::from("UltraQuality"));
 
-        builder.add_pass(TestGroup {
+        builder.add_owned_pass(TestGroup {
             name: "SceneGroup".to_string(),
             record: move |scene: &mut PassBuilder| {
                 let settings = scene.consume::<String>("GlobalSettings").clone();
                 tracing::info!("Scene recording with settings: {}", settings);
 
                 let gbuffer_exec_inner = gbuffer_exec_clone.clone();
-                scene.add_pass(TestPass {
+                scene.add_owned_pass(TestPass {
                     name: "ConsumerPass".to_string(),
                     record: move |sub: &mut PassBuilder| {
                         sub.write_image(main_target, ResourceUsage::COLOR_ATTACHMENT);
@@ -121,7 +121,7 @@ fn test_complex_hierarchical_graph() {
                     },
                 });
 
-                scene.add_pass(TestPass {
+                scene.add_owned_pass(TestPass {
                     name: "LightingPass".to_string(),
                     record: move |sub: &mut PassBuilder| {
                         sub.read_image(main_target, ResourceUsage::SHADER_READ);
@@ -134,7 +134,7 @@ fn test_complex_hierarchical_graph() {
             },
         });
 
-        builder.add_pass(TestPass {
+        builder.add_owned_pass(TestPass {
             name: "PostPass".to_string(),
             record: move |post: &mut PassBuilder| {
                 post.read_image(main_target, ResourceUsage::SHADER_READ);
@@ -165,10 +165,10 @@ fn test_modular_resource_lifecycle() {
             ImageDesc::new(1920, 1080, Format::R8G8B8A8_UNORM),
         );
 
-        builder.add_pass(TestGroup {
+        builder.add_owned_pass(TestGroup {
             name: "SceneGroup".to_string(),
             record: move |scene: &mut PassBuilder| {
-                scene.add_pass(TestPass {
+                scene.add_owned_pass(TestPass {
                     name: "ConsumerPass".to_string(),
                     record: move |sub: &mut PassBuilder| {
                         sub.write_image(scene_texture, ResourceUsage::COLOR_ATTACHMENT);
@@ -178,7 +178,7 @@ fn test_modular_resource_lifecycle() {
                     },
                 });
 
-                scene.add_pass(TestPass {
+                scene.add_owned_pass(TestPass {
                     name: "LightingPass".to_string(),
                     record: move |sub: &mut PassBuilder| {
                         sub.read_image(scene_texture, ResourceUsage::SHADER_READ);
@@ -190,7 +190,7 @@ fn test_modular_resource_lifecycle() {
             },
         });
 
-        builder.add_pass(TestPass {
+        builder.add_owned_pass(TestPass {
             name: "FinalBlit".to_string(),
             record: move |sub: &mut PassBuilder| {
                 sub.read_image(scene_texture, ResourceUsage::SHADER_READ);
@@ -254,7 +254,7 @@ fn test_diamond_dependency_ordering() {
         let img = builder.declare_image("Shared", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
         let img2 = builder.declare_image("Shared2", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "A",
             s.clone(),
             oa.clone(),
@@ -262,7 +262,7 @@ fn test_diamond_dependency_ordering() {
                 b.write_image(img, ResourceUsage::COLOR_ATTACHMENT);
             },
         ));
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "B",
             s.clone(),
             ob.clone(),
@@ -271,7 +271,7 @@ fn test_diamond_dependency_ordering() {
                 b.write_image(img2, ResourceUsage::COLOR_ATTACHMENT);
             },
         ));
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "C",
             s.clone(),
             oc.clone(),
@@ -280,7 +280,7 @@ fn test_diamond_dependency_ordering() {
                 b.write_image(img2, ResourceUsage::COLOR_ATTACHMENT);
             },
         ));
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "D",
             s.clone(),
             od.clone(),
@@ -320,7 +320,7 @@ fn test_independent_passes_both_execute() {
         let img_a = builder.declare_image("ImgA", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
         let img_b = builder.declare_image("ImgB", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
-        builder.add_pass(TestPass {
+        builder.add_owned_pass(TestPass {
             name: "PassA".to_string(),
             record: move |b: &mut PassBuilder| {
                 b.write_image(img_a, ResourceUsage::COLOR_ATTACHMENT);
@@ -329,7 +329,7 @@ fn test_independent_passes_both_execute() {
                 ea.fetch_add(1, Ordering::SeqCst);
             },
         });
-        builder.add_pass(TestPass {
+        builder.add_owned_pass(TestPass {
             name: "PassB".to_string(),
             record: move |b: &mut PassBuilder| {
                 b.write_image(img_b, ResourceUsage::COLOR_ATTACHMENT);
@@ -371,7 +371,7 @@ fn test_war_dependency() {
         );
 
         // A reads the buffer first
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "Reader",
             s.clone(),
             or.clone(),
@@ -380,7 +380,7 @@ fn test_war_dependency() {
             },
         ));
         // B writes to the same buffer — WAR dependency
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "Writer",
             s.clone(),
             ow.clone(),
@@ -417,7 +417,7 @@ fn test_waw_dependency() {
     graph.record(move |builder| {
         let img = builder.declare_image("Target", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "Writer1",
             s.clone(),
             o1.clone(),
@@ -425,7 +425,7 @@ fn test_waw_dependency() {
                 b.write_image(img, ResourceUsage::COLOR_ATTACHMENT);
             },
         ));
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "Writer2",
             s.clone(),
             o2.clone(),
@@ -468,7 +468,7 @@ fn test_linear_chain_ordering() {
         let img1 = builder.declare_image("Stage1", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
         let img2 = builder.declare_image("Stage2", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "A",
             s.clone(),
             oa.clone(),
@@ -476,7 +476,7 @@ fn test_linear_chain_ordering() {
                 b.write_image(img1, ResourceUsage::COLOR_ATTACHMENT);
             },
         ));
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "B",
             s.clone(),
             ob.clone(),
@@ -485,7 +485,7 @@ fn test_linear_chain_ordering() {
                 b.write_image(img2, ResourceUsage::COLOR_ATTACHMENT);
             },
         ));
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "C",
             s.clone(),
             oc.clone(),
@@ -525,7 +525,7 @@ fn test_cpu_data_dependency_ordering() {
     let mut graph = FrameGraph::new();
     graph.record(|builder| {
         // Pass A: CPU-only, publishes data
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "ProducerPass",
             s.clone(),
             oa.clone(),
@@ -535,7 +535,7 @@ fn test_cpu_data_dependency_ordering() {
         ));
 
         // Pass B: also publishes SharedData (WAW dependency)
-        builder.add_pass(make_order_pass(
+        builder.add_owned_pass(make_order_pass(
             "ConsumerPass",
             s2.clone(),
             ob.clone(),

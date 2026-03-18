@@ -5,7 +5,7 @@ use crate::passes::gbuffer::{self, DrawCommand, GBufferPass};
 use crate::passes::sky::SkyPass;
 use crate::scene::SceneProvider;
 use i3_gfx::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Shared data published to the FrameGraph blackboard.
 #[derive(Debug, Clone, Copy)]
@@ -65,13 +65,13 @@ impl RenderPass for PresentPass {
 ///
 /// Owns persistent passes and groups. Geometry comes from the SceneProvider.
 pub struct DefaultRenderGraph {
-    pub gbuffer_pass: Arc<Mutex<GBufferPass>>,
-    pub sky_pass: Arc<Mutex<SkyPass>>,
-    pub sync_group: Arc<Mutex<SyncGroup>>,
-    pub clustering_group: Arc<Mutex<ClusteringGroup>>,
-    pub deferred_resolve_pass: Arc<Mutex<DeferredResolvePass>>,
-    pub post_process_group: Arc<Mutex<PostProcessGroup>>,
-    pub debug_viz_pass: Arc<Mutex<DebugVizPass>>,
+    pub gbuffer_pass: GBufferPass,
+    pub sky_pass: SkyPass,
+    pub sync_group: SyncGroup,
+    pub clustering_group: ClusteringGroup,
+    pub deferred_resolve_pass: DeferredResolvePass,
+    pub post_process_group: PostProcessGroup,
+    pub debug_viz_pass: DebugVizPass,
 
     pub linear_sampler: SamplerHandle,
     pub material_sampler: SamplerHandle,
@@ -109,12 +109,12 @@ impl DefaultRenderGraph {
             ..Default::default()
         });
 
-        let gbuffer_pass = Arc::new(Mutex::new(GBufferPass::new()));
-        let sky_pass = Arc::new(Mutex::new(SkyPass::new()));
-        let clustering_group = Arc::new(Mutex::new(ClusteringGroup::new()));
-        let deferred_resolve_pass = Arc::new(Mutex::new(DeferredResolvePass::new(linear_sampler)));
-        let post_process_group = Arc::new(Mutex::new(PostProcessGroup::new(linear_sampler)));
-        let debug_viz_pass = Arc::new(Mutex::new(DebugVizPass::new(linear_sampler, DebugChannel::Lit)));
+        let mut gbuffer_pass = GBufferPass::new();
+        let mut sky_pass = SkyPass::new();
+        let mut clustering_group = ClusteringGroup::new();
+        let mut deferred_resolve_pass = DeferredResolvePass::new(linear_sampler);
+        let mut post_process_group = PostProcessGroup::new(linear_sampler);
+        let mut debug_viz_pass = DebugVizPass::new(linear_sampler, DebugChannel::Lit);
 
         let egui = Arc::new(i3_egui::EguiIntegration::new(_config.width, _config.height));
 
@@ -131,47 +131,47 @@ impl DefaultRenderGraph {
                 
                 // Load GBuffer pipeline
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("gbuffer").wait_loaded() {
-                    gbuffer_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    gbuffer_pass.init_from_baked(_backend, &handle);
                     tracing::info!("GBuffer pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("sky").wait_loaded() {
-                    sky_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    sky_pass.init_from_baked(_backend, &handle);
                     tracing::info!("Sky pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build").wait_loaded() {
-                    clustering_group.lock().unwrap().cluster_build_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    clustering_group.cluster_build_pass.init_from_baked(_backend, &handle);
                     tracing::info!("ClusterBuild pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("light_cull").wait_loaded() {
-                    clustering_group.lock().unwrap().light_cull_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    clustering_group.light_cull_pass.init_from_baked(_backend, &handle);
                     tracing::info!("LightCull pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
-                    deferred_resolve_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    deferred_resolve_pass.init_from_baked(_backend, &handle);
                     tracing::info!("Lighting pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("histogram_build").wait_loaded() {
-                    post_process_group.lock().unwrap().histogram_build_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    post_process_group.histogram_build_pass.init_from_baked(_backend, &handle);
                     tracing::info!("HistogramBuild pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("average_luminance").wait_loaded() {
-                    post_process_group.lock().unwrap().average_luminance_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    post_process_group.average_luminance_pass.init_from_baked(_backend, &handle);
                     tracing::info!("AverageLuminance pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("tonemap").wait_loaded() {
-                    post_process_group.lock().unwrap().tonemap_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    post_process_group.tonemap_pass.init_from_baked(_backend, &handle);
                     tracing::info!("Tonemap pipeline loaded from system bundle");
                 }
 
                 if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("debug_viz").wait_loaded() {
-                    debug_viz_pass.lock().unwrap().init_from_baked(_backend, &handle);
+                    debug_viz_pass.init_from_baked(_backend, &handle);
                     tracing::info!("DebugViz pipeline loaded from system bundle");
                 }
 
@@ -184,10 +184,10 @@ impl DefaultRenderGraph {
 
         let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(_backend);
 
-        let sync_group = Arc::new(Mutex::new(SyncGroup::new(
+        let sync_group = SyncGroup::new(
             1024 * 64, // max_objects approx
             1024 * 64, // max_materials approx
-        )));
+        );
 
         let mut bindless_manager = crate::bindless::BindlessManager::new(
             1000, // Capacity for 1000 bindless global textures
@@ -274,7 +274,7 @@ impl DefaultRenderGraph {
         self.egui.update_textures(backend);
     }
 
-    fn record_clustering(&self, builder: &mut PassBuilder) -> (u32, u32, u32) {
+    fn record_clustering(&mut self, builder: &mut PassBuilder) -> (u32, u32, u32) {
         let common = *builder.consume::<CommonData>("Common");
 
         // Cluster Build Pass
@@ -309,17 +309,17 @@ impl DefaultRenderGraph {
         );
 
         // Clear the first u32 of cluster_light_indices
-        builder.add_pass(ClearBufferPass {
+        builder.add_owned_pass(ClearBufferPass {
             name: "ClearClusterIndices".to_string(),
             buffer: cluster_light_indices,
         });
 
-        builder.add_pass(self.clustering_group.clone());
+        builder.add_pass(&mut self.clustering_group);
 
         (grid_x, grid_y, grid_z)
     }
 
-    fn record_gbuffer(&self, builder: &mut PassBuilder) {
+    fn record_gbuffer(&mut self, builder: &mut PassBuilder) {
         let common = *builder.consume::<CommonData>("Common");
 
         builder.declare_image(
@@ -369,14 +369,14 @@ impl DefaultRenderGraph {
             },
         );
 
-        builder.add_pass(self.gbuffer_pass.clone());
+        builder.add_pass(&mut self.gbuffer_pass);
     }
 
     /// Records the full render graph for one frame.
     ///
     /// Extracts draw commands from the scene, then records GBuffer + debug viz passes.
     pub fn record(
-        &self,
+        &mut self,
         graph: &mut FrameGraph,
         window: WindowHandle,
         scene: &dyn SceneProvider,
@@ -451,7 +451,7 @@ impl DefaultRenderGraph {
             .map(|(id, data)| (id.0, data.clone()))
             .collect();
 
-        graph.record(move |builder| {
+        graph.record(|builder| {
             builder.publish("Common", common);
             builder.publish("BindlessSet", self.bindless_manager.bindless_set);
             builder.publish("SceneObjects", scene_objects);
@@ -473,7 +473,7 @@ impl DefaultRenderGraph {
             builder.import_buffer("MaterialBuffer", material_buffer_physical);
 
             // 0. Sync CPU scene delta to GPU
-            builder.add_pass(self.sync_group.clone());
+            builder.add_pass(&mut self.sync_group);
 
             // 1. Clustering & Culling
             let (grid_x, grid_y, grid_z) = self.record_clustering(builder);
@@ -489,7 +489,7 @@ impl DefaultRenderGraph {
                 ImageDesc::new(screen_width, screen_height, Format::R16G16B16A16_SFLOAT),
             );
 
-            builder.add_pass(self.sky_pass.clone());
+            builder.add_pass(&mut self.sky_pass);
 
             builder.declare_buffer_history(
                 "ExposureBuffer",
@@ -519,31 +519,31 @@ impl DefaultRenderGraph {
                 // 5. Post Processing
                 self.record_post_process(builder);
             } else {
-                builder.add_pass(self.debug_viz_pass.clone());
+                builder.add_pass(&mut self.debug_viz_pass);
             }
 
             // 6. Egui UI
             if let Some(egui_pass) = self.egui.create_pass(backbuffer) {
-                builder.add_pass(egui_pass);
+                builder.add_owned_pass(egui_pass);
             }
 
             // 7. Final Presentation
-            builder.add_pass(PresentPass { backbuffer });
+            builder.add_owned_pass(PresentPass { backbuffer });
         });
     }
 
-    fn record_lighting(&self, builder: &mut PassBuilder) -> ImageHandle {
-        builder.add_pass(self.deferred_resolve_pass.clone());
+    fn record_lighting(&mut self, builder: &mut PassBuilder) -> ImageHandle {
+        builder.add_pass(&mut self.deferred_resolve_pass);
         builder.resolve_image("HDR_Target")
     }
 
-    fn record_post_process(&self, builder: &mut PassBuilder) {
+    fn record_post_process(&mut self, builder: &mut PassBuilder) {
         let histogram_buffer = builder.resolve_buffer("HistogramBuffer");
-        builder.add_pass(ClearBufferPass {
+        builder.add_owned_pass(ClearBufferPass {
             name: "ClearHistogram".to_string(),
             buffer: histogram_buffer,
         });
 
-        builder.add_pass(self.post_process_group.clone());
+        builder.add_pass(&mut self.post_process_group);
     }
 }

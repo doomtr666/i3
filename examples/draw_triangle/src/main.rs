@@ -1,7 +1,6 @@
 use examples_common::{ExampleApp, init_tracing, main_loop};
 use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use i3_vulkan_backend::VulkanBackend;
@@ -32,7 +31,7 @@ impl RenderPass for TrianglePass {
 struct TriangleApp {
     backend: VulkanBackend,
     window: WindowHandle,
-    pass: Arc<Mutex<TrianglePass>>,
+    pass: TrianglePass,
     is_fullscreen: bool,
 }
 
@@ -44,12 +43,11 @@ impl ExampleApp for TriangleApp {
     fn render(&mut self) {
         let mut graph = FrameGraph::new();
         let window = self.window;
-        let pass = self.pass.clone();
 
-        graph.record(move |builder| {
+        graph.record(|builder| {
             let backbuffer = builder.acquire_backbuffer(window);
             builder.publish("Backbuffer", backbuffer);
-            builder.add_pass(pass);
+            builder.add_pass(&mut self.pass);
         });
 
         let compiler = graph.compile();
@@ -147,10 +145,10 @@ fn main() -> Result<(), String> {
     });
     let pipeline_id = SymbolId(pipeline_handle.0);
 
-    let pass = Arc::new(Mutex::new(TrianglePass {
+    let pass = TrianglePass {
         pipeline_id,
         backbuffer: ImageHandle(SymbolId(0)),
-    }));
+    };
 
     // 5. Run Main Loop
     let app = TriangleApp {

@@ -3,7 +3,6 @@ use i3_gfx::prelude::*;
 use i3_slang::prelude::*;
 use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const SHADER_SOURCE: &str = r#"
@@ -99,7 +98,7 @@ impl RenderPass for MandelbrotPass {
 struct MandelbrotApp {
     backend: VulkanBackend,
     window: WindowHandle,
-    pass: Arc<Mutex<MandelbrotPass>>,
+    pass: MandelbrotPass,
     center: glm::Vec2,
     zoom: f32,
     mouse_pos: glm::Vec2,
@@ -149,13 +148,13 @@ impl MandelbrotApp {
         let backend_pipeline =
             backend.create_compute_pipeline(&ComputePipelineCreateInfo { shader_module });
 
-        let pass = Arc::new(Mutex::new(MandelbrotPass {
+        let pass = MandelbrotPass {
             pipeline: PipelineHandle(SymbolId(backend_pipeline.0)),
             backbuffer: ImageHandle(SymbolId(0)),
             push_data: [0.0; 4],
             width,
             height,
-        }));
+        };
 
         Self {
             backend,
@@ -177,21 +176,17 @@ impl ExampleApp for MandelbrotApp {
 
     fn render(&mut self) {
         // Update pass state before recording
-        {
-            let mut pass = self.pass.lock().unwrap();
-            pass.push_data = [self.center.x, self.center.y, self.zoom, 0.0];
-            pass.width = self.width;
-            pass.height = self.height;
-        }
+        self.pass.push_data = [self.center.x, self.center.y, self.zoom, 0.0];
+        self.pass.width = self.width;
+        self.pass.height = self.height;
 
         let mut graph = FrameGraph::new();
         let window = self.window;
-        let pass = self.pass.clone();
 
-        graph.record(move |builder| {
+        graph.record(|builder| {
             let backbuffer = builder.acquire_backbuffer(window);
             builder.publish("Backbuffer", backbuffer);
-            builder.add_pass(pass);
+            builder.add_pass(&mut self.pass);
         });
 
         let compiled = graph.compile();

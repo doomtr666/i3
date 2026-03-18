@@ -65,6 +65,12 @@ Explicit GPU APIs (Vulkan, DX12) require manual synchronization barriers between
 2. **Recursive Branch.** A Branch (Group) encapsulates a sub-tree of nodes and manages a local symbol scope.
 3. **No mid-pass state transitions.** If a pass needs a resource in two different states (e.g., compute-write then shader-read), that's **two passes**, not one.
 4. **Resource usage is declared, not discovered.** The `declare()` call is the **complete** and **exhaustive** contract. The `execute()` call must not use any resource not declared.
+5. **Global Scope Invariant.** Services (AssetLoader, ECS, Physics) live in a persistent **Global Scope** that outlives the frame.
+
+### What this enables
+- **Barrier resolution is purely a graph-level problem.** The compiler only needs to reason about transitions *between* nodes, never within them.
+- **Parallelism is clean.** Any two passes without a data dependency can execute concurrently.
+- **Separation of Initialization.** Passes boot up once using the **Global Scope**, avoiding per-frame lookups for static services.
 
 ### What this enables
 - **Barrier resolution is purely a graph-level problem.** The compiler only needs to reason about transitions *between* nodes, never within them.
@@ -86,16 +92,14 @@ Explicit GPU APIs (Vulkan, DX12) require manual synchronization barriers between
 ## Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                   Frame N                            │
-│                                                      │
-│  1. RECORD    ──►  2. COMPILE  ──►  3. EXECUTE       │
-│  (sequential)     (sequential)     (parallel)        │
-│                                                      │
-│  Build Node Tree  Flatten tree,    Run closures,     │
-│  & Symbol Table   resolve sync,    emit barriers     │
-│                   aliasing         & commands        │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Long-lived FrameGraph                            │
+│                                                                             │
+│  0. SETUP (Global Scope) ──►  1. INIT (One-time) ──►  2. FRAME (Per-frame)   │
+│                                                                             │
+│  Publish Services            Auto-config passes      RECORD ──► EXECUTE     │
+│  (AssetLoader, etc.)         (Shaders, PSOs)         Build List Flatten/Run │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -108,21 +112,25 @@ The user builds an arborescent structure (Node Tree) by declaring passes and gro
 Inspired by compiler theory (SSA/Phi-nodes), the graph treats all dependencies as symbols.
 
 - **Symbols**: `ImageHandle`, `BufferHandle`, `Camera`, `RenderSettings`.
+- **Global Scope**: Persistent root scope for engine services (AssetLoader, Physics).
+- **Frame Scope**: Root scope for per-frame resources (Backbuffer, GBuffer).
 - **Publish**: Register a symbol in the current node's scope.
-- **Consume**: Resolve a symbol by looking up the tree.
-- **Acquire**: Special publisher that introduces external resources (Swapchain, Static Assets) into the scope.
+- **Consume**: Resolve a symbol by looking up the tree (all the way to Global Scope).
+- **Acquire**: Special publisher for external swapchain resources.
 
 ```rust
-pub trait Node {
+pub trait RenderPass {
     fn name(&self) -> &str;
     
-    /// Define the node structure. 
-    /// If Leaf: declare resource usage (intents).
-    /// If Branch: create sub-nodes and manage symbol scoping.
+    /// Called once during graph initialization. 
+    /// Can consume services from the Global Scope.
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &GlobalScope);
+
+    /// Define per-frame dependencies and state.
     fn record(&mut self, builder: &mut PassBuilder);
 
     /// Execute the node commands. Only valid for Leaf nodes.
-    fn execute(&self, ctx: &mut PassContext);
+    fn execute(&self, ctx: &mut dyn PassContext);
 }
 ```
 
@@ -132,22 +140,27 @@ pub trait Node {
 impl PassBuilder {
     // --- Scoped Symbol Table ---
     /// Register a typed symbol in the current scope.
-    fn publish<T>(&mut self, name: &str, data: T);
+    fn publish<T: Send + Sync + 'static>(&mut self, name: &str, data: T);
     
     /// Resolve a typed symbol from the current or parent scope.
-    fn consume<T>(&mut self, name: &str) -> &T;
+    fn consume<T: Send + Sync + 'static>(&mut self, name: &str) -> &T;
 
     // --- GPU Intents (GPU Leaf only) ---
-    fn read(&mut self, res: ImageHandle, usage: ResourceUsage);
-    fn write(&mut self, res: ImageHandle, usage: ResourceUsage);
+    fn read_image(&mut self, res: ImageHandle, usage: ResourceUsage);
+    fn write_image(&mut self, res: ImageHandle, usage: ResourceUsage);
+    fn read_buffer(&mut self, res: BufferHandle, usage: ResourceUsage);
+    fn write_buffer(&mut self, res: BufferHandle, usage: ResourceUsage);
 
-    // --- Resource Generation ---
+    // --- Resource Management ---
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
-    fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle; // External input
+    fn resolve_image(&mut self, name: &str) -> ImageHandle;
+    fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
     // --- Recursion (Node Tree) ---
-    fn add_pass(&mut self, name: &str, setup: impl FnOnce(&mut PassBuilder));
+    fn add_pass(&mut self, pass: &mut dyn RenderPass);
+    fn add_owned_pass<P: RenderPass + 'static>(&mut self, pass: P);
 }
+```
 ```
 
 **PassContext** (adapts based on domain):

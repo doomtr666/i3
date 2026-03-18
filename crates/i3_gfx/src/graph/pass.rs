@@ -1,7 +1,6 @@
 use crate::graph::backend::{DescriptorWrite, PassContext, RenderBackend};
 use crate::graph::types::{BufferHandle, ImageDesc, ImageHandle, ResourceUsage, WindowHandle};
 use std::any::{Any, TypeId};
-use std::sync::{Arc, Mutex};
 
 /// Context provided to a node during its recording phase.
 /// This is a struct to allow for generic methods (publish/consume).
@@ -122,9 +121,49 @@ impl<'a> PassBuilder<'a> {
         self.inner.add_node_erased(node);
     }
 
-    /// Convenience method to add a render pass without explicit boxing.
-    pub fn add_pass<P: RenderPass + 'static>(&mut self, pass: P) {
+    /// Adds a render pass by reference.
+    /// 
+    /// SAFETY: The reference is extended to 'static internally. The user must 
+    /// ensure that the pass outlives the frame graph execution (which is synchronous).
+    pub fn add_pass(&mut self, pass: &mut dyn RenderPass) {
+        // Coerce to trait object raw pointer
+        let trait_ptr: *mut dyn RenderPass = pass;
+        
+        let boxed: Box<dyn RenderPass> = Box::new(BoxedRef {
+            inner: trait_ptr,
+        });
+        self.inner.add_node_erased(boxed);
+    }
+
+    /// Convenience method to add an owned render pass.
+    pub fn add_owned_pass<P: RenderPass + 'static>(&mut self, pass: P) {
         self.add_node(Box::new(pass));
+    }
+}
+
+/// Internal wrapper to bridge &mut dyn RenderPass to Box<dyn RenderPass + 'static>.
+struct BoxedRef {
+    inner: *mut dyn RenderPass,
+}
+
+unsafe impl Send for BoxedRef {}
+unsafe impl Sync for BoxedRef {}
+
+impl RenderPass for BoxedRef {
+    fn name(&self) -> &str {
+        unsafe { (*self.inner).name() }
+    }
+
+    fn init(&mut self, backend: &mut dyn RenderBackend) {
+        unsafe { (*self.inner).init(backend) }
+    }
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        unsafe { (*self.inner).record(builder) }
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        unsafe { (*self.inner).execute(ctx) }
     }
 }
 
@@ -144,24 +183,6 @@ pub trait RenderPass: Any + Send + Sync {
     fn execute(&self, _ctx: &mut dyn PassContext) {}
 }
 
-impl<T: RenderPass + ?Sized> RenderPass for Arc<Mutex<T>> {
-    fn name(&self) -> &str {
-        let name = std::any::type_name::<T>();
-        name.split("::").last().unwrap_or(name)
-    }
-
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        self.lock().unwrap().init(backend);
-    }
-
-    fn record(&mut self, builder: &mut PassBuilder) {
-        self.lock().unwrap().record(builder);
-    }
-
-    fn execute(&self, ctx: &mut dyn PassContext) {
-        self.lock().unwrap().execute(ctx);
-    }
-}
 
 /// Internal trait to hide implementation details from the public PassBuilder API.
 pub(crate) trait InternalPassBuilder {

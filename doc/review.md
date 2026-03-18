@@ -798,6 +798,38 @@ Runtime:
 
 #### P9-2: Replace consume_erased panic with Result
 - **Files:** `crates/i3_gfx/src/graph/compiler.rs`, `crates/i3_gfx/src/graph/pass.rs`
+
+### Phase 10 -- Global Scope & Long-lived Graph (P3-5) 🦦🏗️
+
+This phase finalizes the ergonomics by making the FrameGraph persistent and introducing a Global Scope for long-lived services (AssetLoader, Physics, etc.).
+
+#### P10-1: Persistent FrameGraph & Global Scope (i3_gfx)
+- **Files:** `crates/i3_gfx/src/graph/compiler.rs`
+- **What:**
+  - Add `globals: SymbolTable` to `FrameGraph`.
+  - Add `FrameGraph::publish<T>` for the Global Scope.
+  - Fix `FrameGraph` to be long-lived (stored in the renderer).
+  - Update `PassRecorder` to include the Global Scope in `ancestor_symbols`.
+- **Test:** Unit test with a symbol published globally and consumed in a pass.
+
+#### P10-2: RenderPass::init Refactor
+- **Files:** `crates/i3_gfx/src/graph/pass.rs`, `crates/i3_gfx/src/graph/compiler.rs`
+- **What:**
+  - Change `RenderPass::init` signature to `fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder)`.
+  - Implement a restricted `PassBuilder` for initialization (only `consume` allowed).
+  - Ensure `init` is called once per pass registration or via an explicit `graph.init_all()` call.
+- **Test:** `cargo check`.
+
+#### P10-3: DefaultRenderGraph Integration
+- **Files:** `crates/i3_renderer/src/render_graph.rs`
+- **What:**
+  - Store `AssetLoader` in the Global Scope.
+  - Move heavy pipeline initialization inside each `RenderPass::init`.
+  - Clean up `DefaultRenderGraph::new` to just register passes and set up globals.
+  - Reduce `record()` to just the per-frame plumbing.
+- **Test:** Run `viewer` example, verify shader loading log moves to passes.
+
+🦦 **This will eliminate the last "verbiage" from the renderer and make it extremely scalable.** 🦦
 - **What:** Change `consume_erased` to return `Result<&dyn Any, GraphError>`. Propagate through `PassBuilder::consume<T>`. This makes symbol resolution errors recoverable.
 
 #### P9-3: Validate MaterialHeader size
