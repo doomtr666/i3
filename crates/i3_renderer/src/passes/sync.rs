@@ -26,7 +26,12 @@ impl RenderPass for ObjectSyncPass {
         "ObjectSyncPass"
     }
 
+    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+
     fn record(&mut self, builder: &mut PassBuilder) {
+        if builder.is_setup() {
+            return;
+        }
         self.object_buffer = builder.resolve_buffer("ObjectBuffer");
 
         let objects = builder.consume::<Vec<(u64, ObjectData)>>("SceneObjects");
@@ -139,7 +144,12 @@ impl RenderPass for MaterialSyncPass {
         "MaterialSyncPass"
     }
 
+    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+
     fn record(&mut self, builder: &mut PassBuilder) {
+        if builder.is_setup() {
+            return;
+        }
         self.material_buffer = builder.resolve_buffer("MaterialBuffer");
 
         let materials = builder.consume::<Vec<(u32, MaterialData)>>("SceneMaterials");

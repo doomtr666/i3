@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use i3_gfx::prelude::*;
 
 use nalgebra_glm as glm;
@@ -62,11 +63,17 @@ impl RenderPass for LightCullPass {
         "LightCull"
     }
 
-    fn init(&mut self, _backend: &mut dyn RenderBackend) {
-        // Handled by init_from_baked
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
+        if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("light_cull").wait_loaded() {
+            self.init_from_baked(backend, &handle);
+        }
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        if builder.is_setup() {
+            return;
+        }
         self.cluster_aabbs = builder.resolve_buffer("ClusterAABBs");
         self.lights = builder.resolve_buffer(&self.light_buffer_name);
         self.cluster_grid = builder.resolve_buffer("ClusterGrid");
@@ -141,9 +148,10 @@ impl RenderPass for LightCullPass {
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
-        let pipeline = self
-            .pipeline
-            .expect("LightCullPass pipeline not initialized");
+        let Some(pipeline) = self.pipeline else {
+            tracing::error!("LightCullPass::execute: pipeline not initialized!");
+            return;
+        };
         ctx.bind_pipeline_raw(pipeline);
 
         ctx.push_constant_data(

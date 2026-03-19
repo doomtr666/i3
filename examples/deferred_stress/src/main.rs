@@ -182,7 +182,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: 1280,
         height: 720,
     };
-    let render_graph = DefaultRenderGraph::new(&mut backend, &config);
+    let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
+    render_graph.init(&mut backend);
 
     // 6. Run
     let app = DeferredStressApp {

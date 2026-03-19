@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use i3_gfx::prelude::*;
 
 /// Which GBuffer channel to display in the debug visualization.
@@ -81,8 +82,11 @@ impl DebugVizPass {
 }
 
 impl RenderPass for DebugVizPass {
-    fn init(&mut self, _backend: &mut dyn RenderBackend) {
-        // Handled by init_from_baked
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
+        if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("debug_viz").wait_loaded() {
+            self.init_from_baked(backend, &handle);
+        }
     }
 
     fn name(&self) -> &str {
@@ -90,6 +94,9 @@ impl RenderPass for DebugVizPass {
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        if builder.is_setup() {
+            return;
+        }
         // Resolve configuration from blackboard
         let channel_u32 = builder.consume::<u32>("DebugChannel");
         self.channel = match *channel_u32 {
@@ -187,9 +194,10 @@ impl RenderPass for DebugVizPass {
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
-        let pipeline = self
-            .pipeline
-            .expect("DebugVizPass pipeline not initialized");
+        let Some(pipeline) = self.pipeline else {
+            tracing::error!("DebugVizPass::execute: pipeline not initialized!");
+            return;
+        };
         ctx.bind_pipeline_raw(pipeline);
         let push = DebugVizPushConstants {
             channel: self.channel as u32,

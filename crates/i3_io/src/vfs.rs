@@ -18,28 +18,29 @@ pub trait VfsBackend: Send + Sync {
 }
 
 pub struct Vfs {
-    backends: Vec<Box<dyn VfsBackend>>,
+    backends: std::sync::RwLock<Vec<Box<dyn VfsBackend>>>,
 }
 
 impl Vfs {
     pub fn new() -> Self {
         Self {
-            backends: Vec::new(),
+            backends: std::sync::RwLock::new(Vec::new()),
         }
     }
 
-    pub fn mount(&mut self, backend: Box<dyn VfsBackend>) {
-        self.backends.push(backend);
+    pub fn mount(&self, backend: Box<dyn VfsBackend>) {
+        self.backends.write().unwrap().push(backend);
     }
 
     pub fn exists(&self, path: impl AsRef<Path>) -> bool {
         let path = path.as_ref();
-        self.backends.iter().any(|b| b.exists(path))
+        self.backends.read().unwrap().iter().any(|b| b.exists(path))
     }
 
     pub fn open(&self, path: impl AsRef<Path>) -> Result<Box<dyn VfsFile>> {
         let path = path.as_ref();
-        for backend in &self.backends {
+        let backends = self.backends.read().unwrap();
+        for backend in backends.iter() {
             if backend.exists(path) {
                 return backend.open(path);
             }
@@ -48,7 +49,8 @@ impl Vfs {
     }
 
     pub fn open_by_uuid(&self, uuid: &uuid::Uuid) -> Result<Box<dyn VfsFile>> {
-        for backend in &self.backends {
+        let backends = self.backends.read().unwrap();
+        for backend in backends.iter() {
             if let Some(result) = backend.open_by_uuid(uuid) {
                 return result;
             }

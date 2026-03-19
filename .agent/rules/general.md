@@ -12,6 +12,7 @@ trigger: always_on
     - No Dead Code
 - Never modify code unless you are certain it conforms to my directives. If in doubt, ask first. No improvisation.
 - Your primary value is architecture and code criticism. Act as an expert assistant: challenge my design and coding choices. Be honest and creative on the design front.
+- for any design phase or code modification: respect design documents present in /doc.
 
 ## Agent Guardrails
 - **Micro-patches only**: one change = one concept. Never produce large diffs. If a task requires many changes, break it into small, individually reviewable steps.

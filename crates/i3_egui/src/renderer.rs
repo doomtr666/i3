@@ -102,6 +102,20 @@ impl RenderPass for EguiPass {
         "EguiPass"
     }
 
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
+        match loader.load::<i3_io::pipeline_asset::PipelineAsset>("egui").wait_loaded() {
+            Ok(handle) => {
+                let mut renderer = self.renderer.lock().unwrap();
+                renderer.init_from_baked(backend, &handle);
+                tracing::info!("Egui renderer initialized successfully from baked asset");
+            }
+            Err(e) => {
+                tracing::error!("Failed to load egui pipeline asset: {}", e);
+            }
+        }
+    }
+
     fn record(&mut self, builder: &mut PassBuilder) {
         let renderer = self.renderer.lock().unwrap();
         if renderer.pipeline.is_none() {

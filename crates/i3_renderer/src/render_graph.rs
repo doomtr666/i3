@@ -5,6 +5,7 @@ use crate::passes::gbuffer::{self, DrawCommand, GBufferPass};
 use crate::passes::sky::SkyPass;
 use crate::scene::SceneProvider;
 use i3_gfx::prelude::*;
+use i3_egui::UiSystem;
 use std::sync::Arc;
 
 /// Shared data published to the FrameGraph blackboard.
@@ -33,6 +34,8 @@ impl RenderPass for ClearBufferPass {
         &self.name
     }
 
+    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+
     fn record(&mut self, builder: &mut PassBuilder) {
         builder.write_buffer(self.buffer, ResourceUsage::TRANSFER_WRITE);
     }
@@ -52,6 +55,8 @@ impl RenderPass for PresentPass {
         "PresentPass"
     }
 
+    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+
     fn record(&mut self, builder: &mut PassBuilder) {
         builder.read_image(self.backbuffer, ResourceUsage::PRESENT);
     }
@@ -65,6 +70,7 @@ impl RenderPass for PresentPass {
 ///
 /// Owns persistent passes and groups. Geometry comes from the SceneProvider.
 pub struct DefaultRenderGraph {
+    pub graph: FrameGraph,
     pub gbuffer_pass: GBufferPass,
     pub sky_pass: SkyPass,
     pub sync_group: SyncGroup,
@@ -79,7 +85,7 @@ pub struct DefaultRenderGraph {
     pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
     pub bindless_manager: crate::bindless::BindlessManager,
-    pub egui: Arc<i3_egui::EguiIntegration>,
+    pub ui: Option<Arc<i3_egui::UiSystem>>,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -109,79 +115,14 @@ impl DefaultRenderGraph {
             ..Default::default()
         });
 
-        let mut gbuffer_pass = GBufferPass::new();
-        let mut sky_pass = SkyPass::new();
-        let mut clustering_group = ClusteringGroup::new();
-        let mut deferred_resolve_pass = DeferredResolvePass::new(linear_sampler);
-        let mut post_process_group = PostProcessGroup::new(linear_sampler);
-        let mut debug_viz_pass = DebugVizPass::new(linear_sampler, DebugChannel::Lit);
+        let gbuffer_pass = GBufferPass::new();
+        let sky_pass = SkyPass::new();
+        let clustering_group = ClusteringGroup::new();
+        let deferred_resolve_pass = DeferredResolvePass::new(linear_sampler);
+        let post_process_group = PostProcessGroup::new(linear_sampler);
+        let debug_viz_pass = DebugVizPass::new(linear_sampler, DebugChannel::Lit);
 
-        let egui = Arc::new(i3_egui::EguiIntegration::new(_config.width, _config.height));
-
-        let mut vfs = i3_io::vfs::Vfs::new();
-        let catalog_path = "assets/system.i3c";
-        let blob_path = "assets/system.i3b";
-
-        if std::path::Path::new(catalog_path).exists() && std::path::Path::new(blob_path).exists() {
-            if let Ok(bundle) = i3_io::vfs::BundleBackend::mount(catalog_path, blob_path) {
-                vfs.mount(Box::new(bundle));
-                tracing::info!("System bundle mounted successfully");
-                
-                let loader = i3_io::asset::AssetLoader::new(Arc::new(vfs));
-                
-                // Load GBuffer pipeline
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("gbuffer").wait_loaded() {
-                    gbuffer_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("GBuffer pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("sky").wait_loaded() {
-                    sky_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("Sky pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build").wait_loaded() {
-                    clustering_group.cluster_build_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("ClusterBuild pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("light_cull").wait_loaded() {
-                    clustering_group.light_cull_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("LightCull pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
-                    deferred_resolve_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("Lighting pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("histogram_build").wait_loaded() {
-                    post_process_group.histogram_build_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("HistogramBuild pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("average_luminance").wait_loaded() {
-                    post_process_group.average_luminance_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("AverageLuminance pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("tonemap").wait_loaded() {
-                    post_process_group.tonemap_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("Tonemap pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("debug_viz").wait_loaded() {
-                    debug_viz_pass.init_from_baked(_backend, &handle);
-                    tracing::info!("DebugViz pipeline loaded from system bundle");
-                }
-
-                if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("egui").wait_loaded() {
-                    egui.init_from_baked(_backend, &handle);
-                    tracing::info!("Egui pipeline loaded from system bundle");
-                }
-            }
-        }
-
+        let graph = FrameGraph::new();
         let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(_backend);
 
         let sync_group = SyncGroup::new(
@@ -213,6 +154,7 @@ impl DefaultRenderGraph {
         bindless_manager.register_physical_texture(_backend, white_image);
 
         Self {
+            graph,
             gbuffer_pass,
             sky_pass,
             sync_group,
@@ -226,8 +168,83 @@ impl DefaultRenderGraph {
             gpu_buffers,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
-            egui,
+            ui: None,
         }
+    }
+
+    /// Initializes the render graph: handles cooperative asset loading and pipeline binding.
+    /// External services (AssetLoader, UiSystem) should be published to the graph's blackboard before calling this.
+    pub fn init(&mut self, backend: &mut dyn RenderBackend) {
+        // System bundle discovery
+        let exe_path = std::env::current_exe().unwrap();
+        let exe_dir = exe_path.parent().unwrap();
+
+        let local_assets = std::path::Path::new("assets");
+        let catalog_path = if local_assets.exists() {
+            local_assets.join("system.i3c")
+        } else {
+            exe_dir.join("system.i3c")
+        };
+        let blob_path = if local_assets.exists() {
+            local_assets.join("system.i3b")
+        } else {
+            exe_dir.join("system.i3b")
+        };
+
+        // Cooperative Asset Loading: 
+        let loader = self.graph.try_consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader")
+            .cloned()
+            .unwrap_or_else(|| {
+                let loader = Arc::new(i3_io::asset::AssetLoader::new(Arc::new(i3_io::vfs::Vfs::new())));
+                self.graph.publish("AssetLoader", loader.clone());
+                loader
+            });
+
+        // Ensure system bundle is mounted
+        let vfs = loader.vfs();
+        if catalog_path.exists() && blob_path.exists() {
+            if let Ok(bundle) = i3_io::vfs::BundleBackend::mount(
+                catalog_path.to_str().unwrap(), 
+                blob_path.to_str().unwrap()
+            ) {
+                let _ = vfs.mount(Box::new(bundle));
+                tracing::info!("System bundle cooperatively mounted from {:?}", catalog_path.parent().unwrap());
+            }
+        }
+
+        // 1. Setup Phase: Register all potential passes
+        let gbuffer_pass = &mut self.gbuffer_pass;
+        let sky_pass = &mut self.sky_pass;
+        let sync_group = &mut self.sync_group;
+        let clustering_group = &mut self.clustering_group;
+        let deferred_resolve_pass = &mut self.deferred_resolve_pass;
+        let post_process_group = &mut self.post_process_group;
+        let debug_viz_pass = &mut self.debug_viz_pass;
+
+        self.graph.setup(|builder| {
+            builder.add_pass(gbuffer_pass);
+            builder.add_pass(sky_pass);
+            builder.add_pass(sync_group);
+            builder.add_pass(clustering_group);
+            builder.add_pass(deferred_resolve_pass);
+            builder.add_pass(post_process_group);
+            builder.add_pass(debug_viz_pass);
+
+            // Add a dummy egui pass for initialization
+            if let Some(ui) = builder.try_consume::<Arc<UiSystem>>("UiSystem") {
+                if let Some(egui_pass) = ui.create_pass(ImageHandle::INVALID) {
+                    builder.add_owned_pass(egui_pass);
+                }
+            }
+        });
+
+        // 2. Initialization Phase: Load shaders/pipelines
+        self.graph.init_all(backend);
+    }
+
+    /// Proxy for publishing a service to the global blackboard.
+    pub fn publish<T: 'static + Send + Sync>(&mut self, name: &str, data: T) {
+        self.graph.publish(name, data);
     }
 }
 
@@ -269,9 +286,6 @@ impl DefaultRenderGraph {
         if !gpu_lights.is_empty() {
             let _ = backend.upload_buffer_slice(self.gpu_buffers.light_buffer, &gpu_lights, 0);
         }
-
-        // Sync Egui textures (font atlas, etc.)
-        self.egui.update_textures(backend);
     }
 
     fn record_clustering(&mut self, builder: &mut PassBuilder) -> (u32, u32, u32) {
@@ -523,8 +537,10 @@ impl DefaultRenderGraph {
             }
 
             // 6. Egui UI
-            if let Some(egui_pass) = self.egui.create_pass(backbuffer) {
-                builder.add_owned_pass(egui_pass);
+            if let Some(ui) = builder.try_consume::<Arc<UiSystem>>("UiSystem") {
+                if let Some(egui_pass) = ui.create_pass(backbuffer) {
+                    builder.add_owned_pass(egui_pass);
+                }
             }
 
             // 7. Final Presentation

@@ -840,8 +840,8 @@ This phase finalizes the ergonomics by making the FrameGraph persistent and intr
 
 Ajout non prévu initialement. L'intégration egui dans le renderer permet le debug en temps réel dans le viewer.
 
-#### EG-01: EguiIntegration fondation ✅
-- **Status:** ✅ Done -- `i3_egui` crate créée avec `EguiIntegration`, `EguiRenderer`, `EguiPass`, input mapping. Pipeline chargé depuis le system bundle. Font atlas géré via `update_textures`.
+#### EG-01: UiSystem fondation ✅
+- **Status:** ✅ Done -- `i3_egui` crate créée avec `UiSystem`, `EguiRenderer`, `EguiPass`. Découplé du renderer via Blackboard.
 
 #### EG-02: Viewer - Debug Channel UI ✅
 - **Status:** ✅ Done -- `DebugChannel` selectionable en runtime via egui. `DebugChannel` a maintenant des discriminants explicites alignés avec les valeurs shader. Depth channel ajouté au `DebugVizPass`.
@@ -856,7 +856,7 @@ Ajout non prévu initialement. L'intégration egui dans le renderer permet le de
 | EG-I01 | `renderer.rs` | Medium | Support textures utilisateur (autres que font atlas). `update_textures` ignore `ImageData::Color`. Table de textures nécessaire (HashMap<TextureId, BackendImage>). |
 | EG-I02 | `renderer.rs` | Medium | Scissoring non implémenté dans `execute()`. Les `clipped_primitive.clip_rect` sont ignorés. Potentiel artifact UI si les widgets débordent. |
 | EG-I03 | `renderer.rs` | Low | VB/IB re-alloués chaque frame. Devrait être un buffer persist avec ring-buffer ou resize-on-demand. |
-| EG-I04 | `lib.rs` | Medium | `pub egui: Arc<EguiIntegration>` dans `DefaultRenderGraph` crée un couplage fort. Considérer un trait `DebugUiProvider` ou rendre l'intégration optionnelle. |
+| EG-I04 | `lib.rs` | Resolved | ✅ Découplé via FrameGraph blackboard et renommé en `UiSystem`. |
 | EG-I05 | `lib.rs` | Low | `pixles_per_point` hardcodé à `1.0` dans `tessellate`. Devrait utiliser le DPI réel de la fenêtre. |
 
 ### Phase 10 -- i3_bundle Enhancements

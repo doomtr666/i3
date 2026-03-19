@@ -9,6 +9,16 @@ pub struct PassBuilder<'a> {
 }
 
 impl<'a> PassBuilder<'a> {
+    pub(crate) fn new(inner: &'a mut dyn InternalPassBuilder) -> Self {
+        Self { inner }
+    }
+
+    /// Returns true if this is the registration (setup) phase.
+    /// Passes should skip resource resolution but still declare nodes here.
+    pub fn is_setup(&self) -> bool {
+        self.inner.is_setup()
+    }
+
     // --- Scoped Symbol Table ---
     /// Register a typed symbol in the current scope.
     pub fn publish<T: 'static + Send + Sync>(&mut self, name: &str, data: T) {
@@ -16,11 +26,20 @@ impl<'a> PassBuilder<'a> {
             .publish_erased(TypeId::of::<T>(), name, Box::new(data));
     }
 
-    /// Resolve a typed symbol from the current or parent scope.
+    /// Resolve a typed symbol from the current or parent scope. Panics if not found.
     pub fn consume<T: 'static + Send + Sync>(&mut self, name: &str) -> &T {
         let any = self.inner.consume_erased(TypeId::of::<T>(), name);
         any.downcast_ref::<T>()
-            .expect("Type mismatch in symbol table")
+            .unwrap_or_else(|| panic!("Type mismatch in symbol table for symbol: {}", name))
+    }
+
+    /// Resolve a typed symbol from the current or parent scope. Returns None if not found.
+    pub fn try_consume<T: 'static + Send + Sync>(&mut self, name: &str) -> Option<&T> {
+        self.inner.try_consume_erased(TypeId::of::<T>(), name)
+            .map(|any| {
+                any.downcast_ref::<T>()
+                    .unwrap_or_else(|| panic!("Type mismatch in symbol table for optional symbol: {}", name))
+            })
     }
 
     /// Resolves an ImageHandle from the symbol table by name.
@@ -116,34 +135,24 @@ impl<'a> PassBuilder<'a> {
     }
 
     // --- Tree Construction ---
-    /// Adds a structural node (Pass or Group) to the frame graph.
-    pub fn add_node(&mut self, node: Box<dyn RenderPass>) {
-        self.inner.add_node_erased(node);
-    }
-
-    /// Adds a render pass by reference.
-    /// 
-    /// SAFETY: The reference is extended to 'static internally. The user must 
-    /// ensure that the pass outlives the frame graph execution (which is synchronous).
+    /// Adds a structural node (Pass or Group) to the frame graph by reference.
     pub fn add_pass(&mut self, pass: &mut dyn RenderPass) {
-        // Coerce to trait object raw pointer
         let trait_ptr: *mut dyn RenderPass = pass;
-        
-        let boxed: Box<dyn RenderPass> = Box::new(BoxedRef {
-            inner: trait_ptr,
-        });
-        self.inner.add_node_erased(boxed);
+        // Cast to 'static to satisfy Box requirements. 
+        // Safety: The pass must outlive the FrameGraph execution for this frame.
+        let static_ptr: *mut (dyn RenderPass + 'static) = unsafe { std::mem::transmute(trait_ptr) };
+        self.inner.add_node_erased(Box::new(BoxedRef { inner: static_ptr }));
     }
 
-    /// Convenience method to add an owned render pass.
+    /// Adds an owned structural node to the frame graph.
     pub fn add_owned_pass<P: RenderPass + 'static>(&mut self, pass: P) {
-        self.add_node(Box::new(pass));
+        self.inner.add_node_erased(Box::new(pass));
     }
 }
 
 /// Internal wrapper to bridge &mut dyn RenderPass to Box<dyn RenderPass + 'static>.
 struct BoxedRef {
-    inner: *mut dyn RenderPass,
+    inner: *mut (dyn RenderPass + 'static),
 }
 
 unsafe impl Send for BoxedRef {}
@@ -154,8 +163,8 @@ impl RenderPass for BoxedRef {
         unsafe { (*self.inner).name() }
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        unsafe { (*self.inner).init(backend) }
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        unsafe { (*self.inner).init(backend, globals) }
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
@@ -173,8 +182,9 @@ pub trait RenderPass: Any + Send + Sync {
     /// Name of the pass (used for debugging/profiling).
     fn name(&self) -> &str;
 
-    /// Called once after the graph is built, for creating pipelines/resources.
-    fn init(&mut self, _backend: &mut dyn RenderBackend) {}
+    /// Called once during graph global initialization, for creating pipelines/resources.
+    /// Can consume services from the global scope.
+    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
     /// Declare resource intents and symbols.
     fn record(&mut self, builder: &mut PassBuilder);
@@ -188,6 +198,7 @@ pub trait RenderPass: Any + Send + Sync {
 pub(crate) trait InternalPassBuilder {
     fn publish_erased(&mut self, type_id: TypeId, name: &str, data: Box<dyn Any + Send + Sync>);
     fn consume_erased(&mut self, type_id: TypeId, name: &str) -> &dyn Any;
+    fn try_consume_erased(&mut self, type_id: TypeId, name: &str) -> Option<&dyn Any>;
 
     fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage);
     fn write_image(&mut self, handle: ImageHandle, usage: ResourceUsage);
@@ -227,4 +238,5 @@ pub(crate) trait InternalPassBuilder {
     );
 
     fn add_node_erased(&mut self, node: Box<dyn RenderPass>);
+    fn is_setup(&self) -> bool;
 }

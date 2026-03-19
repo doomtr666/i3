@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use i3_gfx::prelude::*;
 
 use nalgebra_glm as glm;
@@ -78,11 +79,17 @@ impl RenderPass for DeferredResolvePass {
         "DeferredResolvePass"
     }
 
-    fn init(&mut self, _backend: &mut dyn RenderBackend) {
-        // Handled by init_from_baked
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
+        if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
+            self.init_from_baked(backend, &handle);
+        }
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        if builder.is_setup() {
+            return;
+        }
         // Resolve target handles by name
         self.hdr_target = builder.resolve_image("HDR_Target");
         self.gbuffer_albedo = builder.resolve_image("GBuffer_Albedo");
@@ -237,9 +244,10 @@ impl RenderPass for DeferredResolvePass {
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
-        let pipeline = self
-            .pipeline
-            .expect("DeferredResolvePass pipeline not initialized");
+        let Some(pipeline) = self.pipeline else {
+            tracing::error!("DeferredResolvePass::execute: pipeline not initialized!");
+            return;
+        };
         ctx.bind_pipeline_raw(pipeline);
 
         if let Some(constants) = self.push_constants {

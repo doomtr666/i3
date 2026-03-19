@@ -21,9 +21,9 @@ impl RenderPass for SyncGroup {
         "SyncGroup"
     }
 
-    fn init(&mut self, backend: &mut dyn RenderBackend) {
-        self.object_sync.init(backend);
-        self.material_sync.init(backend);
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        self.object_sync.init(backend, globals);
+        self.material_sync.init(backend, globals);
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {

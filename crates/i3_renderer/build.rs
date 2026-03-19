@@ -12,8 +12,16 @@ fn main() -> Result<()> {
     let workspace_root = manifest_path.parent().unwrap().parent().unwrap();
     let egui_assets = workspace_root.join("crates/i3_egui/assets/pipelines");
     
-    // Output bundle to the workspace assets folder (at root)
-    let output_dir = workspace_root.join("assets");
+    // Output bundle to the target directory (debug/release)
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let out_path = Path::new(&out_dir);
+    
+    // We want the final artifacts to be in the profile folder (target/debug or target/release)
+    // CARGO_MANIFEST_DIR/../../target/debug
+    // A reliable way is to find the profile folder from OUT_DIR or use a simpler approach.
+    // For now, let's just put it in the profile directory by navigating up from OUT_DIR.
+    let profile_dir = out_path.parent().unwrap().parent().unwrap().parent().unwrap();
+    let output_dir = profile_dir;
 
     println!("cargo:rerun-if-changed=assets");
     println!("cargo:rerun-if-changed={}", egui_assets.display());

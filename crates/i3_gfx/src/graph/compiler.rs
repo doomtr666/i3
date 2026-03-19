@@ -1,6 +1,6 @@
 use crate::graph::backend::{
     BackendBuffer, BackendImage, CommandBatch, DescriptorWrite, PassDescriptor,
-    RenderBackendInternal,
+    RenderBackend, RenderBackendInternal,
 };
 use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::types::*;
@@ -81,7 +81,7 @@ pub struct NodeStorage {
     pub name: String,
     pub symbols: SymbolTable,
     pub children: Vec<NodeStorage>,
-    pub pass: Box<dyn RenderPass>,
+    pub pass: Option<Box<dyn RenderPass>>,
 
     pub pipeline: Option<PipelineHandle>,
 
@@ -119,18 +119,11 @@ impl std::fmt::Debug for NodeStorage {
 
 // NodeStorage no longer implements the old Node trait as RenderPass replaces it.
 
-struct PlaceholderPass;
-impl RenderPass for PlaceholderPass {
-    fn name(&self) -> &str {
-        "placeholder"
-    }
-    fn record(&mut self, _: &mut PassBuilder) {}
-}
-
 /// Implementation of the internal PassBuilder trait.
 pub struct PassRecorder<'a> {
     storage: &'a mut NodeStorage,
     ancestor_symbols: Vec<&'a SymbolTable>,
+    is_setup: bool,
 }
 
 impl<'a> InternalPassBuilder for PassRecorder<'a> {
@@ -152,29 +145,28 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         self.storage.data_writes.push(name.to_string());
     }
 
-    fn consume_erased(&mut self, _type_id: TypeId, name: &str) -> &dyn Any {
+    fn consume_erased(&mut self, type_id: TypeId, name: &str) -> &dyn Any {
+        self.try_consume_erased(type_id, name)
+            .unwrap_or_else(|| panic!("Symbol '{}' not found in current or parent scope", name))
+    }
+
+    fn try_consume_erased(&mut self, _type_id: TypeId, name: &str) -> Option<&dyn Any> {
         // Track as a data dependency for the DAG
         self.storage.data_reads.push(name.to_string());
 
         if let Some(id) = self.storage.symbols.resolve(name) {
             tracing::trace!(name, "Consuming CPU data (local)");
-            return self
-                .storage
-                .symbols
-                .get_data(id)
-                .expect("Symbol exists but has no data");
+            return self.storage.symbols.get_data(id);
         }
 
         for parent in self.ancestor_symbols.iter().rev() {
             if let Some(id) = parent.resolve(name) {
                 tracing::trace!(name, "Consuming CPU data (inherited)");
-                return parent
-                    .get_data(id)
-                    .expect("Symbol in parent exists but has no data");
+                return parent.get_data(id);
             }
         }
 
-        panic!("Symbol '{}' not found in current or parent scope", name);
+        None
     }
 
     fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage) {
@@ -352,7 +344,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             name: node.name().to_string(),
             symbols: SymbolTable::new(),
             children: Vec::new(),
-            pass: node,
+            pass: Some(node),
 
             pipeline: None,
             image_reads: Vec::new(),
@@ -368,10 +360,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         };
 
         // Put it back but we need to record first
-        let mut pass = std::mem::replace(
-            &mut child_storage.pass,
-            Box::new(PlaceholderPass), // Temporary placeholder
-        );
+        let mut pass = child_storage.pass.take().unwrap();
 
         {
             let mut ancestors = self.ancestor_symbols.clone();
@@ -380,6 +369,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             let mut sub_recorder = PassRecorder {
                 storage: &mut child_storage,
                 ancestor_symbols: ancestors,
+                is_setup: self.is_setup,
             };
             let mut builder = PassBuilder {
                 inner: &mut sub_recorder,
@@ -388,26 +378,33 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         }
 
         // Put the real pass back
-        child_storage.pass = pass;
-
+        child_storage.pass = Some(pass);
         self.storage.children.push(child_storage);
+    }
+
+    fn is_setup(&self) -> bool {
+        self.is_setup
     }
 }
 
 /// Root of the Frame Graph recording.
 pub struct FrameGraph {
+    /// Persistent global symbols (AssetLoader, Services).
+    pub globals: SymbolTable,
+    /// Tree root.
     root: NodeStorage,
 }
 
 impl FrameGraph {
     pub fn new() -> Self {
         Self {
+            globals: SymbolTable::new(),
             root: NodeStorage {
                 node_id: 0,
                 name: "root".to_string(),
                 symbols: SymbolTable::new(),
                 children: Vec::new(),
-                pass: Box::new(PlaceholderPass),
+                pass: None,
 
                 pipeline: None,
                 image_reads: Vec::new(),
@@ -430,13 +427,90 @@ impl FrameGraph {
     {
         let mut recorder = PassRecorder {
             storage: &mut self.root,
-            ancestor_symbols: Vec::new(),
+            ancestor_symbols: vec![&self.globals],
+            is_setup: false,
         };
 
         let mut builder = PassBuilder {
             inner: &mut recorder,
         };
         setup(&mut builder);
+    }
+
+    /// Records the persistent parts of the graph (long-lived passes).
+    pub fn setup<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut PassBuilder),
+    {
+        let mut recorder = PassRecorder {
+            storage: &mut self.root,
+            ancestor_symbols: vec![&self.globals],
+            is_setup: true,
+        };
+        let mut builder = PassBuilder::new(&mut recorder);
+        f(&mut builder);
+    }
+
+    /// Registers a long-lived service in the global scope.
+    pub fn publish<T: 'static + Send + Sync>(&mut self, name: &str, data: T) {
+        let index = self.globals.symbols.len() as u64;
+        let id = SymbolId((0xFFFF_FFFFu64 << 32) | index); // Use 0xFFFFFFFF as global node tag
+        self.globals.publish(
+            name,
+            Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::CpuData(TypeId::of::<T>()),
+                lifetime: SymbolLifetime::Persistent,
+                data: Some(Box::new(data)),
+            },
+            id,
+        );
+    }
+
+    /// Resolve a typed symbol from the global blackboard. Panics if not found.
+    pub fn consume<T: 'static + Send + Sync>(&self, name: &str) -> &T {
+        let id = self.globals.resolve(name)
+            .unwrap_or_else(|| panic!("Global symbol '{}' not found", name));
+        self.globals.get_data(id)
+            .and_then(|any| any.downcast_ref::<T>())
+            .unwrap_or_else(|| panic!("Type mismatch for global symbol '{}'", name))
+    }
+
+    /// Resolve a typed symbol from the global blackboard. Returns None if not found.
+    pub fn try_consume<T: 'static + Send + Sync>(&self, name: &str) -> Option<&T> {
+        let id = self.globals.resolve(name)?;
+        self.globals.get_data(id)?
+            .downcast_ref::<T>()
+    }
+
+    /// Initializes all registered passes using the Global Scope.
+    /// Should be called once after setup.
+    pub fn init_all(&mut self, backend: &mut dyn RenderBackend) {
+        tracing::debug!("Initializing FrameGraph global scope and passes");
+        Self::init_recursive(&mut self.root, backend, &self.globals);
+    }
+
+    fn init_recursive(
+        node: &mut NodeStorage,
+        backend: &mut dyn RenderBackend,
+        globals: &SymbolTable,
+    ) {
+        if let Some(mut pass) = node.pass.take() {
+            {
+                let mut recorder = PassRecorder {
+                    storage: node,
+                    ancestor_symbols: vec![globals],
+                    is_setup: true,
+                };
+                let mut builder = PassBuilder::new(&mut recorder);
+                pass.init(backend, &mut builder);
+            }
+            node.pass = Some(pass);
+        }
+
+        for child in &mut node.children {
+            Self::init_recursive(child, backend, globals);
+        }
     }
 
     pub fn compile(self) -> CompiledGraph {
@@ -840,7 +914,7 @@ impl CompiledGraph {
                             let node = unsafe { &mut *node_ptr.0 };
                             tracing::debug!(pass = %flat.name, domain = ?flat.domain, "Executing pass");
                             let (_sem, cb, present_req) =
-                                backend.record_pass(prepared, node.pass.as_ref());
+                                backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
                             if let Some(c) = cb {
                                 all_command_buffers.push(c);
                             }
@@ -857,7 +931,7 @@ impl CompiledGraph {
                             if let Some(node_ptr) = node_map.get(&flat.node_id) {
                                 let node = unsafe { &mut *node_ptr.0 };
                                 let (_sem, cb, present_req) =
-                                    backend.record_pass(prepared, node.pass.as_ref());
+                                    backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
                                 if let Some(c) = cb {
                                     all_command_buffers.push(c);
                                 }
@@ -948,8 +1022,7 @@ impl CompiledGraph {
         transient_images: &mut Vec<BackendImage>,
         transient_buffers: &mut Vec<BackendBuffer>,
     ) {
-        // Call pass initialization
-        node.pass.init(backend);
+        // Call to pass.init removed here, now handled by init_all() once.
 
         // Resolve symbols in current scope
         for symbol in &node.symbols.symbols {

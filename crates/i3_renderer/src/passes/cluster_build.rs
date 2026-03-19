@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use i3_gfx::prelude::*;
 
 use nalgebra_glm as glm;
@@ -60,11 +61,18 @@ impl RenderPass for ClusterBuildPass {
         "ClusterBuild"
     }
 
-    fn init(&mut self, _backend: &mut dyn RenderBackend) {
-        // Handled by init_from_baked
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
+        match loader.load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build").wait_loaded() {
+            Ok(handle) => self.init_from_baked(backend, &handle),
+            Err(e) => tracing::error!("Failed to load 'cluster_build' asset: {:?}", e),
+        }
     }
 
     fn record(&mut self, builder: &mut PassBuilder) {
+        if builder.is_setup() {
+            return;
+        }
         self.cluster_aabbs = builder.resolve_buffer("ClusterAABBs");
 
         // Consume CommonData to compute push constants
@@ -100,17 +108,16 @@ impl RenderPass for ClusterBuildPass {
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
-        let pipeline = self
-            .pipeline
-            .expect("ClusterBuildPass pipeline not initialized");
-        ctx.bind_pipeline_raw(pipeline);
-
-        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_constants);
-
-        ctx.dispatch(
-            self.push_constants.grid_size[0],
-            self.push_constants.grid_size[1],
-            self.push_constants.grid_size[2],
-        );
+        if let Some(pipeline) = self.pipeline {
+            ctx.bind_pipeline_raw(pipeline);
+            ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_constants);
+            ctx.dispatch(
+                self.push_constants.grid_size[0],
+                self.push_constants.grid_size[1],
+                self.push_constants.grid_size[2],
+            );
+        } else {
+            tracing::error!("ClusterBuildPass::execute: pipeline not initialized!");
+        }
     }
 }

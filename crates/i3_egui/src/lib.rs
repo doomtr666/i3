@@ -6,7 +6,7 @@ use i3_gfx::graph::backend::RenderBackend;
 use std::sync::atomic::{AtomicBool, Ordering};
 pub use egui;
 
-pub struct EguiIntegration {
+pub struct UiSystem {
     ctx: egui::Context,
     renderer: Arc<std::sync::Mutex<renderer::EguiRenderer>>,
     start_time: std::time::Instant,
@@ -18,7 +18,7 @@ pub struct EguiIntegration {
     screen_size: Arc<std::sync::Mutex<(u32, u32)>>,
 }
 
-impl EguiIntegration {
+impl UiSystem {
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             ctx: egui::Context::default(),
@@ -81,9 +81,15 @@ impl EguiIntegration {
     }
 
     pub fn create_pass(&self, backbuffer: i3_gfx::graph::types::ImageHandle) -> Option<renderer::EguiPass> {
-        let full_output = self.stored_output.lock().unwrap().take()?;
         let (width, height) = *self.screen_size.lock().unwrap();
-        let primitives = self.ctx.tessellate(full_output.shapes, 1.0); 
-        Some(renderer::EguiPass::new(self.renderer.clone(), primitives, width, height, backbuffer))
+        let mut storage = self.stored_output.lock().unwrap();
+        
+        if let Some(full_output) = storage.take() {
+            let primitives = self.ctx.tessellate(full_output.shapes, 1.0); 
+            Some(renderer::EguiPass::new(self.renderer.clone(), primitives, width, height, backbuffer))
+        } else {
+            // Return an empty pass for initialization purposes if no output is pending
+            Some(renderer::EguiPass::new(self.renderer.clone(), Vec::new(), width, height, backbuffer))
+        }
     }
 }

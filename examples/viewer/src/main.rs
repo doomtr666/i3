@@ -25,7 +25,9 @@ struct DeferredGltfApp {
     backend: VulkanBackend,
     window: WindowHandle,
     render_graph: DefaultRenderGraph,
+    ui: Arc<i3_egui::UiSystem>,
     scene: BasicScene,
+    loader: Arc<i3_io::asset::AssetLoader>,
     time: f32,
     dt: f32,
     camera: examples_common::camera_controller::CameraController,
@@ -41,8 +43,8 @@ impl ExampleApp for DeferredGltfApp {
 
     fn render(&mut self) {
         // --- Egui UI Definition ---
-        self.render_graph.egui.begin_frame();
-        let egui_ctx = self.render_graph.egui.context().clone();
+        self.ui.begin_frame();
+        let egui_ctx = self.ui.context().clone();
         egui::Window::new("Engine Debug").show(&egui_ctx, |ui| {
             ui.heading("Renderer");
             ui.label(format!("Frame time: {:.2}ms ({:.1} FPS)", self.dt * 1000.0, 1.0 / self.dt));
@@ -56,6 +58,9 @@ impl ExampleApp for DeferredGltfApp {
             ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Emissive, "Emissive");
             ui.radio_value(&mut self.render_graph.debug_channel, DebugChannel::Depth, "Depth");
         });
+
+        // Finalize UI and update textures before recording the graph
+        self.ui.update_textures(&mut self.backend);
 
         let view = self.camera.view_matrix();
         let (width, height) = self.backend.window_size(self.window).unwrap_or((1280, 720));
@@ -71,8 +76,11 @@ impl ExampleApp for DeferredGltfApp {
         );
 
         self.render_graph.sync(&mut self.backend, &self.scene);
-
+ 
         let mut graph = FrameGraph::new();
+        graph.publish("UiSystem", self.ui.clone());
+        graph.publish("AssetLoader", self.loader.clone());
+
         self.render_graph.record(
             &mut graph,
             self.window,
@@ -100,7 +108,7 @@ impl ExampleApp for DeferredGltfApp {
     }
 
     fn handle_event(&mut self, event: &Event) {
-        self.render_graph.egui.handle_event(event);
+        self.ui.handle_event(event);
 
         if let Event::KeyDown { key } = event {
             if *key == KeyCode::F11 {
@@ -110,8 +118,8 @@ impl ExampleApp for DeferredGltfApp {
         }
 
         // Only let camera handle event if egui doesn't want it
-        let wants_input = self.render_graph.egui.context().wants_pointer_input()
-            || self.render_graph.egui.context().wants_keyboard_input();
+        let wants_input = self.ui.context().wants_pointer_input()
+            || self.ui.context().wants_keyboard_input();
 
         if !wants_input {
             self.camera.handle_event(event);
@@ -144,10 +152,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exe_dir.to_path_buf()
         } else {
             // Fallback to workspace root relative path
-            PathBuf::from("examples/viewer/assets")
+            PathBuf::from("assets")
         }
     } else {
-        PathBuf::from("examples/viewer/assets")
+        PathBuf::from("assets")
     };
 
     let blob_path = assets_dir.join("viewer_scenes.i3b");
@@ -155,17 +163,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Mounting bundle from {:?}", assets_dir);
     let bundle = BundleBackend::mount(&catalog_path, &blob_path)?;
-    let mut vfs = Vfs::new();
+    let vfs = Vfs::new();
     vfs.mount(Box::new(bundle));
     let vfs = Arc::new(vfs);
     let loader = AssetLoader::new(vfs);
+    let loader_arc = Arc::new(loader);
 
     // 4. Load baked assets
     // Try to load Sponza, fallback to Helmet
     let scene_name = std::env::var("I3_SCENE").unwrap_or_else(|_| "Sponza_scene".to_string());
     info!("Loading SceneAsset '{}'...", scene_name);
 
-    let scene_handle = loader.load::<SceneAsset>(&scene_name);
+    let scene_handle = loader_arc.load::<SceneAsset>(&scene_name);
     let final_handle = if scene_handle.wait_loaded().is_ok() {
         scene_handle
     } else {
@@ -173,25 +182,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Failed to load {}, falling back to DamagedHelmet_scene",
             scene_name
         );
-        loader.load::<SceneAsset>("DamagedHelmet_scene")
+        loader_arc.load::<SceneAsset>("DamagedHelmet_scene")
     };
     let scene_asset = final_handle.wait_loaded()?;
 
     let mut scene = BasicScene::new();
 
-    // 5. Create Render Graph early so we can use BindlessManager
     let config = RenderConfig {
         width: 1280,
         height: 720,
     };
+
+
+    let ui = Arc::new(i3_egui::UiSystem::new(config.width, config.height));
     let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
+    render_graph.publish("UiSystem", ui.clone());
+    render_graph.publish("AssetLoader", loader_arc.clone());
+    render_graph.init(&mut backend);
 
     // Collect distinct materials required by meshes
     let mut required_materials = std::collections::HashSet::new();
 
     // Load all meshes referenced by the scene
     for mesh_uuid in &scene_asset.mesh_refs {
-        let mesh_handle = loader.load_by_uuid::<MeshAsset>(mesh_uuid)?;
+        let mesh_handle = loader_arc.load_by_uuid::<MeshAsset>(mesh_uuid)?;
         let mesh_asset = mesh_handle.wait_loaded()?;
 
         let mat_uuid = uuid::Uuid::from_bytes(mesh_asset.header.material_id);
@@ -204,12 +218,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load unique materials and their textures
     for mat_uuid in required_materials {
-        if let Ok(mat_handle) = loader.load_by_uuid::<MaterialAsset>(&mat_uuid) {
+        if let Ok(mat_handle) = loader_arc.load_by_uuid::<MaterialAsset>(&mat_uuid) {
             if let Ok(mat_asset) = mat_handle.wait_loaded() {
                 let mut texture_loader = |tex_uuid: &Uuid,
                                           be: &mut VulkanBackend|
                  -> Option<ImageHandle> {
-                    if let Ok(tex_handle) = loader.load_by_uuid::<TextureAsset>(tex_uuid) {
+                    if let Ok(tex_handle) = loader_arc.load_by_uuid::<TextureAsset>(tex_uuid) {
                         if let Ok(tex_asset) = tex_handle.wait_loaded() {
                             let width = tex_asset.header.width;
                             let height = tex_asset.header.height;
@@ -314,7 +328,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend,
         window,
         render_graph,
+        ui,
         scene,
+        loader: loader_arc.clone(),
         time: 0.0,
         dt: 0.016,
         camera,

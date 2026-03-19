@@ -94,6 +94,10 @@ impl AssetLoader {
         Self { vfs }
     }
 
+    pub fn vfs(&self) -> Arc<crate::vfs::Vfs> {
+        self.vfs.clone()
+    }
+
     pub fn load<T: Asset>(&self, path: impl AsRef<std::path::Path>) -> AssetHandle<T> {
         let handle = AssetHandle::new();
         let path = path.as_ref().to_path_buf();
