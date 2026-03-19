@@ -1,39 +1,4 @@
-//! # Vulkan Backend - Main Orchestration
-//!
-//! This module is the main entry point for the Vulkan rendering backend.
-//! It orchestrates all the sub-modules and implements the [`RenderBackend`] trait.
-//!
-//! ## Architecture
-//!
-//! The backend is organized into several focused modules:
-//!
-//! - [`resource_arena`]: Generational index system for safe resource handles
-//! - [`sync`]: Barrier management and synchronization
-//! - [`submission`]: Queue submission and timeline semaphores
-//! - [`commands`]: Pass recording and command buffer management
-//! - [`pipeline_cache`]: Pipeline creation and caching
-//! - [`descriptors`]: Bindless descriptor set management
-//! - [`window_context`]: Window and swapchain management
-//! - [`resources`]: Resource creation and destruction
-//! - [`debug`]: Debug labeling and naming
-//!
-//! ## Frame Lifecycle
-//!
-//! ```text
-//! begin_frame() → acquire_swapchain_image() → prepare_pass() → record_pass() → submit() → end_frame()
-//! ```
-//!
-//! ## Resource Management
-//!
-//! Resources are tracked using generational indices ([`ResourceArena`]).
-//! This provides O(1) access and automatic use-after-free detection.
-//!
-//! ## Synchronization
-//!
-//! The backend uses timeline semaphores for CPU-GPU synchronization and
-//! binary semaphores for GPU-GPU synchronization (acquire → render → present).
-
-use ash::vk;
+﻿use ash::vk;
 use ash::vk::Handle;
 use i3_gfx::graph::backend::RenderBackendInternal;
 use i3_gfx::graph::backend::*;

@@ -895,17 +895,17 @@ Ajout non prévu initialement. L'intégration egui dans le renderer permet le de
 
 ### Phase 13 -- Agent Skills & Rules
 
-#### P13-1: Fix model double-run issue
-- **Files:** `.agent/rules/general.md`
+#### P13-1: Fix model double-run issue ✅
+- **Status:** ✅ Done -- Règle ajoutée dans `general.md` pour éviter les doubles exécutions.
 - **What:** Add rule: "When running a program, always capture output in a single invocation. Do not re-run with grep or shell pipes."
 
-#### P13-2: Fix Linux command usage on Windows
-- **Files:** `.agent/rules/general.md`
-- **What:** Add explicit rule: "This is a Windows environment. Never use `grep`, `sed`, `awk`, `cat`, `rm`. Use `findstr`, `type`, `del`, or PowerShell equivalents."
+#### P13-2: Fix Linux command usage on Windows ✅
+- **Status:** ✅ Done -- PowerShell est désormais obligatoire dans les règles `general.md`.
+- **What:** Add explicit rule: "This is a Windows environment. Never use `grep`, `sed`, `awk`, `cat`, `rm`. Use `Select-String`, `findstr`, `type`, `del`, or PowerShell equivalents."
 
-#### P13-3: Improve Vulkan validation error handling
-- **Files:** `.agent/skills/vulkan_diagnostics/SKILL.md`
-- **What:** Update skill to describe how to parse Vulkan validation layer output, extract error codes, and suggest fixes based on common patterns.
+#### P13-3: Improve diagnostics workflow ✅
+- **Status:** ✅ Done -- "Skill-First Workflow" ajouté aux règles, forçant l'utilisation de `i3-cargo.ps1` et `i3-vrun.ps1`.
+- **What:** Add mandatory check of `.agent/skills` to ensure structured diagnostics.
 
 ### Next Steps - from user's original notes
 
