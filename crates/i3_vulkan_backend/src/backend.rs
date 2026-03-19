@@ -44,63 +44,11 @@ use i3_gfx::graph::types::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
-use vk_mem::Alloc;
 
 use crate::resource_arena::{PhysicalBuffer, PhysicalImage, PhysicalPipeline, ResourceArena};
 use crate::window_context::WindowContext;
 
-/// Per-thread command pool for parallel command recording.
-///
-/// Each thread gets its own command pool to avoid synchronization overhead.
-/// The pool is reset at the beginning of each frame.
-pub(crate) struct ThreadCommandPool {
-    pub(crate) pool: vk::CommandPool,
-    pub(crate) allocated: Vec<vk::CommandBuffer>,
-    pub(crate) cursor: usize,
-}
-
-/// Per-frame context for managing command buffers and descriptor pools.
-///
-/// The backend uses multiple frame contexts (typically 2-3) to allow the CPU
-/// to record commands while the GPU is still processing previous frames.
-pub(crate) struct VulkanFrameContext {
-    pub(crate) command_pool: vk::CommandPool,
-    pub(crate) descriptor_pool: vk::DescriptorPool,
-    pub(crate) allocated_command_buffers: Vec<vk::CommandBuffer>,
-    pub(crate) cursor: usize,
-    pub(crate) submitted_cursor: usize,
-    pub(crate) last_completion_value: u64,
-    pub(crate) per_thread_pools: Vec<std::sync::Mutex<ThreadCommandPool>>,
-}
-
-/// Domain of a prepared pass (graphics, compute, transfer, or CPU).
-pub enum PreparedDomain {
-    Graphics {
-        color_attachments: [vk::RenderingAttachmentInfo<'static>; 8],
-        color_count: usize,
-        depth_attachment: Option<vk::RenderingAttachmentInfo<'static>>,
-    },
-    Compute,
-    Transfer,
-    Cpu,
-}
-
-/// Prepared pass ready for recording.
-///
-/// This struct contains all the information needed to record a render pass,
-/// including barriers, attachments, and descriptor sets.
-pub struct VulkanPreparedPass {
-    pub name: String,
-    pub domain: PreparedDomain,
-    pub pipeline: Option<i3_gfx::graph::types::PipelineHandle>,
-    pub viewport_extent: vk::Extent2D,
-    pub image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
-    pub buffer_barriers: Vec<vk::BufferMemoryBarrier2<'static>>,
-    pub descriptor_sets: Vec<(u32, Vec<i3_gfx::graph::backend::DescriptorWrite>)>,
-}
-
-unsafe impl Send for VulkanPreparedPass {}
-unsafe impl Sync for VulkanPreparedPass {}
+pub(crate) use crate::commands::{ThreadCommandPool, VulkanFrameContext, PreparedDomain, VulkanPreparedPass};
 
 /// Main Vulkan backend struct.
 ///
@@ -290,6 +238,181 @@ impl VulkanBackend {
     pub fn window_size(&self, window: WindowHandle) -> Option<(u32, u32)> {
         crate::window_context::window_size(self, window)
     }
+
+    fn init_frame_contexts(&mut self) -> Result<(), String> {
+        let mut frame_contexts = Vec::new();
+        let device = self.get_device().clone();
+
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 4096,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 4096,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 4096,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 4096,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLER,
+                descriptor_count: 4096,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_count: 4096,
+            },
+        ];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+            .pool_sizes(&pool_sizes)
+            .max_sets(4096);
+
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+
+        for _ in 0..3 {
+            unsafe {
+                let pool = device
+                    .handle
+                    .create_command_pool(
+                        &vk::CommandPoolCreateInfo::default()
+                            .queue_family_index(device.graphics_family)
+                            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                        None,
+                    )
+                    .map_err(|e| e.to_string())?;
+
+                let d_pool = device
+                    .handle
+                    .create_descriptor_pool(&pool_info, None)
+                    .map_err(|e| e.to_string())?;
+
+                let mut per_thread_pools = Vec::with_capacity(num_threads);
+                for _ in 0..num_threads {
+                    let tp = device
+                        .handle
+                        .create_command_pool(
+                            &vk::CommandPoolCreateInfo::default()
+                                .queue_family_index(device.graphics_family)
+                                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                            None,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    per_thread_pools.push(std::sync::Mutex::new(ThreadCommandPool {
+                        pool: tp,
+                        allocated: Vec::new(),
+                        cursor: 0,
+                    }));
+                }
+
+                frame_contexts.push(VulkanFrameContext {
+                    command_pool: pool,
+                    descriptor_pool: d_pool,
+                    allocated_command_buffers: Vec::new(),
+                    cursor: 0,
+                    submitted_cursor: 0,
+                    last_completion_value: 0,
+                    per_thread_pools,
+                });
+            }
+        }
+        self.frame_contexts = frame_contexts;
+        Ok(())
+    }
+
+    fn init_bindless(&mut self) -> Result<(), String> {
+        let device = self.get_device().clone();
+        unsafe {
+            let layout_bindings = [
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(0)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .descriptor_count(4096)
+                    .stage_flags(vk::ShaderStageFlags::ALL),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(1)
+                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::ALL),
+            ];
+
+            let binding_flags = [
+                vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                    | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+                vk::DescriptorBindingFlags::empty(),
+            ];
+
+            let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
+                .binding_flags(&binding_flags);
+
+            let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+                .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+                .bindings(&layout_bindings)
+                .push_next(&mut flags_info);
+
+            let layout = device
+                .handle
+                .create_descriptor_set_layout(&layout_info, None)
+                .map_err(|e| format!("Failed to create bindless layout: {}", e))?;
+
+            info!("Created Global Bindless Set Layout: {:?}", layout);
+            self.bindless_set_layout = layout;
+            
+            let layouts = [layout];
+            let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(self.static_descriptor_pool)
+                .set_layouts(&layouts);
+
+            let sets = device
+                .handle
+                .allocate_descriptor_sets(&alloc_info)
+                .map_err(|e| format!("Failed to allocate bindless set: {}", e))?;
+
+            let set = sets[0];
+
+            // Create a default sampler for the bindless set
+            let sampler_info = vk::SamplerCreateInfo::default()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT);
+
+            let sampler = device
+                .handle
+                .create_sampler(&sampler_info, None)
+                .map_err(|e| e.to_string())?;
+            
+            self.samplers.insert(sampler);
+
+            let sampler_info_vk = [vk::DescriptorImageInfo {
+                sampler,
+                image_view: vk::ImageView::null(),
+                image_layout: vk::ImageLayout::UNDEFINED,
+            }];
+
+            let write = vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .image_info(&sampler_info_vk);
+
+            device.handle.update_descriptor_sets(&[write], &[]);
+
+            let handle_id = self.descriptor_sets.lock().unwrap().insert(set);
+            self.bindless_set_handle = handle_id;
+        }
+        Ok(())
+    }
 }
 
 impl RenderBackend for VulkanBackend {
@@ -399,90 +522,7 @@ impl RenderBackend for VulkanBackend {
         };
 
         // Create Global Frame Contexts
-        let mut frame_contexts = Vec::new();
-        let device = self.get_device().clone();
-
-        let pool_sizes = [
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 4096,
-            },
-        ];
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
-            .pool_sizes(&pool_sizes)
-            .max_sets(4096);
-
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
-        for _ in 0..3 {
-            unsafe {
-                let pool = device
-                    .handle
-                    .create_command_pool(
-                        &vk::CommandPoolCreateInfo::default()
-                            .queue_family_index(device.graphics_family)
-                            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-                        None,
-                    )
-                    .unwrap();
-
-                let d_pool = device
-                    .handle
-                    .create_descriptor_pool(&pool_info, None)
-                    .unwrap();
-
-                let mut per_thread_pools = Vec::with_capacity(num_threads);
-                for _ in 0..num_threads {
-                    let tp = device
-                        .handle
-                        .create_command_pool(
-                            &vk::CommandPoolCreateInfo::default()
-                                .queue_family_index(device.graphics_family)
-                                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-                            None,
-                        )
-                        .unwrap();
-                    per_thread_pools.push(std::sync::Mutex::new(ThreadCommandPool {
-                        pool: tp,
-                        allocated: Vec::new(),
-                        cursor: 0,
-                    }));
-                }
-
-                frame_contexts.push(VulkanFrameContext {
-                    command_pool: pool,
-                    descriptor_pool: d_pool,
-                    allocated_command_buffers: Vec::new(),
-                    cursor: 0,
-                    submitted_cursor: 0,
-                    last_completion_value: 0,
-                    per_thread_pools,
-                });
-            }
-        }
-        self.frame_contexts = frame_contexts;
+        self.init_frame_contexts()?;
 
         // Initialize Loaders
         self.swapchain_loader = Some(ash::khr::swapchain::Device::new(
@@ -491,93 +531,9 @@ impl RenderBackend for VulkanBackend {
         ));
 
         // Initialize Bindless Descriptor Set
-        unsafe {
-            let layout_bindings = [
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(0)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .descriptor_count(4096)
-                    .stage_flags(vk::ShaderStageFlags::ALL),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(1)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::ALL),
-            ];
+        self.init_bindless()?;
 
-            let binding_flags = [
-                vk::DescriptorBindingFlags::PARTIALLY_BOUND
-                    | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-                vk::DescriptorBindingFlags::empty(),
-            ];
-
-            let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
-                .binding_flags(&binding_flags);
-
-            let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-                .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
-                .bindings(&layout_bindings)
-                .push_next(&mut flags_info);
-
-            let layout = self
-                .get_device()
-                .handle
-                .create_descriptor_set_layout(&layout_info, None)
-                .map_err(|e| format!("Failed to create bindless layout: {}", e))?;
-
-            info!("Created Global Bindless Set Layout: {:?}", layout);
-            self.bindless_set_layout = layout;
-            let layouts = [layout];
-            let alloc_info = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(self.static_descriptor_pool)
-                .set_layouts(&layouts);
-
-            let sets = self
-                .get_device()
-                .handle
-                .allocate_descriptor_sets(&alloc_info)
-                .map_err(|e| format!("Failed to allocate bindless set: {}", e))?;
-
-            self.bindless_set_layout = layout;
-            let set = sets[0];
-
-            // Create a default sampler for the bindless set
-            let sampler_info = vk::SamplerCreateInfo::default()
-                .mag_filter(vk::Filter::LINEAR)
-                .min_filter(vk::Filter::LINEAR)
-                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-                .address_mode_u(vk::SamplerAddressMode::REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT);
-
-            let sampler = self
-                .get_device()
-                .handle
-                .create_sampler(&sampler_info, None)
-                .unwrap();
-            self.samplers.insert(sampler);
-
-            let sampler_info_vk = [vk::DescriptorImageInfo {
-                sampler,
-                image_view: vk::ImageView::null(),
-                image_layout: vk::ImageLayout::UNDEFINED,
-            }];
-
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::SAMPLER)
-                .image_info(&sampler_info_vk);
-
-            self.get_device()
-                .handle
-                .update_descriptor_sets(&[write], &[]);
-
-            let handle_id = self.descriptor_sets.lock().unwrap().insert(set);
-            self.bindless_set_handle = handle_id;
-        }
-
-        info!("Vulkan Backend Initialized (Bindless Set Created)");
+        info!("Vulkan Backend Initialized");
         Ok(())
     }
 
@@ -606,81 +562,7 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage {
-        let device = self.get_device().clone();
-        debug!("Creating Image: {:?}", desc);
-
-        let extent = vk::Extent3D {
-            width: desc.width,
-            height: desc.height,
-            depth: desc.depth,
-        };
-
-        // Translate format
-        let format = crate::convert::convert_format(desc.format);
-
-        // Use provided usage flags, but add common bits for flexibility
-        let mut usage = crate::convert::convert_image_usage_flags(desc.usage);
-        usage |= vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
-
-        let create_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
-            .extent(extent)
-            .mip_levels(desc.mip_levels.max(1))
-            .array_layers(desc.array_layers.max(1))
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-
-        let allocation_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::AutoPreferDevice,
-            ..Default::default()
-        };
-
-        let (image, allocation) = unsafe {
-            let allocator = device.allocator.lock().unwrap();
-            allocator
-                .create_image(&create_info, &allocation_info)
-                .expect("Failed to create image")
-        };
-
-        // Create View
-        let aspect_mask = if format == vk::Format::D32_SFLOAT {
-            vk::ImageAspectFlags::DEPTH
-        } else {
-            vk::ImageAspectFlags::COLOR
-        };
-
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(crate::convert::convert_image_view_type(desc.view_type))
-            .format(format)
-            .components(crate::convert::convert_component_mapping(desc.swizzle))
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask,
-                base_mip_level: 0,
-                level_count: desc.mip_levels.max(1),
-                base_array_layer: 0,
-                layer_count: desc.array_layers.max(1),
-            });
-        let view = unsafe { device.handle.create_image_view(&view_info, None) }
-            .expect("Failed to create view");
-
-        let id = self.images.insert(PhysicalImage {
-            image,
-            view,
-            allocation: Some(allocation),
-            desc: *desc,
-            format,
-            last_layout: vk::ImageLayout::UNDEFINED,
-            last_access: vk::AccessFlags2::empty(),
-            last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
-            last_write_frame: 0,
-        });
-
-        BackendImage(id)
+        crate::resources::create_image(self, desc)
     }
 
     fn destroy_image(&mut self, handle: BackendImage) {

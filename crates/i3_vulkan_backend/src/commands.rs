@@ -35,10 +35,55 @@ use i3_gfx::graph::pass::RenderPass;
 use i3_gfx::graph::pipeline::*;
 use i3_gfx::graph::types::*;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::backend::VulkanBackend;
 use crate::convert::*;
 use crate::resource_arena::PhysicalPipeline;
+
+/// Per-thread command pool for parallel command recording.
+pub(crate) struct ThreadCommandPool {
+    pub(crate) pool: vk::CommandPool,
+    pub(crate) allocated: Vec<vk::CommandBuffer>,
+    pub(crate) cursor: usize,
+}
+
+/// Per-frame context for managing command buffers and descriptor pools.
+pub(crate) struct VulkanFrameContext {
+    pub(crate) command_pool: vk::CommandPool,
+    pub(crate) descriptor_pool: vk::DescriptorPool,
+    pub(crate) allocated_command_buffers: Vec<vk::CommandBuffer>,
+    pub(crate) cursor: usize,
+    pub(crate) submitted_cursor: usize,
+    pub(crate) last_completion_value: u64,
+    pub(crate) per_thread_pools: Vec<Mutex<ThreadCommandPool>>,
+}
+
+/// Domain of a prepared pass (graphics, compute, transfer, or CPU).
+pub enum PreparedDomain {
+    Graphics {
+        color_attachments: [vk::RenderingAttachmentInfo<'static>; 8],
+        color_count: usize,
+        depth_attachment: Option<vk::RenderingAttachmentInfo<'static>>,
+    },
+    Compute,
+    Transfer,
+    Cpu,
+}
+
+/// Prepared pass ready for recording.
+pub struct VulkanPreparedPass {
+    pub name: String,
+    pub domain: PreparedDomain,
+    pub pipeline: Option<i3_gfx::graph::types::PipelineHandle>,
+    pub viewport_extent: vk::Extent2D,
+    pub image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
+    pub buffer_barriers: Vec<vk::BufferMemoryBarrier2<'static>>,
+    pub descriptor_sets: Vec<(u32, Vec<i3_gfx::graph::backend::DescriptorWrite>)>,
+}
+
+unsafe impl Send for VulkanPreparedPass {}
+unsafe impl Sync for VulkanPreparedPass {}
 
 /// Vulkan implementation of the PassContext trait.
 ///
@@ -595,8 +640,6 @@ impl PassContext for VulkanPassContext {
 }
 
 use std::collections::HashMap;
-
-use crate::backend::{PreparedDomain, VulkanPreparedPass};
 
 /// Prepare a pass for recording by resolving resources and building barriers.
 ///

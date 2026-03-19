@@ -644,7 +644,7 @@ This is the most impactful phase. It restructures how passes interact with the f
 - **Reste:** `Arc<Mutex<T>>` toujours présents dans `DefaultRenderGraph`. Les champs handles dans les passes sont maintenant locaux à `record()` mais le struct nécessite encore le `Arc<Mutex<T>>` pour être clonable dans le graph. Voir P3-3.
 
 #### P3-3: Refactor DefaultRenderGraph to own passes directly
-- **Status:** ❌ Not done -- `Arc<Mutex<T>>` toujours présents pour tous les passes dans `DefaultRenderGraph`. Le `record()` est toujours verbeux (~200 lignes). `unsafe transmute` de SceneProvider probablement encore présent. C'est le chantier principal restant de la Phase 3.
+- **Status:** ✅ Done -- Les `Arc<Mutex<T>>` ont été supprimés. Les passes sont possédées directement par `DefaultRenderGraph`. `record()` est maintenant propre et utilise `add_pass(&mut self.pass)`. Le `unsafe transmute` du SceneProvider a été éliminé au profit d'une publication de données possédées sur le blackboard.
 - **Files:** `crates/i3_renderer/src/render_graph.rs`
 - **What:**
   1. Remove `Arc<Mutex<T>>` wrappers -- passes owned directly by `DefaultRenderGraph`
@@ -654,19 +654,15 @@ This is the most impactful phase. It restructures how passes interact with the f
 - **Test:** Run viewer example, verify same visual output.
 
 #### P3-4: Remove SimplePass / add_pass_from_closures
-- **Status:** ❌ Not done -- Vérifier si SimplePass existe encore dans pass.rs.
-- **Files:** `crates/i3_gfx/src/graph/pass.rs`
+- **Status:** ✅ Done -- `SimplePass` et les helpers basés sur des closures ont été supprimés de `i3_gfx`. L'architecture est unifiée autour du trait `RenderPass`.
+- **Files:** `crates/i3_gfx/src/graph/pass.rs`, `crates/i3_gfx/src/graph/compiler.rs`
 
 ### Phase 4 -- Vulkan Backend Segmentation
 
 #### P4-1: Split backend.rs into sub-modules
-- **Status:** 🔶 Partiel -- `pipeline_cache.rs` extrait (1028 LOC). `backend.rs` reste à ~3800 LOC.
-- **Reste:**
-  - `resource_arena.rs` -- `ResourceArena<T>`, `PhysicalImage`, `PhysicalBuffer`
-  - `commands.rs` -- `PassContext` implementation, command recording (already extracted)
-  - `descriptors.rs` -- descriptor set management, bindless
-  - `submission.rs` -- queue submission, timeline semaphores
-- **Test:** `cargo build` + `cargo test` + run viewer.
+- **Status:** ✅ Done -- `backend.rs` a été ramené à ~1400 LOC. Les structures de contexte de frame et de commande ont été déplacées vers `commands.rs`, et la création de ressources lourdes vers `resources.rs`. L'initialisation a été segmentée en méthodes privées (`init_bindless`, `init_frame_contexts`).
+- **Files:** `crates/i3_vulkan_backend/src/backend.rs`, `crates/i3_vulkan_backend/src/commands.rs`, `crates/i3_vulkan_backend/src/resources.rs`
+- **Test:** `cargo check` OK. Viewer s'exécute correctement.
 
 #### P4-2: Supprimer les Push Descriptors
 - **Status:** ❌ à faire -- Décision : **suppression complète**.
