@@ -79,8 +79,8 @@ Legacy GL differs in Z-Range [-1, 1]. Modern GL (4.5+) resolves this.
 | **System** | Right-Handed | RH | RH | RH |
 | **Up Axis** | +Y | -Y (Clip) | +Y (Clip) | +Y (Clip) |
 | **Forward** | -Z | +Z (Clip) | +Z (Clip) | -Z (Clip) |
-| **Z Range** | [0, 1] | [0, 1] | [0, 1] | [0, 1] (via ClipControl) |
-| **Winding** | CCW (Fixed) | **CW** (Auto-Compensated) | **CCW** (Native) | **CCW** |
+| **Z Range** | [0, 1] | [0, 1] | [0, 1] | [0, 1] (ClipControl) |
+| **Winding** | CCW (Fixed) | **CW** (Compensated) | **CCW** (Native) | **CCW** |
 | **Viewport** | N/A | `height = -h` | `height = +h` | `height = +h` |
 | **Matrices** | Column-Major | Column-Major | Column-Major | Column-Major |
 

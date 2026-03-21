@@ -154,17 +154,19 @@ The `i3_baker` crate's `build.rs` calls `i3_build_support::setup_native_lib("ass
 A mesh asset contains GPU-ready vertex and index buffers, preceded by a descriptive header.
 
 ```
-┌─────────────────────────────────────────────┐
-│ AssetHeader  (64 bytes, from i3_io)         │  ← Standard i3 header
-├─────────────────────────────────────────────┤
-│ MeshHeader   (64 bytes)                     │  ← Mesh-specific metadata
-├─────────────────────────────────────────────┤
-│ Vertex Data  (vertex_count * vertex_stride) │  ← GPU-ready, tightly packed
-├─────────────────────────────────────────────┤
-│ Index Data   (index_count * index_size)     │  ← u16 or u32
-├─────────────────────────────────────────────┤
-│ AABB         (24 bytes: min[3] + max[3])    │  ← Bounding box for culling
-└─────────────────────────────────────────────┘
+```mermaid
+graph TD
+    H1["AssetHeader (64 bytes)"]
+    H2["MeshHeader (64 bytes)"]
+    V["Vertex Data (variable)"]
+    I["Index Data (variable)"]
+    A["AABB (24 bytes)"]
+
+    H1 --> H2
+    H2 --> V
+    V --> I
+    I --> A
+```
 ```
 
 #### MeshHeader (repr C, 64 bytes)
@@ -213,19 +215,21 @@ Formats are defined incrementally. The stride is derived from the format.
 A skeleton defines the joint (bone) hierarchy and inverse bind matrices required for GPU skinning.
 
 ```
-┌──────────────────────────────────────────────────┐
-│ AssetHeader      (64 bytes)                      │
-├──────────────────────────────────────────────────┤
-│ SkeletonHeader   (32 bytes)                      │
-├──────────────────────────────────────────────────┤
-│ Parent indices   (joint_count * 2 bytes)         │  ← i16, -1 = root
-├──────────────────────────────────────────────────┤
-│ Inverse bind matrices (joint_count * 64 bytes)   │  ← Mat4 column-major
-├──────────────────────────────────────────────────┤
-│ Rest pose local transforms (joint_count * 40 B)  │  ← TRS compact
-├──────────────────────────────────────────────────┤
-│ Joint name hashes (joint_count * 8 bytes)        │  ← FNV-1a u64
-└──────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    H1["AssetHeader (64 bytes)"]
+    H2["SkeletonHeader (32 bytes)"]
+    P["Parent Indices (i16 * joint_count)"]
+    I["Inv Bind Matrices (Mat4 * joint_count)"]
+    R["Rest Pose (TRS * joint_count)"]
+    N["Name Hashes (u64 * joint_count)"]
+
+    H1 --> H2
+    H2 --> P
+    P --> I
+    I --> R
+    R --> N
+```
 ```
 
 #### SkeletonHeader (repr C, 32 bytes)
@@ -254,17 +258,19 @@ This compact TRS representation (40 bytes) is more efficient than Mat4 (64 bytes
 An animation clip contains keyframes for animating a skeleton. Each channel targets a specific joint and property (translation, rotation, scale).
 
 ```
-┌───────────────────────────────────────────────────┐
-│ AssetHeader        (64 bytes)                     │
-├───────────────────────────────────────────────────┤
-│ AnimationHeader    (48 bytes)                     │
-├───────────────────────────────────────────────────┤
-│ Channel descriptors (channel_count * 16 bytes)    │  ← Which joint, which property
-├───────────────────────────────────────────────────┤
-│ Timestamp pool     (total_keyframes * 4 bytes)    │  ← f32 seconds
-├───────────────────────────────────────────────────┤
-│ Value pool         (variable, depends on type)    │  ← Vec3/Quat/Vec3 per keyframe
-└───────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    H1["AssetHeader (64 bytes)"]
+    H2["AnimationHeader (48 bytes)"]
+    C["Channel Descriptors (16B * channel_count)"]
+    T["Timestamp Pool (4B * keyframes)"]
+    V["Value Pool (variable)"]
+
+    H1 --> H2
+    H2 --> C
+    C --> T
+    T --> V
+```
 ```
 
 #### AnimationHeader (repr C, 48 bytes)
@@ -317,21 +323,23 @@ For CubicSpline interpolation, each keyframe stores 3 values (in-tangent, value,
 A scene assembles references to assets (meshes, skeletons, animations) and instances (objects, lights).
 
 ```
-┌─────────────────────────────────────────────┐
-│ AssetHeader   (64 bytes)                    │
-├─────────────────────────────────────────────┤
-│ SceneHeader   (64 bytes)                    │
-├─────────────────────────────────────────────┤
-│ MeshRef table (mesh_count * 32 bytes)       │  ← Refs to baked meshes
-├─────────────────────────────────────────────┤
-│ SkeletonRef table (skel_count * 32 bytes)   │  ← Refs to baked skeletons
-├─────────────────────────────────────────────┤
-│ AnimRef table (anim_count * 32 bytes)       │  ← Refs to baked animations
-├─────────────────────────────────────────────┤
-│ Object table  (object_count * 80 bytes)     │  ← Transform + mesh/skel refs
-├─────────────────────────────────────────────┤
-│ Light table   (light_count * 48 bytes)      │  ← Light parameters
-└─────────────────────────────────────────────┘
+```mermaid
+graph TD
+    H1["AssetHeader (64 bytes)"]
+    H2["SceneHeader (64 bytes)"]
+    M["MeshRef Table (32B * mesh_count)"]
+    S["SkeletonRef Table (32B * skel_count)"]
+    A["AnimRef Table (32B * anim_count)"]
+    O["Object Table (80B * object_count)"]
+    L["Light Table (48B * light_count)"]
+
+    H1 --> H2
+    H2 --> M
+    M --> S
+    S --> A
+    A --> O
+    O --> L
+```
 ```
 
 #### SceneHeader (repr C, 64 bytes)

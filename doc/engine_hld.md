@@ -8,27 +8,25 @@ The engine is structured as a Rust 2024 workspace. This ensures strict isolation
 
 ### Workspace Structure
 
-```text
-i3/
-├── crates/
-│   ├── i3_gfx/             # Core Engine & Frame Graph (Agnostic)
-│   ├── i3_vulkan_backend/   # Vulkan 1.3 Implementation
-│   ├── i3_dx12_backend/     # DX12 Implementation (Future)
-│   ├── i3_null_backend/     # Logging & Validation Oracle
-│   ├── i3_slang/           # Slang compiler wrapper & reflection
-│   ├── i3_renderer/        # Default Render Pipeline (Deferred Clustered)
-│   ├── i3_baker/           # Asset Baking Toolchain
-│   ├── i3_io/              # VFS & Asset Loading Logic
-│   ├── i3_bundle/          # Asset Bundle Format & Packing
-│   └── i3_egui/            # Egui integration
-├── doc/                    # Architecture & Design Docs
-│   ├── engine_hld.md       # This file
-│   └── frame_graph_design.md
-├── examples/               # Usage examples (Viewer, etc.)
-├── third_party/            # Native dependencies & build support
-│   ├── libs/               # Downloaded binaries (gitignored)
-│   └── build-support/      # Shared build scripts
-└── tools/                  # Internal development tools (Diagnostics)
+```mermaid
+graph TD
+    Root["i3/"]
+    Root --> Crates["crates/"]
+    Root --> Doc["doc/ (Architecture & Design Docs)"]
+    Root --> Ex["examples/ (Usage examples, Viewer)"]
+    Root --> TP["third_party/ (Native deps & build support)"]
+    Root --> Tools["tools/ (Internal diagnostics)"]
+
+    Crates --> GF["i3_gfx (Core & Frame Graph)"]
+    Crates --> VB["i3_vulkan_backend (Vulkan 1.3)"]
+    Crates --> DB["i3_dx12_backend (Future)"]
+    Crates --> NB["i3_null_backend (Validation Oracle)"]
+    Crates --> SL["i3_slang (Compiler & Reflection)"]
+    Crates --> RD["i3_renderer (Deferred Clustered)"]
+    Crates --> BK["i3_baker (Asset Toolchain)"]
+    Crates --> IO["i3_io (VFS & Asset Loading)"]
+    Crates --> BN["i3_bundle (Bundle Format)"]
+    Crates --> EG["i3_egui (Egui integration)"]
 ```
 
 ## 2. Core Components

@@ -91,15 +91,26 @@ Explicit GPU APIs (Vulkan, DX12) require manual synchronization barriers between
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            Long-lived FrameGraph                            │
-│                                                                             │
-│  0. SETUP (Global Scope) ──►  1. INIT (One-time) ──►  2. FRAME (Per-frame)   │
-│                                                                             │
-│  Publish Services            Auto-config passes      RECORD ──► EXECUTE     │
-│  (AssetLoader, etc.)         (Shaders, PSOs)         Build List Flatten/Run │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Setup ["0. SETUP (Global Scope)"]
+        direction TB
+        S1["Publish Services (AssetLoader, etc.)"]
+    end
+    
+    subgraph Init ["1. INIT (One-time)"]
+        direction TB
+        I1["Auto-config passes (Shaders, PSOs)"]
+    end
+    
+    subgraph Frame ["2. FRAME (Per-frame)"]
+        direction LR
+        R["RECORD"] --> E["EXECUTE"]
+        E --> F["Flatten & Run"]
+    end
+
+    Setup --> Init
+    Init --> Frame
 ```
 
 ---

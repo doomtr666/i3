@@ -40,15 +40,9 @@ Comprehensive design and architecture documents are available in the [`/doc`](./
 ## Performance & Vision
 
 The i3 engine is designed for efficiency and sets a solid foundation for future development:
-- **Instant Loading**: The `i3_baker` and `i3_io` system can process and load the full **Lumberyard Bistro (Interior)** scene in **under one second** on modern hardware.
+- **Instant Loading**: The `i3_baker` and `i3_io` system can process and load the full **Lumberyard Bistro (Exterior)** scene in **under one second** on modern hardware.
 - **Current State**: Focus is currently on core structure and robust import of complex scenes (Assimp/gltf). 
 - **Minimal Rendering**: Implementation is currently limited to a high-performance **Deferred Clustered** path with basic **Tonemapping**. This is a functional baseline ("work in progress") that will be expanded with advanced features as the architecture matures.
-
-## The Solitary Craftsman
-
-I am building i3 as a solo developer—a "solitary craftsman" tackling an ambitious project. To maintain this pace and complexity, I leverage **Antigravity**, an agentic AI coding assistant. 
-
-The project's health and evolution are supported by specialized tools and custom coding rules found in the [`.agent`](./.agent) directory (`rules/` and `skills/`), which allow Antigravity to operate as a high-tier pair programmer, strictly adhering to the "Craftsman" vision.
 
 ## Getting Started
 
@@ -67,9 +61,11 @@ The project's health and evolution are supported by specialized tools and custom
 cargo run -p viewer
 ```
 
-## Internal Tools
-- `tools/rust_diagnostics`: Unified Rust compilation error reporting.
-- `tools/vulkan_diagnostics`: Runtime Vulkan validation error reporting.
+## The Solitary Craftsman
+
+I am building i3 as a solo developer—a "solitary craftsman" tackling an ambitious project. To maintain this pace and complexity, I leverage **Antigravity**, an agentic AI coding assistant. 
+
+The project's health and evolution are supported by specialized tools and custom coding rules found in the [`.agent`](./.agent) directory (`rules/` and `skills/`), which allow Antigravity to operate as a high-tier pair programmer, strictly adhering to the "Craftsman" vision.
 
 ## License
 Licensed under [GPLv3](./LICENSE.txt).

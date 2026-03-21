@@ -18,23 +18,18 @@ It is a **consumer** of the FrameGraph API — not a modification of it. The ren
 
 ## Layer Architecture
 
-```
-┌─────────────────────────────────────────────┐
-│  Application / Game Logic                   │
-│  (Camera, ECS, Gameplay)                    │
-├─────────────────────────────────────────────┤
-│  i3_renderer                                │  ◄── THIS CRATE
-│  (ECS→GPU Sync, DefaultRenderGraph)         │
-├─────────────────────────────────────────────┤
-│  i3_gfx                                    │
-│  (FrameGraph, PassBuilder, SymbolTable)     │
-├─────────────────────────────────────────────┤
-│  i3_vulkan_backend / i3_dx12_backend        │
-│  (RenderBackend + RenderBackendInternal)    │
-├─────────────────────────────────────────────┤
-│  i3_io / i3_baker                           │
-│  (VFS, AssetHandle<T>, baking pipeline)     │
-└─────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["Application / Game Logic (Camera, ECS, Gameplay)"]
+    B["i3_renderer (ECS→GPU Sync, DefaultRenderGraph)"]
+    C["i3_gfx (FrameGraph, PassBuilder, SymbolTable)"]
+    D["i3_vulkan_backend / i3_dx12_backend (RenderBackend + RenderBackendInternal)"]
+    E["i3_io / i3_baker (VFS, AssetHandle, baking pipeline)"]
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
 ```
 
 `i3_renderer` depends on `i3_gfx` (for FrameGraph API) and `i3_slang` (for shader compilation). It does **not** depend on any specific backend crate.
@@ -47,18 +42,33 @@ It is a **consumer** of the FrameGraph API — not a modification of it. The ren
 
 The scene lives in the ECS (transforms, materials, mesh refs, light components). The renderer does **not** own the scene — it **observes** it through a generic synchronization pass group that runs at the beginning of each frame.
 
-```
-ECS World                 GPU Buffers
-┌──────────┐    sync     ┌──────────────────┐
-│ Transform ├────────────►│ ObjectBuffer     │
-│ Material  ├────────────►│ MaterialBuffer   │
-│ MeshRef   │             │ DrawCommandBuf   │
-│ Light     ├────────────►│ LightBuffer      │
-│ Skinned   ├─────┐       │ SkinningBuffer   │
-└──────────┘      │       └──────────────────┘
-                  │
-                  ▼
-            Skinning Compute ──► BLAS Update ──► TLAS Rebuild
+```mermaid
+graph LR
+    subgraph ECS ["ECS World"]
+        T["Transform"]
+        M["Material"]
+        MR["MeshRef"]
+        L["Light"]
+        S["Skinned"]
+    end
+
+    subgraph GPU ["GPU Buffers"]
+        OB["ObjectBuffer"]
+        MB["MaterialBuffer"]
+        DCB["DrawCommandBuf"]
+        LB["LightBuffer"]
+        SB["SkinningBuffer"]
+    end
+
+    T --> OB
+    M --> MB
+    MR --> DCB
+    L --> LB
+    S --> SB
+    
+    SB --> SC["Skinning Compute"]
+    SC --> BU["BLAS Update"]
+    BU --> TR["TLAS Rebuild"]
 ```
 
 ### The Sync Pass Group
@@ -116,16 +126,19 @@ The sync passes write **shared** data (ObjectBuffer, LightBuffer) that both rast
 
 All textures are referenced by index into a global descriptor array (descriptor indexing, Vulkan 1.2+). Materials store texture **indices**, not handles.
 
-```
-Descriptor Set 0 (Global / Per-frame):
-  binding 0: ObjectBuffer      (SSBO)
-  binding 1: MaterialBuffer    (SSBO)
-  binding 2: LightBuffer       (SSBO)
-  binding 3: sampler2D[]       (Bindless textures)
-  binding 4: CameraUBO         (UBO)
+```mermaid
+graph TD
+    subgraph Set0 ["Descriptor Set 0 (Global / Per-frame)"]
+        B0["Binding 0: ObjectBuffer (SSBO)"]
+        B1["Binding 1: MaterialBuffer (SSBO)"]
+        B2["Binding 2: LightBuffer (SSBO)"]
+        B3["Binding 3: sampler2D[] (Bindless textures)"]
+        B4["Binding 4: CameraUBO (UBO)"]
+    end
 
-Descriptor Set 1 (Per-pass):
-  (pass-specific resources: GBuffer textures, cluster buffer, etc.)
+    subgraph Set1 ["Descriptor Set 1 (Per-pass)"]
+        P["Pass-specific resources (GBuffer, clusters, etc.)"]
+    end
 ```
 
 > [!NOTE]
@@ -137,61 +150,32 @@ Descriptor Set 1 (Per-pass):
 
 Each frame, the renderer records the following pass tree:
 
-```
-DefaultRenderGraph
-│
-├── SyncGroup (CPU→GPU + GPU compute)
-│   ├── ObjectSync           Upload dirty transforms/materials
-│   ├── LightSync            Upload dirty lights
-│   ├── SkinningCompute      GPU skinning (compute)
-│   ├── BLASUpdate           Rebuild changed BLAS [RT-gated]
-│   └── TLASRebuild          Rebuild TLAS [RT-gated]
-│
-├── GPUCull (compute)
-│   Reads: ObjectBuffer, CameraUBO
-│   Writes: DrawCommandBuffer, VisibleCount
-│
-├── GeometryGroup
-│   ├── ZPrePass (graphics)
-│   │   Reads: DrawCommandBuffer, MeshPool
-│   │   Writes: DepthBuffer
-│   │
-│   └── GBufferPass (graphics)
-│       Reads: DrawCommandBuffer, MeshPool, MaterialBuffer, Textures[]
-│       Writes: GBuffer_Albedo, GBuffer_Normal, GBuffer_RoughMetal, GBuffer_Emissive
-│       DepthAttach: DepthBuffer (read-only)
-│
-├── ClusterGroup (compute)
-│   ├── ClusterBuild
-│   │   Reads: DepthBuffer, CameraUBO
-│   │   Writes: ClusterGrid, ClusterAABBs
-│   │
-│   └── LightCull
-│       Reads: ClusterGrid, ClusterAABBs, LightBuffer
-│       Writes: ClusterLightList, ClusterLightIndices
-│
-├── DeferredResolve (compute)
-│   Reads: GBuffer_*, DepthBuffer, ClusterLightList, LightBuffer
-│   Reads: ShadowMask [RT-gated]
-│   Writes: HDRColor
-│
-├── ForwardGroup (transparency)
-│   └── ForwardTransparent (graphics)
-│       Reads: HDRColor, DepthBuffer, ClusterLightList, LightBuffer
-│       Writes: HDRColor (blended)
-│
-├── PostProcessGroup
-│   ├── ToneMap (compute/graphics)
-│   │   Reads: HDRColor
-│   │   Writes: Backbuffer
-│   │
-│   └── (Future: Bloom, TAA, MotionBlur, DOF)
-│
-└── (Future slots)
-    ├── DecalPass (after GBuffer, before DeferredResolve)
-    ├── RTShadows (after GeometryGroup, before DeferredResolve)
-    ├── ParticleSystem (in ForwardGroup or dedicated)
-    └── GIPass (irradiance probes / DDGI)
+```mermaid
+graph TD
+    DRG["DefaultRenderGraph"] --> SG["SyncGroup"]
+    SG --> OS["ObjectSync"]
+    SG --> LS["LightSync"]
+    SG --> SC["SkinningCompute"]
+    SG --> BU["BLASUpdate [RT]"]
+    SG --> TR["TLASRebuild [RT]"]
+
+    DRG --> GC["GPUCull"]
+    
+    DRG --> GG["GeometryGroup"]
+    GG --> ZP["ZPrePass"]
+    GG --> GBP["GBufferPass"]
+
+    DRG --> CG["ClusterGroup"]
+    CG --> CB["ClusterBuild"]
+    CG --> LC["LightCull"]
+
+    DRG --> DR["DeferredResolve"]
+    
+    DRG --> FG["ForwardGroup"]
+    FG --> FT["ForwardTransparent"]
+
+    DRG --> PPG["PostProcessGroup"]
+    PPG --> TM["ToneMap"]
 ```
 
 ---
@@ -251,18 +235,12 @@ for (uint i = 0; i < count; i++) {
 
 Skinned meshes require vertex transformation on the GPU before both rasterization (indirect draw) and ray tracing (BLAS build):
 
-```
-BoneBuffer (CPU upload)              BindPoseBuffer (persistent)
-         │                                    │
-         ▼                                    ▼
-   ┌─────────────────────────────────────────────┐
-   │  SkinningCompute (compute dispatch)         │
-   │  output: SkinnedVertexBuffer                │
-   └─────────────────────────────────────────────┘
-                         │
-              ┌──────────┴──────────┐
-              ▼                     ▼
-     MeshPool (raster)      BLASUpdate (RT)
+```mermaid
+graph TD
+    BB["BoneBuffer (CPU)"] --> SC["SkinningCompute"]
+    BPB["BindPoseBuffer (Persistent)"] --> SC
+    SC -- "SkinnedVertexBuffer" --> MP["MeshPool (Raster)"]
+    SC -- "SkinnedVertexBuffer" --> BU["BLASUpdate (RT)"]
 ```
 
 The `MeshPool` for skinned meshes points to the **skinned output buffer**, not the bind pose. This is a sub-allocation within the same large vertex pool.
