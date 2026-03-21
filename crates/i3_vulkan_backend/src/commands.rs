@@ -162,181 +162,36 @@ impl VulkanPassContext {
         };
 
         let sets = std::mem::take(&mut self.pending_descriptor_sets);
-        let cmd = self.cmd;
 
         for (set_index, writes) in sets {
-            if (pipe.pushable_sets_mask & (1 << set_index)) != 0 {
-                // Push Descriptor Path
-                let mut buffer_infos = Vec::with_capacity(writes.len());
-                let mut image_infos = Vec::with_capacity(writes.len());
+            // Pool Path (now only path)
+            let layout = {
+                let p = self
+                    .backend()
+                    .pipeline_resources
+                    .get(pipe.physical_id)
+                    .unwrap();
+                p.set_layouts[set_index as usize]
+            };
 
-                // Pass 1: Resolve and collect infos
-                for write in writes.iter() {
-                    match write.descriptor_type {
-                        BindingType::UniformBuffer
-                        | BindingType::StorageBuffer
-                        | BindingType::RawBuffer
-                        | BindingType::MutableRawBuffer => {
-                            if let Some(info) = &write.buffer_info {
-                                let pid = self.backend().resolve_buffer(info.buffer).0;
-                                if let Some(buf) = self.backend().buffers.get(pid) {
-                                    buffer_infos.push(vk::DescriptorBufferInfo {
-                                        buffer: buf.buffer,
-                                        offset: info.offset,
-                                        range: if info.range == 0 {
-                                            vk::WHOLE_SIZE
-                                        } else {
-                                            info.range
-                                        },
-                                    });
-                                }
-                            }
-                        }
-                        BindingType::CombinedImageSampler
-                        | BindingType::Texture
-                        | BindingType::StorageTexture
-                        | BindingType::Sampler => {
-                            if let Some(info) = &write.image_info {
-                                let pid = self.backend().resolve_image(info.image).0;
-                                if let Some(img) = self.backend().images.get(pid) {
-                                    let layout = match info.image_layout {
-                                        DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
-                                        DescriptorImageLayout::ShaderReadOnlyOptimal => {
-                                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-                                        }
-                                    };
-                                    let vk_sampler = if let Some(sampler_handle) = info.sampler {
-                                        self.backend()
-                                            .samplers
-                                            .get(sampler_handle.0)
-                                            .cloned()
-                                            .unwrap_or(vk::Sampler::null())
-                                    } else {
-                                        vk::Sampler::null()
-                                    };
-                                    image_infos.push(vk::DescriptorImageInfo {
-                                        sampler: vk_sampler,
-                                        image_view: img.view,
-                                        image_layout: layout,
-                                    });
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+            let layouts_to_alloc = [layout];
+            let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(self.descriptor_pool)
+                .set_layouts(&layouts_to_alloc);
 
-                // Pass 2: Build writes
-                let mut descriptor_writes = Vec::with_capacity(writes.len());
-                let mut buf_ptr = 0;
-                let mut img_ptr = 0;
+            let set = unsafe {
+                self.device
+                    .handle
+                    .allocate_descriptor_sets(&alloc_info)
+                    .expect("Failed to allocate per-frame descriptor set")
+            }[0];
 
-                for write in writes.iter() {
-                    let mut vk_write = vk::WriteDescriptorSet::default()
-                        .dst_binding(write.binding)
-                        .dst_array_element(write.array_element)
-                        .descriptor_count(1);
+            let backend = self.backend_mut();
+            let handle_id = backend.descriptor_sets.lock().unwrap().insert(set);
+            let set_handle = DescriptorSetHandle(handle_id);
 
-                    match write.descriptor_type {
-                        BindingType::UniformBuffer => {
-                            if buf_ptr < buffer_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                                    .buffer_info(std::slice::from_ref(&buffer_infos[buf_ptr]));
-                                buf_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        BindingType::StorageBuffer
-                        | BindingType::RawBuffer
-                        | BindingType::MutableRawBuffer => {
-                            if buf_ptr < buffer_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                                    .buffer_info(std::slice::from_ref(&buffer_infos[buf_ptr]));
-                                buf_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        BindingType::CombinedImageSampler => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        BindingType::Texture => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        BindingType::Sampler => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        BindingType::StorageTexture => {
-                            if img_ptr < image_infos.len() {
-                                vk_write = vk_write
-                                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                    .image_info(std::slice::from_ref(&image_infos[img_ptr]));
-                                img_ptr += 1;
-                                descriptor_writes.push(vk_write);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                unsafe {
-                    self.device.push_descriptor.cmd_push_descriptor_set(
-                        cmd,
-                        pipe.bind_point,
-                        pipe.layout,
-                        set_index,
-                        &descriptor_writes,
-                    );
-                }
-            } else {
-                // Pool Path
-                let layout = {
-                    let p = self
-                        .backend()
-                        .pipeline_resources
-                        .get(pipe.physical_id)
-                        .unwrap();
-                    p.set_layouts[set_index as usize]
-                };
-
-                let layouts_to_alloc = [layout];
-                let alloc_info = vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(self.descriptor_pool)
-                    .set_layouts(&layouts_to_alloc);
-
-                let set = unsafe {
-                    self.device
-                        .handle
-                        .allocate_descriptor_sets(&alloc_info)
-                        .expect("Failed to allocate per-frame descriptor set")
-                }[0];
-
-                let backend = self.backend_mut();
-                let handle_id = backend.descriptor_sets.lock().unwrap().insert(set);
-                let set_handle = DescriptorSetHandle(handle_id);
-
-                backend.update_descriptor_set(set_handle, &writes);
-                self.bind_descriptor_set(set_index, set_handle);
-            }
+            backend.update_descriptor_set(set_handle, &writes);
+            self.bind_descriptor_set(set_index, set_handle);
         }
     }
 }

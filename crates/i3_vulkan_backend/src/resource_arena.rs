@@ -40,15 +40,12 @@ use i3_gfx::graph::types::*;
 /// Physical representation of a Vulkan pipeline.
 ///
 /// Contains the raw Vulkan handle and metadata needed for binding.
-/// The `pushable_sets_mask` indicates which descriptor sets can be updated
-/// via push constants to avoid descriptor set allocations.
 #[derive(Clone)]
 pub struct PhysicalPipeline {
     pub handle: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub bind_point: vk::PipelineBindPoint,
     pub set_layouts: Vec<vk::DescriptorSetLayout>,
-    pub pushable_sets_mask: u32,
     pub physical_id: u64,
 }
 

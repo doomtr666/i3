@@ -41,6 +41,7 @@ uuid = { version = "1.10", features = ["v4"] }
 bytemuck = { version = "1.18", features = ["derive"] }
 pathdiff = "0.2"
 egui = "0.29"
+ddsfile = "0.5"
 
 # Internal
 i3_gfx = { path = "crates/i3_gfx" }

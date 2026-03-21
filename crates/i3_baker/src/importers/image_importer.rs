@@ -1,9 +1,11 @@
 use crate::Result;
 use crate::pipeline::{BakeContext, BakeOutput, ImportedData, Importer};
+use ddsfile::{Dds, DxgiFormat};
 use i3_io::texture::{TEXTURE_ASSET_TYPE, TextureFormat, TextureHeader};
 use image::GenericImageView;
 use intel_tex_2;
 use std::path::{Path, PathBuf};
+use tracing::debug;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
@@ -67,12 +69,150 @@ impl ImageImporter {
         buffer: &[u8],
         source_path: &Path,
     ) -> Result<Box<dyn ImportedData>> {
+        // Try DDS pass-through first
+        if let Some(imported) = self.try_import_dds(buffer, source_path)? {
+            return Ok(imported);
+        }
+
         let img = image::load_from_memory(buffer)
             .map_err(|e| crate::BakerError::Plugin(e.to_string()))?;
         Ok(Box::new(ImageImportedData {
             img,
             source_path: source_path.to_path_buf(),
         }))
+    }
+
+    fn try_import_dds(
+        &self,
+        buffer: &[u8],
+        source_path: &Path,
+    ) -> Result<Option<Box<dyn ImportedData>>> {
+        let mut cursor = std::io::Cursor::new(buffer);
+        let dds = match Dds::read(&mut cursor) {
+            Ok(dds) => dds,
+            Err(_) => return Ok(None),
+        };
+
+        let width = dds.get_width();
+        let height = dds.get_height();
+        let mip_count = dds.get_num_mipmap_levels().max(1);
+
+        let format = if let Some(dxgi) = dds.get_dxgi_format() {
+            match dxgi {
+                DxgiFormat::BC1_UNorm => {
+                    if matches!(
+                        self.options.semantic,
+                        TextureSemantic::Albedo | TextureSemantic::Emissive
+                    ) {
+                        TextureFormat::BC1_RGB_SRGB
+                    } else {
+                        TextureFormat::BC1_RGB_UNORM
+                    }
+                }
+                DxgiFormat::BC1_UNorm_sRGB => TextureFormat::BC1_RGB_SRGB,
+                DxgiFormat::BC3_UNorm => {
+                    if matches!(
+                        self.options.semantic,
+                        TextureSemantic::Albedo | TextureSemantic::Emissive
+                    ) {
+                        TextureFormat::BC3_SRGB
+                    } else {
+                        TextureFormat::BC3_UNORM
+                    }
+                }
+                DxgiFormat::BC3_UNorm_sRGB => TextureFormat::BC3_SRGB,
+                DxgiFormat::BC5_UNorm => TextureFormat::BC5_UNORM,
+                DxgiFormat::BC7_UNorm => {
+                    if matches!(
+                        self.options.semantic,
+                        TextureSemantic::Albedo | TextureSemantic::Emissive
+                    ) {
+                        TextureFormat::BC7_SRGB
+                    } else {
+                        TextureFormat::BC7_UNORM
+                    }
+                }
+                DxgiFormat::BC7_UNorm_sRGB => TextureFormat::BC7_SRGB,
+                _ => {
+                    debug!(
+                        "DDS DXGI: Unsupported format {:?} for {:?}",
+                        dxgi, source_path
+                    );
+                    return Ok(None);
+                }
+            }
+        } else if let Some(fourcc) = dds.header.spf.fourcc.as_ref() {
+            let val = fourcc.0;
+            if val == u32::from_le_bytes(*b"DXT1") {
+                if matches!(
+                    self.options.semantic,
+                    TextureSemantic::Albedo | TextureSemantic::Emissive
+                ) {
+                    TextureFormat::BC1_RGB_SRGB
+                } else {
+                    TextureFormat::BC1_RGB_UNORM
+                }
+            } else if val == u32::from_le_bytes(*b"DXT5") {
+                if matches!(
+                    self.options.semantic,
+                    TextureSemantic::Albedo | TextureSemantic::Emissive
+                ) {
+                    TextureFormat::BC3_SRGB
+                } else {
+                    TextureFormat::BC3_UNORM
+                }
+            } else if val == u32::from_le_bytes(*b"ATI2") || val == u32::from_le_bytes(*b"BC5U") {
+                TextureFormat::BC5_UNORM
+            } else if val == u32::from_le_bytes(*b"BC7\0") || val == u32::from_le_bytes(*b"BC7 ") {
+                if matches!(
+                    self.options.semantic,
+                    TextureSemantic::Albedo | TextureSemantic::Emissive
+                ) {
+                    TextureFormat::BC7_SRGB
+                } else {
+                    TextureFormat::BC7_UNORM
+                }
+            } else {
+                debug!("DDS: Unsupported FourCC for {:?}", source_path);
+                return Ok(None);
+            }
+        } else {
+            debug!("DDS: No DXGI format or FourCC for {:?}", source_path);
+            return Ok(None);
+        };
+
+        let header = TextureHeader {
+            width,
+            height,
+            depth: 1,
+            mip_levels: mip_count,
+            array_layers: 1,
+            format: format as u32,
+            data_size: dds.data.len() as u64,
+        };
+
+        debug!(
+            "DDS (ddsfile) Pass-through success for {:?}: {}x{} format:{:?} mips:{}",
+            source_path, width, height, format, mip_count
+        );
+
+        let mut final_data = bytemuck::bytes_of(&header).to_vec();
+        final_data.extend_from_slice(&dds.data);
+
+        let asset_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            source_path.to_string_lossy().as_bytes(),
+        );
+
+        Ok(Some(Box::new(DdsImportedData {
+            output: BakeOutput {
+                asset_id,
+                asset_type: TEXTURE_ASSET_TYPE,
+                data: final_data,
+                name: source_path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+            },
+            source_path: source_path.to_path_buf(),
+        })))
     }
 }
 
@@ -82,18 +222,22 @@ impl Importer for ImageImporter {
     }
 
     fn source_extensions(&self) -> &[&str] {
-        &["png", "jpg", "jpeg", "tga", "bmp", "exr"]
+        &["png", "jpg", "jpeg", "tga", "bmp", "exr", "dds"]
     }
 
     fn import(&self, source_path: &Path) -> Result<Box<dyn ImportedData>> {
-        let img = image::open(source_path).map_err(|e| crate::BakerError::Plugin(e.to_string()))?;
-        Ok(Box::new(ImageImportedData {
-            img,
-            source_path: source_path.to_path_buf(),
-        }))
+        let buffer = std::fs::read(source_path).map_err(|e| crate::BakerError::Os {
+            path: source_path.to_path_buf(),
+            source: e,
+        })?;
+        self.import_memory(&buffer, source_path)
     }
 
     fn extract(&self, data: &dyn ImportedData, _ctx: &BakeContext) -> Result<Vec<BakeOutput>> {
+        if let Some(dds) = data.as_any().downcast_ref::<DdsImportedData>() {
+            return Ok(vec![dds.output.clone()]);
+        }
+
         let imported = data
             .as_any()
             .downcast_ref::<ImageImportedData>()
@@ -269,7 +413,7 @@ impl Importer for ImageImporter {
             asset_id,
             asset_type: TEXTURE_ASSET_TYPE,
             data: final_data,
-            name: "texture".to_string(),
+            name: imported.source_path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
         }])
     }
 }
@@ -280,6 +424,21 @@ struct ImageImportedData {
 }
 
 impl ImportedData for ImageImportedData {
+    fn source_path(&self) -> &Path {
+        &self.source_path
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+struct DdsImportedData {
+    output: BakeOutput,
+    source_path: PathBuf,
+}
+
+impl ImportedData for DdsImportedData {
     fn source_path(&self) -> &Path {
         &self.source_path
     }

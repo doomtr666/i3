@@ -9,12 +9,14 @@ use i3_egui::UiSystem;
 use std::sync::Arc;
 
 /// Shared data published to the FrameGraph blackboard.
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CommonData {
     pub view: nalgebra_glm::Mat4,
     pub projection: nalgebra_glm::Mat4,
     pub view_projection: nalgebra_glm::Mat4,
     pub inv_projection: nalgebra_glm::Mat4,
+    pub inv_view_projection: nalgebra_glm::Mat4,
     pub near_plane: f32,
     pub far_plane: f32,
     pub screen_width: u32,
@@ -406,6 +408,9 @@ impl DefaultRenderGraph {
         let inv_projection = projection
             .try_inverse()
             .unwrap_or_else(nalgebra_glm::identity);
+        let inv_view_projection = view_projection
+            .try_inverse()
+            .unwrap_or_else(nalgebra_glm::identity);
 
         let light_count = scene.light_count().min(1024) as u32;
         let camera_pos = view
@@ -418,6 +423,7 @@ impl DefaultRenderGraph {
             projection,
             view_projection,
             inv_projection,
+            inv_view_projection,
             near_plane,
             far_plane,
             screen_width,

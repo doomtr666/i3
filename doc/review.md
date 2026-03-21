@@ -1,6 +1,6 @@
-# i3 Engine -- Project Review & Action Plan
+﻿# i3 Engine -- Project Review & Action Plan
 
-> **Date:** 2026-03-12 | **Mise à jour:** 2026-03-17
+> **Date:** 2026-03-12 | **Mise Ã  jour:** 2026-03-17
 > **Scope:** Revue complete du workspace, analyse code vs design, plan d'action segmente.
 > **Rev:** 3 -- Sampler/Mipmapping fix, i3_egui integration, DebugViz depth+channel fix, PresentPass refactor, Push Descriptor removal
 
@@ -176,7 +176,7 @@ graph TD
 
 | ID | File | Line | Severity | Description |
 |---|---|---|---|---|
-| RN-01 | `render_graph.rs` | 67-83 | Medium | `Arc<Mutex<T>>` sur chaque pass encore présent. Per-frame handles toujours stockés comme champs publics de la pass struct. La refactor complète (P3) n'est pas encore faite. |
+| RN-01 | `render_graph.rs` | 67-83 | Medium | `Arc<Mutex<T>>` sur chaque pass encore prÃ©sent. Per-frame handles toujours stockÃ©s comme champs publics de la pass struct. La refactor complÃ¨te (P3) n'est pas encore faite. |
 | RN-02 | `render_graph.rs` | -- | High | Normal mapping not used in deferred resolve. Shader reads GBuffer normal but no tangent-space normal map sampling. |
 | RN-03 | `gpu_buffers.rs` | 33-34 | Medium | Buffer sizes are magic numbers: `1024 * 64`. Should be computed from `MAX_OBJECTS` / `MAX_MATERIALS` constants with proper struct sizes. |
 | RN-04 | Design gap | -- | High | No GPU culling pass. Design doc describes `GPUCull` compute pass writing `DrawCommandBuffer`, but current implementation uses CPU-side draw commands. |
@@ -186,8 +186,8 @@ graph TD
 | RN-08 | `bindless.rs` | 84 | Low | `get_texture_index` uses `image.0.0` which assumes ImageHandle maps directly to physical ID. Fragile. |
 | RN-09 | `scene.rs` | 56-62 | Low | `LightData` uses `nalgebra_glm::Vec3` which is not `repr(C)` compatible for GPU upload without padding. |
 | **RN-10** | `render_graph.rs` | ALL | **Critical** | **Render Graph ergonomics are poor.** See dedicated section 2.5.1 below. |
-| RN-11 | `render_graph.rs` | 82 | Medium | `pub egui: Arc<EguiIntegration>` exposé directement depuis `DefaultRenderGraph`. Couplage fort renderer/UI. Egui devrait être une abstraction optionnelle (trait `DebugUiProvider` ?) ou injectable depuis l'extérieur. |
-| RN-12 | `passes/debug_viz.rs` | 93-103 | Low | Mapping `u32 -> DebugChannel` dans `record()` duplique l'info already in the enum discriminants. Utiliser `transmute` sécurisé ou une table explicite. |
+| RN-11 | `render_graph.rs` | 82 | Medium | `pub egui: Arc<EguiIntegration>` exposÃ© directement depuis `DefaultRenderGraph`. Couplage fort renderer/UI. Egui devrait Ãªtre une abstraction optionnelle (trait `DebugUiProvider` ?) ou injectable depuis l'extÃ©rieur. |
+| RN-12 | `passes/debug_viz.rs` | 93-103 | Low | Mapping `u32 -> DebugChannel` dans `record()` duplique l'info already in the enum discriminants. Utiliser `transmute` sÃ©curisÃ© ou une table explicite. |
 
 #### 2.5.1 Render Graph Ergonomics -- Architectural Issue
 
@@ -500,17 +500,17 @@ This is a significant refactor that touches `i3_gfx` (PassBuilder API) and `i3_r
 
 | Feature | Design Status | Implementation Status | Priority |
 |---|---|---|---|
-| AssimpImporter | Documented | ✅ Implemented | -- |
-| MeshExtractor | Documented | ✅ Implemented | -- |
-| SceneExtractor | Documented | ✅ Implemented | -- |
-| MaterialExtractor | Partially documented | ✅ Implemented | -- |
-| ImageImporter/TextureExtractor | Documented | ✅ BC7/BC5/BC1/BC3, semantic format selection | -- |
-| Semantic texture format selection | Not documented | ✅ Implemented (P1) | Done |
-| PipelineImporter `.i3p` | Not documented | ✅ Implemented (P7) | Done |
-| BundleBaker (build.rs integration) | Not documented | ✅ Implemented (P7) | Done |
-| System bundle `assets/system.i3b` | Not documented | ✅ Generated par `i3_renderer/build.rs` | Done |
-| ~~Incremental Builds via SQLite~~ | ~~Documented~~ | Supprimé -- mtime-based à la place | **Removed** |
-| Build progress reporting | Not documented | ✅ Partiel -- `cargo:warning` par asset | Low |
+| AssimpImporter | Documented | âœ… Implemented | -- |
+| MeshExtractor | Documented | âœ… Implemented | -- |
+| SceneExtractor | Documented | âœ… Implemented | -- |
+| MaterialExtractor | Partially documented | âœ… Implemented | -- |
+| ImageImporter/TextureExtractor | Documented | âœ… BC7/BC5/BC1/BC3, semantic format selection | -- |
+| Semantic texture format selection | Not documented | âœ… Implemented (P1) | Done |
+| PipelineImporter `.i3p` | Not documented | âœ… Implemented (P7) | Done |
+| BundleBaker (build.rs integration) | Not documented | âœ… Implemented (P7) | Done |
+| System bundle `assets/system.i3b` | Not documented | âœ… Generated par `i3_renderer/build.rs` | Done |
+| ~~Incremental Builds via SQLite~~ | ~~Documented~~ | SupprimÃ© -- mtime-based Ã  la place | **Removed** |
+| Build progress reporting | Not documented | âœ… Partiel -- `cargo:warning` par asset | Low |
 | SkeletonExtractor | Documented | Not implemented | Future |
 | AnimationExtractor | Documented | Not implemented | Future |
 
@@ -572,19 +572,19 @@ Each section below is an independently executable work package. They are ordered
 ### Phase 0 -- Housekeeping & Safety Fixes
 
 #### P0-1: Fix AssetHandle unsoundness
-- **Status:** ❌ Not done
+- **Status:** âŒ Not done
 - **Files:** `crates/i3_io/src/asset.rs`
 - **What:** Replace unsafe pointer casting in `AssetHandle::get()` and `wait_loaded()` with `Arc<T>` storage. Once loaded, store `Arc<T>` and return `Arc<T>` clones. This eliminates the lifetime-vs-MutexGuard UB.
 - **Test:** Existing `test_full_baking_pipeline` + new unit test for concurrent `wait_loaded()` calls.
 
 #### P0-2: Fix TextureAsset::load unsafe
-- **Status:** ❌ Not done
+- **Status:** âŒ Not done
 - **Files:** `crates/i3_io/src/texture.rs`
 - **What:** Replace manual unsafe pointer cast (lines 55-63) with `bytemuck::pod_read_unaligned` to match `MeshAsset` and `SceneAsset` loading patterns.
 - **Test:** Load a baked texture in integration test.
 
 #### P0-3: Remove dead code in i3_gfx
-- **Status:** ❌ Not done
+- **Status:** âŒ Not done
 - **Files:** `crates/i3_gfx/src/graph/backend.rs`, `crates/i3_gfx/src/graph/compiler.rs`
 - **What:**
   - Remove `GraphicsPipelineDescDummy` struct (backend.rs:27-34).
@@ -592,28 +592,28 @@ Each section below is an independently executable work package. They are ordered
 - **Test:** `cargo build` + `cargo test`.
 
 #### P0-4: Fix duplicate comment in i3_slang
-- **Status:** ❌ Not done
+- **Status:** âŒ Not done
 - **Files:** `crates/i3_slang/src/lib.rs`
 - **What:** Remove duplicate `// Re-export types from i3_gfx for convenience` at line 10.
 
-#### P0-5: Clean up magic numbers in viewer ✅
-- **Status:** ✅ Done -- `TextureFormat` enum utilisé partout dans viewer. Formats BC1/BC3 ajoutés. Calcul de mip_size corrigé par format.
+#### P0-5: Clean up magic numbers in viewer âœ…
+- **Status:** âœ… Done -- `TextureFormat` enum utilisÃ© partout dans viewer. Formats BC1/BC3 ajoutÃ©s. Calcul de mip_size corrigÃ© par format.
 
 #### P0-6: Remove dead PipelineNode abstraction
-- **Status:** ❌ Not done
+- **Status:** âŒ Not done
 - **Files:** `crates/i3_baker/src/pipeline.rs`, `crates/i3_baker/src/lib.rs`
 - **What:** Remove `PipelineNode` trait if confirmed unused. Clean up prelude exports.
 
-### Phase 1 -- Baker: Semantic Texture Format Selection ✅
+### Phase 1 -- Baker: Semantic Texture Format Selection âœ…
 
-#### P1-1: Add texture semantic enum to ImageImporter ✅
-- **Status:** ✅ Done -- `TextureSemantic` enum (Albedo, Normal, MetallicRoughness, Emissive, Occlusion, Generic) et `TextureImportOptions` implémentés. Format par défaut selon le semantic.
+#### P1-1: Add texture semantic enum to ImageImporter âœ…
+- **Status:** âœ… Done -- `TextureSemantic` enum (Albedo, Normal, MetallicRoughness, Emissive, Occlusion, Generic) et `TextureImportOptions` implÃ©mentÃ©s. Format par dÃ©faut selon le semantic.
 
-#### P1-2: Update AssimpImporter to use semantic format selection ✅
-- **Status:** ✅ Done -- `MaterialExtractor` passe le bon `TextureSemantic` pour chaque slot texture. Normal → BC5_UNORM, Albedo/Emissive → BC7_SRGB, MetallicRoughness → BC7_UNORM.
+#### P1-2: Update AssimpImporter to use semantic format selection âœ…
+- **Status:** âœ… Done -- `MaterialExtractor` passe le bon `TextureSemantic` pour chaque slot texture. Normal â†’ BC5_UNORM, Albedo/Emissive â†’ BC7_SRGB, MetallicRoughness â†’ BC7_UNORM.
 
-#### P1-3: Update viewer texture loading for format diversity ✅
-- **Status:** ✅ Done -- Formats BC1, BC3, BC5, BC7 tous gérés. Calcul de mip_size correct par format (8 bytes/block pour BC1, 16 pour le reste).
+#### P1-3: Update viewer texture loading for format diversity âœ…
+- **Status:** âœ… Done -- Formats BC1, BC3, BC5, BC7 tous gÃ©rÃ©s. Calcul de mip_size correct par format (8 bytes/block pour BC1, 16 pour le reste).
 
 ### Phase 2 -- Baker: Build Ergonomics
 
@@ -635,16 +635,16 @@ Each section below is an independently executable work package. They are ordered
 
 This is the most impactful phase. It restructures how passes interact with the frame graph.
 
-#### P3-1: Add `resolve_image` / `resolve_buffer` to PassBuilder ✅ (Partiel)
-- **Status:** ✅ `resolve_image` et `resolve_buffer` existent déjà dans `PassBuilder`. Les passes les utilisent en `record()`. Les handles ne sont plus pré-settés depuis l'extérieur sur les passes standard.
+#### P3-1: Add `resolve_image` / `resolve_buffer` to PassBuilder âœ… (Partiel)
+- **Status:** âœ… `resolve_image` et `resolve_buffer` existent dÃ©jÃ  dans `PassBuilder`. Les passes les utilisent en `record()`. Les handles ne sont plus prÃ©-settÃ©s depuis l'extÃ©rieur sur les passes standard.
 - **Reste:** Formaliser les noms de ressources comme constantes publiques dans `i3_renderer`.
 
-#### P3-2: Refactor renderer passes to use name-based resolution ✅ (Partiel)
-- **Status:** ✅ Les passes utilisent `builder.resolve_image("GBuffer_Albedo")` etc. en `record()`. La résolution par nom est le pattern dominant.
-- **Reste:** `Arc<Mutex<T>>` toujours présents dans `DefaultRenderGraph`. Les champs handles dans les passes sont maintenant locaux à `record()` mais le struct nécessite encore le `Arc<Mutex<T>>` pour être clonable dans le graph. Voir P3-3.
+#### P3-2: Refactor renderer passes to use name-based resolution âœ… (Partiel)
+- **Status:** âœ… Les passes utilisent `builder.resolve_image("GBuffer_Albedo")` etc. en `record()`. La rÃ©solution par nom est le pattern dominant.
+- **Reste:** `Arc<Mutex<T>>` toujours prÃ©sents dans `DefaultRenderGraph`. Les champs handles dans les passes sont maintenant locaux Ã  `record()` mais le struct nÃ©cessite encore le `Arc<Mutex<T>>` pour Ãªtre clonable dans le graph. Voir P3-3.
 
 #### P3-3: Refactor DefaultRenderGraph to own passes directly
-- **Status:** ✅ Done -- Les `Arc<Mutex<T>>` ont été supprimés. Les passes sont possédées directement par `DefaultRenderGraph`. `record()` est maintenant propre et utilise `add_pass(&mut self.pass)`. Le `unsafe transmute` du SceneProvider a été éliminé au profit d'une publication de données possédées sur le blackboard.
+- **Status:** âœ… Done -- Les `Arc<Mutex<T>>` ont Ã©tÃ© supprimÃ©s. Les passes sont possÃ©dÃ©es directement par `DefaultRenderGraph`. `record()` est maintenant propre et utilise `add_pass(&mut self.pass)`. Le `unsafe transmute` du SceneProvider a Ã©tÃ© Ã©liminÃ© au profit d'une publication de donnÃ©es possÃ©dÃ©es sur le blackboard.
 - **Files:** `crates/i3_renderer/src/render_graph.rs`
 - **What:**
   1. Remove `Arc<Mutex<T>>` wrappers -- passes owned directly by `DefaultRenderGraph`
@@ -654,52 +654,50 @@ This is the most impactful phase. It restructures how passes interact with the f
 - **Test:** Run viewer example, verify same visual output.
 
 #### P3-4: Remove SimplePass / add_pass_from_closures
-- **Status:** ✅ Done -- `SimplePass` et les helpers basés sur des closures ont été supprimés de `i3_gfx`. L'architecture est unifiée autour du trait `RenderPass`.
+- **Status:** âœ… Done -- `SimplePass` et les helpers basÃ©s sur des closures ont Ã©tÃ© supprimÃ©s de `i3_gfx`. L'architecture est unifiÃ©e autour du trait `RenderPass`.
 - **Files:** `crates/i3_gfx/src/graph/pass.rs`, `crates/i3_gfx/src/graph/compiler.rs`
 
 ### Phase 4 -- Vulkan Backend Segmentation
 
 #### P4-1: Split backend.rs into sub-modules
-- **Status:** ✅ Done -- `backend.rs` a été ramené à ~1400 LOC. Les structures de contexte de frame et de commande ont été déplacées vers `commands.rs`, et la création de ressources lourdes vers `resources.rs`. L'initialisation a été segmentée en méthodes privées (`init_bindless`, `init_frame_contexts`).
+- **Status:** âœ… Done -- `backend.rs` a Ã©tÃ© ramenÃ© Ã  ~1400 LOC. Les structures de contexte de frame et de commande ont Ã©tÃ© dÃ©placÃ©es vers `commands.rs`, et la crÃ©ation de ressources lourdes vers `resources.rs`. L'initialisation a Ã©tÃ© segmentÃ©e en mÃ©thodes privÃ©es (`init_bindless`, `init_frame_contexts`).
 - **Files:** `crates/i3_vulkan_backend/src/backend.rs`, `crates/i3_vulkan_backend/src/commands.rs`, `crates/i3_vulkan_backend/src/resources.rs`
-- **Test:** `cargo check` OK. Viewer s'exécute correctement.
+- **Test:** `cargo check` OK. Viewer s'exÃ©cute correctement.
 
-#### P4-2: Supprimer les Push Descriptors
-- **Status:** ❌ à faire -- Décision : **suppression complète**.
 - **Contexte et rationale :**
-  - Les Push Descriptors étaient censés éviter l'allocation de descriptor sets. Dans ce codebase, le pool est **reset à chaque frame** : l'allocation est O(1), pas de fragmentation, pas de free individuel. L'avantage des PD est nul.
-  - Le code est **incohérent** : 3 fonctions sur 4 ont le bloc `/* ... */` commenté (PD désactivés), seule `create_compute_pipeline_from_baked` l'a actif. Comportement divergent non intentionnel.
-  - La complexité se traduit par **deux paths dans `flush_descriptors`** (~130 lignes push vs ~35 lignes pool) maintenus en parallèle.
-  - Le vrai levier perf pour le binding est de **ne binder que les sets qui changent** (rebind set 0 par frame, laisser set 1 statique) — indépendant du mécanisme.
+  - Les Push Descriptors Ã©taient censÃ©s Ã©viter l'allocation de descriptor sets. Dans ce codebase, le pool est **reset Ã  chaque frame** : l'allocation est O(1), pas de fragmentation, pas de free individuel. L'avantage des PD est nul.
+  - Le code est **incohÃ©rent** : 3 fonctions sur 4 ont le bloc `/* ... */` commentÃ© (PD dÃ©sactivÃ©s), seule `create_compute_pipeline_from_baked` l'a actif. Comportement divergent non intentionnel.
+  - La complexitÃ© se traduit par **deux paths dans `flush_descriptors`** (~130 lignes push vs ~35 lignes pool) maintenus en parallÃ¨le.
+  - Le vrai levier perf pour le binding est de **ne binder que les sets qui changent** (rebind set 0 par frame, laisser set 1 statique) â€” indÃ©pendant du mÃ©canisme.
 - **Diff attendu :**
-  - `pipeline_cache.rs` : supprimer `pushable_sets_mask` calcul + flag `PUSH_DESCRIPTOR_KHR` + blocs commentés (nettoyage des 4 fonctions)
+  - `pipeline_cache.rs` : supprimer `pushable_sets_mask` calcul + flag `PUSH_DESCRIPTOR_KHR` + blocs commentÃ©s (nettoyage des 4 fonctions)
   - `commands.rs` : supprimer la branche push dans `flush_descriptors()` (~130 lignes)
   - `resource_arena.rs` : supprimer le champ `pushable_sets_mask` de `PhysicalPipeline`
   - `device.rs` : supprimer `ash::khr::push_descriptor::Device` du struct + extension de la liste + `push_descriptor` loader
 - **Test:** `cargo build` (pas de warnings) + run viewer, validation layer propre.
 
 #### P4-3: Multi-GPU selection
-- **Status:** ❌ Not done
-- **Contexte :** `VulkanDevice::new()` sélectionne automatiquement le discrete GPU si présent, sinon premier GPU. `VulkanDevice::new_with_physical()` existe mais n'est jamais exposé en dehors du backend. Aucune option de sélection utilisateur, aucun listing des GPUs disponibles.
-- **Use case immédiat :** machine avec iGPU AMD (APU) + GPU discrète NVIDIA/AMD. Permet de tester la compat engine sur deux drivers différents sans modifier le code.
+- **Status:** âŒ Not done
+- **Contexte :** `VulkanDevice::new()` sÃ©lectionne automatiquement le discrete GPU si prÃ©sent, sinon premier GPU. `VulkanDevice::new_with_physical()` existe mais n'est jamais exposÃ© en dehors du backend. Aucune option de sÃ©lection utilisateur, aucun listing des GPUs disponibles.
+- **Use case immÃ©diat :** machine avec iGPU AMD (APU) + GPU discrÃ¨te NVIDIA/AMD. Permet de tester la compat engine sur deux drivers diffÃ©rents sans modifier le code.
 - **Ce qu'il faut faire :**
   1. Ajouter `BackendConfig { gpu_index: Option<usize>, prefer_discrete: bool }` (ou `gpu_name_filter: Option<String>`)
-  2. Exposer `VulkanBackend::enumerate_gpus() -> Vec<GpuInfo>` où `GpuInfo { index, name, device_type }`
+  2. Exposer `VulkanBackend::enumerate_gpus() -> Vec<GpuInfo>` oÃ¹ `GpuInfo { index, name, device_type }`
   3. `VulkanBackend::new_with_config(config)` utilise `new_with_physical` avec le bon device
   4. Exposer via CLI flag `--gpu <index>` dans les examples (viewer, stress)
-- **Non-objectifs :** multi-GPU simultané (mGPU), SLI/NVLink -- hors scope
-- **Test:** Lancer viewer avec `--gpu 0` et `--gpu 1`, vérifier que le bon GPU est logé, valider qu'il n'y a pas de crash sur l'iGPU.
+- **Non-objectifs :** multi-GPU simultanÃ© (mGPU), SLI/NVLink -- hors scope
+- **Test:** Lancer viewer avec `--gpu 0` et `--gpu 1`, vÃ©rifier que le bon GPU est logÃ©, valider qu'il n'y a pas de crash sur l'iGPU.
 
 ### Phase 5 -- Renderer: Normal Mapping
 
 #### P5-1: Add tangent data to GBuffer
-- **Status:** ❌ Not done
+- **Status:** âŒ Not done
 - **Files:** `crates/i3_renderer/assets/shaders/gbuffer.slang`, `crates/i3_renderer/src/passes/gbuffer.rs`
 - **What:** Ensure vertex input includes tangent attribute (vec4). Update GBuffer vertex shader to pass tangent + bitangent to fragment shader. Store world-space normal from tangent-space normal map in GBuffer_Normal target.
 - **Requires:** Baker already produces `POSITION_NORMAL_UV_TANGENT` format meshes. Phase 1 ensures normal maps use BC5.
 
 #### P5-2: Sample normal map in deferred resolve
-- **Status:** ❌ Not done
+- **Status:** âŒ Not done
 - **Files:** `crates/i3_renderer/assets/shaders/deferred_resolve.slang`, `crates/i3_renderer/src/passes/deferred_resolve.rs`
 - **What:** Modify deferred resolve shader to use the reconstructed normal from GBuffer (which now includes tangent-space normal mapping from P5-1).
 - **Test:** Visual verification with DamagedHelmet (has normal maps).
@@ -720,52 +718,52 @@ This is the most impactful phase. It restructures how passes interact with the f
 - **Files:** `crates/i3_gfx/src/graph/backend.rs` (add `draw_indexed_indirect` to `PassContext`), `crates/i3_vulkan_backend/src/backend.rs`
 - **What:** Add `draw_indexed_indirect(buffer, offset, draw_count, stride)` to `PassContext` trait. Implement in Vulkan backend via `vkCmdDrawIndexedIndirect`.
 
-### Phase 7 -- Baker: Pipeline Baking ✅
+### Phase 7 -- Baker: Pipeline Baking âœ…
 
 #### Flux end-to-end du baking
 
 ```
 Source (.i3p RON + .slang)
-    ↓  PipelineImporter::import()
-        └─ lit PipelineConfig (RON)
-        └─ SlangCompiler::compile_file() → ShaderModule { bytecode: Vec<u8>, reflection }
-    ↓  PipelineImporter::extract()
-        └─ GraphicsConfig::to_bakeable() → BakeableGraphicsPipeline (repr(C), Pod)
-        └─ postcard::to_allocvec(reflection) → Vec<u8>
-        └─ [PipelineHeader | BakeableGraphicsPipeline | reflection | SPIR-V]
-    ↓  BundleWriter::add_bake_output()
-        └─ écrit dans assets/system.i3b (blob)
-        └─ écrit dans assets/system.i3c (catalog UUID → offset)
+    â†“  PipelineImporter::import()
+        â””â”€ lit PipelineConfig (RON)
+        â””â”€ SlangCompiler::compile_file() â†’ ShaderModule { bytecode: Vec<u8>, reflection }
+    â†“  PipelineImporter::extract()
+        â””â”€ GraphicsConfig::to_bakeable() â†’ BakeableGraphicsPipeline (repr(C), Pod)
+        â””â”€ postcard::to_allocvec(reflection) â†’ Vec<u8>
+        â””â”€ [PipelineHeader | BakeableGraphicsPipeline | reflection | SPIR-V]
+    â†“  BundleWriter::add_bake_output()
+        â””â”€ Ã©crit dans assets/system.i3b (blob)
+        â””â”€ Ã©crit dans assets/system.i3c (catalog UUID â†’ offset)
 
 Runtime:
     VFS::open("system.i3b") + Catalog
-    → vfs.load::<PipelineAsset>(uuid)
-    → PipelineAsset::load() -- bytemuck::pod_read_unaligned, zero-copy header
-    → backend.create_graphics_pipeline_from_baked(state, reflection, bytecode)
+    â†’ vfs.load::<PipelineAsset>(uuid)
+    â†’ PipelineAsset::load() -- bytemuck::pod_read_unaligned, zero-copy header
+    â†’ backend.create_graphics_pipeline_from_baked(state, reflection, bytecode)
 ```
 
-**Trigger :** `i3_renderer/build.rs` via `BundleBaker` (cargo build step). S'exécute si `.i3p` ou `.slang` plus récent que `system.i3c` (mtime check). Force rebuild : `FORCE_BAKE=1 cargo build`.
+**Trigger :** `i3_renderer/build.rs` via `BundleBaker` (cargo build step). S'exÃ©cute si `.i3p` ou `.slang` plus rÃ©cent que `system.i3c` (mtime check). Force rebuild : `FORCE_BAKE=1 cargo build`.
 
-#### P7-1: Define i3pipeline binary format ✅
-- **Status:** ✅ Done -- `crates/i3_io/src/pipeline_asset.rs` implémenté. `PipelineHeader` (64 bytes, Pod/Zeroable), `BakeableGraphicsPipeline` (état rasterization, depth/stencil, vertex layout, color targets), `PipelineType` (Graphics/Compute). `PipelineAsset::load()` par `bytemuck::pod_read_unaligned`. UUID enregistré.
+#### P7-1: Define i3pipeline binary format âœ…
+- **Status:** âœ… Done -- `crates/i3_io/src/pipeline_asset.rs` implÃ©mentÃ©. `PipelineHeader` (64 bytes, Pod/Zeroable), `BakeableGraphicsPipeline` (Ã©tat rasterization, depth/stencil, vertex layout, color targets), `PipelineType` (Graphics/Compute). `PipelineAsset::load()` par `bytemuck::pod_read_unaligned`. UUID enregistrÃ©.
 
-#### P7-2: Implement PipelineImporter ✅
-- **Status:** ✅ Done -- `crates/i3_baker/src/importers/pipeline_importer.rs` implémenté. Format source : `.i3p` (RON). Le `PipelineImporter` lit la config RON (`PipelineConfig`), compile le shader via `SlangCompiler`, sérialise la reflection via `postcard`, écrit le bundle binaire. Supporte `ShaderSource::Path` et `ShaderSource::Inline`. Gestion des dépendances (`get_dependencies`) avec scan des `#include` par regex pour le rerun-if-changed.
+#### P7-2: Implement PipelineImporter âœ…
+- **Status:** âœ… Done -- `crates/i3_baker/src/importers/pipeline_importer.rs` implÃ©mentÃ©. Format source : `.i3p` (RON). Le `PipelineImporter` lit la config RON (`PipelineConfig`), compile le shader via `SlangCompiler`, sÃ©rialise la reflection via `postcard`, Ã©crit le bundle binaire. Supporte `ShaderSource::Path` et `ShaderSource::Inline`. Gestion des dÃ©pendances (`get_dependencies`) avec scan des `#include` par regex pour le rerun-if-changed.
 
-#### P7-3: Create system bundle for renderer pipelines ✅
-- **Status:** ✅ Done -- `crates/i3_renderer/build.rs` utilise `BundleBaker` pour bake tous les `.i3p` de `assets/pipelines/` + les assets `i3_egui/assets/pipelines/` en un bundle unique `assets/system.i3b`/`.i3c`. 9 pipelines renderer + egui pipeline inclus. Le renderer charge les pipelines depuis ce bundle au démarrage via `i3_io::vfs::BundleBackend`.
+#### P7-3: Create system bundle for renderer pipelines âœ…
+- **Status:** âœ… Done -- `crates/i3_renderer/build.rs` utilise `BundleBaker` pour bake tous les `.i3p` de `assets/pipelines/` + les assets `i3_egui/assets/pipelines/` en un bundle unique `assets/system.i3b`/`.i3c`. 9 pipelines renderer + egui pipeline inclus. Le renderer charge les pipelines depuis ce bundle au dÃ©marrage via `i3_io::vfs::BundleBackend`.
 
-#### P7-4: .i3p pipeline descriptors ✅
-- **Status:** ✅ Done -- 9 fichiers `.i3p` créés pour tous les passes renderer :
-  `average_luminance`, `cluster_build`, `debug_viz`, `deferred_resolve`, `gbuffer`, `histogram_build`, `light_cull`, `sky`, `tonemap`. Format RON lisible avec rasterization, depth/stencil, vertex layout, targets explicitement déclarés.
+#### P7-4: .i3p pipeline descriptors âœ…
+- **Status:** âœ… Done -- 9 fichiers `.i3p` crÃ©Ã©s pour tous les passes renderer :
+  `average_luminance`, `cluster_build`, `debug_viz`, `deferred_resolve`, `gbuffer`, `histogram_build`, `light_cull`, `sky`, `tonemap`. Format RON lisible avec rasterization, depth/stencil, vertex layout, targets explicitement dÃ©clarÃ©s.
 
 #### Issues ouvertes P7
 
 | ID | Severity | Description |
 |---|---|---|
-| P7-I01 | Low | `BK-03` supprimé du backlog -- `PipelineNode` trait dans `pipeline.rs` reste mort (BK-01 toujours ouvert). |
-| P7-I02 | Low | Pas de `VkPipelineCache` disque. Le backend recompile les PSO depuis le SPIR-V à chaque lancement. Acceptable pour l'instant, mais un cache disque accélérerait le cold start. |
-| P7-I03 | Medium | `get_dependencies` utilise une regex naïve pour scanner les `#include`. Ne suit pas les includes Slang transitifs ni les imports de module. Peut causer des oublis de recompilation. |
+| P7-I01 | Low | `BK-03` supprimÃ© du backlog -- `PipelineNode` trait dans `pipeline.rs` reste mort (BK-01 toujours ouvert). |
+| P7-I02 | Low | Pas de `VkPipelineCache` disque. Le backend recompile les PSO depuis le SPIR-V Ã  chaque lancement. Acceptable pour l'instant, mais un cache disque accÃ©lÃ©rerait le cold start. |
+| P7-I03 | Medium | `get_dependencies` utilise une regex naÃ¯ve pour scanner les `#include`. Ne suit pas les includes Slang transitifs ni les imports de module. Peut causer des oublis de recompilation. |
 
 ### Phase 8 -- RT Support
 
@@ -795,7 +793,7 @@ Runtime:
 #### P9-2: Replace consume_erased panic with Result
 - **Files:** `crates/i3_gfx/src/graph/compiler.rs`, `crates/i3_gfx/src/graph/pass.rs`
 
-### Phase 10 -- Global Scope & Long-lived Graph (P3-5) 🦦🏗️
+### Phase 10 -- Global Scope & Long-lived Graph (P3-5) ðŸ¦¦ðŸ—ï¸
 
 This phase finalizes the ergonomics by making the FrameGraph persistent and introducing a Global Scope for long-lived services (AssetLoader, Physics, etc.).
 
@@ -825,35 +823,35 @@ This phase finalizes the ergonomics by making the FrameGraph persistent and intr
   - Reduce `record()` to just the per-frame plumbing.
 - **Test:** Run `viewer` example, verify shader loading log moves to passes.
 
-🦦 **This will eliminate the last "verbiage" from the renderer and make it extremely scalable.** 🦦
+ðŸ¦¦ **This will eliminate the last "verbiage" from the renderer and make it extremely scalable.** ðŸ¦¦
 - **What:** Change `consume_erased` to return `Result<&dyn Any, GraphError>`. Propagate through `PassBuilder::consume<T>`. This makes symbol resolution errors recoverable.
 
 #### P9-3: Validate MaterialHeader size
 - **Files:** `crates/i3_io/src/material.rs`
 - **What:** Add `const _: () = assert!(std::mem::size_of::<MaterialHeader>() == 128);` to validate padding. Same for other `repr(C)` headers.
 
-### Phase X -- i3_egui: Intégration UI Debug (Nouveau)
+### Phase X -- i3_egui: IntÃ©gration UI Debug (Nouveau)
 
-Ajout non prévu initialement. L'intégration egui dans le renderer permet le debug en temps réel dans le viewer.
+Ajout non prÃ©vu initialement. L'intÃ©gration egui dans le renderer permet le debug en temps rÃ©el dans le viewer.
 
-#### EG-01: UiSystem fondation ✅
-- **Status:** ✅ Done -- `i3_egui` crate créée avec `UiSystem`, `EguiRenderer`, `EguiPass`. Découplé du renderer via Blackboard.
+#### EG-01: UiSystem fondation âœ…
+- **Status:** âœ… Done -- `i3_egui` crate crÃ©Ã©e avec `UiSystem`, `EguiRenderer`, `EguiPass`. DÃ©couplÃ© du renderer via Blackboard.
 
-#### EG-02: Viewer - Debug Channel UI ✅
-- **Status:** ✅ Done -- `DebugChannel` selectionable en runtime via egui. `DebugChannel` a maintenant des discriminants explicites alignés avec les valeurs shader. Depth channel ajouté au `DebugVizPass`.
+#### EG-02: Viewer - Debug Channel UI âœ…
+- **Status:** âœ… Done -- `DebugChannel` selectionable en runtime via egui. `DebugChannel` a maintenant des discriminants explicites alignÃ©s avec les valeurs shader. Depth channel ajoutÃ© au `DebugVizPass`.
 
-#### EG-03: PresentPass séparé ✅
-- **Status:** ✅ Done -- `ctx.present()` extrait de `TonemapPass` vers un `PresentPass` dédié. Tonemapping ne fait plus la présentation; Egui s'insère entre Tonemap et Present.
+#### EG-03: PresentPass sÃ©parÃ© âœ…
+- **Status:** âœ… Done -- `ctx.present()` extrait de `TonemapPass` vers un `PresentPass` dÃ©diÃ©. Tonemapping ne fait plus la prÃ©sentation; Egui s'insÃ¨re entre Tonemap et Present.
 
 #### Issues ouvertes i3_egui
 
 | ID | File | Severity | Description |
 |---|---|---|---|
-| EG-I01 | `renderer.rs` | Medium | Support textures utilisateur (autres que font atlas). `update_textures` ignore `ImageData::Color`. Table de textures nécessaire (HashMap<TextureId, BackendImage>). |
-| EG-I02 | `renderer.rs` | Medium | Scissoring non implémenté dans `execute()`. Les `clipped_primitive.clip_rect` sont ignorés. Potentiel artifact UI si les widgets débordent. |
-| EG-I03 | `renderer.rs` | Low | VB/IB re-alloués chaque frame. Devrait être un buffer persist avec ring-buffer ou resize-on-demand. |
-| EG-I04 | `lib.rs` | Resolved | ✅ Découplé via FrameGraph blackboard et renommé en `UiSystem`. |
-| EG-I05 | `lib.rs` | Low | `pixles_per_point` hardcodé à `1.0` dans `tessellate`. Devrait utiliser le DPI réel de la fenêtre. |
+| EG-I01 | `renderer.rs` | Medium | Support textures utilisateur (autres que font atlas). `update_textures` ignore `ImageData::Color`. Table de textures nÃ©cessaire (HashMap<TextureId, BackendImage>). |
+| EG-I02 | `renderer.rs` | Medium | Scissoring non implÃ©mentÃ© dans `execute()`. Les `clipped_primitive.clip_rect` sont ignorÃ©s. Potentiel artifact UI si les widgets dÃ©bordent. |
+| EG-I03 | `renderer.rs` | Low | VB/IB re-allouÃ©s chaque frame. Devrait Ãªtre un buffer persist avec ring-buffer ou resize-on-demand. |
+| EG-I04 | `lib.rs` | Resolved | âœ… DÃ©couplÃ© via FrameGraph blackboard et renommÃ© en `UiSystem`. |
+| EG-I05 | `lib.rs` | Low | `pixles_per_point` hardcodÃ© Ã  `1.0` dans `tessellate`. Devrait utiliser le DPI rÃ©el de la fenÃªtre. |
 
 ### Phase 10 -- i3_bundle Enhancements
 
@@ -895,16 +893,16 @@ Ajout non prévu initialement. L'intégration egui dans le renderer permet le de
 
 ### Phase 13 -- Agent Skills & Rules
 
-#### P13-1: Fix model double-run issue ✅
-- **Status:** ✅ Done -- Règle ajoutée dans `general.md` pour éviter les doubles exécutions.
+#### P13-1: Fix model double-run issue âœ…
+- **Status:** âœ… Done -- RÃ¨gle ajoutÃ©e dans `general.md` pour Ã©viter les doubles exÃ©cutions.
 - **What:** Add rule: "When running a program, always capture output in a single invocation. Do not re-run with grep or shell pipes."
 
-#### P13-2: Fix Linux command usage on Windows ✅
-- **Status:** ✅ Done -- PowerShell est désormais obligatoire dans les règles `general.md`.
+#### P13-2: Fix Linux command usage on Windows âœ…
+- **Status:** âœ… Done -- PowerShell est dÃ©sormais obligatoire dans les rÃ¨gles `general.md`.
 - **What:** Add explicit rule: "This is a Windows environment. Never use `grep`, `sed`, `awk`, `cat`, `rm`. Use `Select-String`, `findstr`, `type`, `del`, or PowerShell equivalents."
 
-#### P13-3: Improve diagnostics workflow ✅
-- **Status:** ✅ Done -- "Skill-First Workflow" ajouté aux règles, forçant l'utilisation de `i3-cargo.ps1` et `i3-vrun.ps1`.
+#### P13-3: Improve diagnostics workflow âœ…
+- **Status:** âœ… Done -- "Skill-First Workflow" ajoutÃ© aux rÃ¨gles, forÃ§ant l'utilisation de `i3-cargo.ps1` et `i3-vrun.ps1`.
 - **What:** Add mandatory check of `.agent/skills` to ensure structured diagnostics.
 
 ### Next Steps - from user's original notes
@@ -937,17 +935,17 @@ These items are tracked here for completeness but are beyond the immediate actio
 
 ### Recommended Execution Order
 
-> **État actuel (Rev 3) :** P1 ✅, P7 ✅, i3_egui MVP ✅. P0 partielle (P0-5 ✅). P4 partielle (pipeline_cache.rs extrait). P3 partielle (resolve_image OK, `Arc<Mutex<T>>` reste).
+> **Ã‰tat actuel (Rev 3) :** P1 âœ…, P7 âœ…, i3_egui MVP âœ…. P0 partielle (P0-5 âœ…). P4 partielle (pipeline_cache.rs extrait). P3 partielle (resolve_image OK, `Arc<Mutex<T>>` reste).
 
-1. **P0** ❌ -- Finir les safety fixes restants (P0-1 AssetHandle UB, P0-3 dead code, P0-6 PipelineNode)
-2. ~~**P1**~~ ✅ -- Done
-3. ~~**P7**~~ ✅ -- Done (PipelineImporter + .i3p + system bundle + build.rs)
-4. **P4-2** -- Supprimer les Push Descriptors proprement (pipeline_cache, commands, resource_arena, device)
+1. **P0** âŒ -- Finir les safety fixes restants (P0-1 AssetHandle UB, P0-3 dead code, P0-6 PipelineNode)
+2. ~~**P1**~~ âœ… -- Done
+3. ~~**P7**~~ âœ… -- Done (PipelineImporter + .i3p + system bundle + build.rs)
+4. **P4-2** ✅ -- Supprimer les Push Descriptors proprement (pipeline_cache, commands, resource_arena, device)mmands, resource_arena, device)
 5. **P4-3** -- Multi-GPU selection : `enumerate_gpus()` + `--gpu <index>` CLI flag (tester iGPU AMD)
-6. **P3-3** -- Refactor DefaultRenderGraph: supprimer `Arc<Mutex<T>>`, simplifier `record()` (~½ journée)
-7. **P5** -- Normal mapping (dépend de P1 ✅ pour les formats)
+6. **P3-3** -- Refactor DefaultRenderGraph: supprimer `Arc<Mutex<T>>`, simplifier `record()` (~Â½ journÃ©e)
+7. **P5** -- Normal mapping (dÃ©pend de P1 âœ… pour les formats)
 8. **EX** -- Egui: scissoring, multi-texture, DPI (polish progressif)
 9. **P4** -- Finir le split de backend.rs (readability)
-10. **P6** -- GPU-driven pipeline (performance, dépend de P3)
+10. **P6** -- GPU-driven pipeline (performance, dÃ©pend de P3)
 11. **P2, P8** -- Baker ergonomics, RT (future)
 12. **P9-P13** -- Quality, testing, docs (ongoing)

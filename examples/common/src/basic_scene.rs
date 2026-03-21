@@ -202,11 +202,11 @@ impl BasicScene {
             light_type: LightType::Directional,
         });
 
-        // Backlight (Cool blue / softer)
+        // Backlight (Neutral sky-blue / ambient fill)
         self.add_light(LightData {
             position: glm::vec3(0.0, 0.0, 0.0),
             direction: glm::normalize(&glm::vec3(1.0, 0.5, 1.0)),
-            color: glm::vec3(0.2, 0.4, 1.0),
+            color: glm::vec3(0.5, 0.6, 0.8),
             intensity: 0.5,
             radius: 0.0,
             light_type: LightType::Directional,

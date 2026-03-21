@@ -19,11 +19,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let helmet_src = manifest_path.join("../../assets/DamagedHelmet.glb");
     let sponza_src = manifest_path.join("../../assets/Sponza/glTF/Sponza.gltf");
+    let bistro_ext_src = manifest_path.join("../../assets/Bistro_v5_2/BistroExterior.fbx");
+    let bistro_int_src = manifest_path.join("../../assets/Bistro_v5_2/BistroInterior.fbx");
 
     BundleBaker::new("viewer_scenes")?
         .with_output_dir(target_dir)
         .add_asset(&helmet_src, AssimpImporter::new())
         .add_asset(&sponza_src, AssimpImporter::new())
+        .add_asset(&bistro_ext_src, AssimpImporter::new())
+        .add_asset(&bistro_int_src, AssimpImporter::new())
         .execute()?;
 
     // Copy shaders to target directory

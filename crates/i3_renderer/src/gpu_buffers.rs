@@ -30,8 +30,8 @@ impl GpuBuffers {
     /// the first frame's sync pass allocates them via the backend.
     pub fn allocate(backend: &mut dyn RenderBackend) -> Self {
         // Compute standard sizes
-        let object_buffer_size = 1024 * 64; // Stub
-        let material_buffer_size = 1024 * 64; // Stub
+        let object_buffer_size = 1024 * 1024 * 2; // 2MB for ~14k objects
+        let material_buffer_size = 1024 * 1024; // 1MB for ~16k materials
         let camera_ubo_size = std::mem::size_of::<CameraData>() as u64;
 
         // Light Buffer (1024 lights) -> Struct size is 48 bytes approx

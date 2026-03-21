@@ -238,7 +238,6 @@ pub fn create_graphics_pipeline(
 
     // Create Descriptor Set Layouts (filling gaps)
     let mut descriptor_set_layouts = Vec::new();
-    let pushable_sets_mask = 0;
     if !set_bindings.is_empty() || backend.bindless_set_layout != vk::DescriptorSetLayout::null() {
         // Force at least 3 sets (0, 1, 2) to ensure Bindless is always at Set 2
         let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
@@ -262,15 +261,6 @@ pub fn create_graphics_pipeline(
             let mut layout_info = vk::DescriptorSetLayoutCreateInfo::default()
                 .bindings(bindings)
                 .push_next(&mut binding_flags_info);
-
-            // Enable Push Descriptors for Set 0 (implied by backend requirement)
-            /*
-            if i == 0 && !bindings.is_empty() {
-                layout_info =
-                    layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
-                pushable_sets_mask |= 1 << 0;
-            }
-            */
 
             // If any binding has UPDATE_AFTER_BIND, the set layout itself needs the flag
             if binding_flags
@@ -302,7 +292,6 @@ pub fn create_graphics_pipeline(
             descriptor_set_layouts.push(layout);
         }
     }
-    // (pipeline_layouts field was removed, descriptor layouts are stored in PhysicalPipeline)
 
     // Push Constants from reflection
     let pc_ranges: Vec<vk::PushConstantRange> = desc
@@ -387,7 +376,6 @@ pub fn create_graphics_pipeline(
         layout: pipeline_layout,
         bind_point: vk::PipelineBindPoint::GRAPHICS,
         set_layouts: descriptor_set_layouts,
-        pushable_sets_mask,
         physical_id: 0,
     };
 
@@ -460,7 +448,6 @@ pub fn create_compute_pipeline(
     }
 
     let mut descriptor_set_layouts = Vec::new();
-    let pushable_sets_mask = 0;
     if !set_bindings.is_empty() {
         let max_set = *set_bindings.keys().max().unwrap();
         for i in 0..=max_set {
@@ -483,15 +470,6 @@ pub fn create_compute_pipeline(
             let mut layout_info = vk::DescriptorSetLayoutCreateInfo::default()
                 .bindings(bindings)
                 .push_next(&mut binding_flags_info);
-
-            // Enable Push Descriptors for Set 0 (implied by backend requirement)
-            /*
-            if i == 0 {
-                layout_info =
-                    layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
-                pushable_sets_mask |= 1 << 0;
-            }
-            */
 
             // If any binding has UPDATE_AFTER_BIND, the set layout itself needs the flag
             if binding_flags
@@ -518,8 +496,6 @@ pub fn create_compute_pipeline(
             descriptor_set_layouts.push(layout);
         }
     }
-
-    // (pipeline_layouts field was removed, descriptor layouts are stored in PhysicalPipeline)
 
     let pc_ranges: Vec<vk::PushConstantRange> = desc
         .shader_module
@@ -558,7 +534,6 @@ pub fn create_compute_pipeline(
         layout: pipeline_layout,
         bind_point: vk::PipelineBindPoint::COMPUTE,
         set_layouts: descriptor_set_layouts,
-        pushable_sets_mask,
         physical_id: 0,
     };
 
@@ -617,22 +592,6 @@ pub fn create_graphics_pipeline_from_baked(
                     .name(entry_point_cstr.as_c_str()),
             );
         }
-    }
-
-    debug!(
-        "Baked Pipeline: {} stages, {} bindings, {} attributes, {} targets",
-        stages.len(),
-        baked.vertex_binding_count,
-        baked.vertex_attribute_count,
-        baked.color_target_count
-    );
-
-    for i in 0..baked.color_target_count as usize {
-        let fmt = convert_u32_format(baked.color_targets[i].format);
-        debug!(
-            "  Target[{}]: format index {}, vk::Format {:?}",
-            i, baked.color_targets[i].format, fmt
-        );
     }
 
     // 2. Vertex Input
@@ -763,7 +722,6 @@ pub fn create_graphics_pipeline_from_baked(
     }
 
     let mut descriptor_set_layouts = Vec::new();
-    let pushable_sets_mask = 0;
 
     // Ensure Set 2 is available for bindless
     let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
@@ -790,12 +748,6 @@ pub fn create_graphics_pipeline_from_baked(
                 .bindings(bindings)
                 .push_next(&mut flags_info);
 
-            /*
-            if i == 0 && !bindings.is_empty() {
-                layout_info = layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
-                pushable_sets_mask |= 1 << 0;
-            }
-            */
             if binding_flags
                 .iter()
                 .any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND))
@@ -834,7 +786,7 @@ pub fn create_graphics_pipeline_from_baked(
         device
             .handle
             .create_pipeline_layout(&layout_info, None)
-            .unwrap()
+            .expect("Failed to create pipeline layout")
     };
 
     // 4. Rendering Info
@@ -872,7 +824,6 @@ pub fn create_graphics_pipeline_from_baked(
         layout: pipeline_layout,
         bind_point: vk::PipelineBindPoint::GRAPHICS,
         set_layouts: descriptor_set_layouts,
-        pushable_sets_mask,
         physical_id: 0,
     });
     backend
@@ -926,7 +877,6 @@ pub fn create_compute_pipeline_from_baked(
     }
 
     let mut descriptor_set_layouts = Vec::new();
-    let mut pushable_sets_mask = 0;
 
     if !set_bindings.is_empty() {
         let max_set = (*set_bindings.keys().max().unwrap_or(&0)).max(2);
@@ -954,11 +904,6 @@ pub fn create_compute_pipeline_from_baked(
                     .bindings(bindings)
                     .push_next(&mut flags_info);
 
-                if i == 0 && !bindings.is_empty() && bindings.len() < 8 {
-                    layout_info =
-                        layout_info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
-                    pushable_sets_mask |= 1 << 0;
-                }
                 if binding_flags
                     .iter()
                     .any(|f| f.contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND))
@@ -1015,7 +960,6 @@ pub fn create_compute_pipeline_from_baked(
         layout: pipeline_layout,
         bind_point: vk::PipelineBindPoint::COMPUTE,
         set_layouts: descriptor_set_layouts,
-        pushable_sets_mask,
         physical_id: 0,
     });
     backend

@@ -81,7 +81,7 @@ impl RenderPass for SkyPass {
         let sun_col = *builder.consume::<glm::Vec3>("SunColor");
 
         self.push_constants = Some(SkyPushConstants {
-            inv_view_proj: common.view_projection.try_inverse().unwrap_or_default(),
+            inv_view_proj: common.inv_view_projection,
             camera_pos: common.camera_pos,
             _pad0: 0.0,
             sun_direction: sun_dir,

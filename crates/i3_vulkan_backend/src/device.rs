@@ -16,7 +16,6 @@ pub struct VulkanDevice {
 
     pub dynamic_rendering: ash::khr::dynamic_rendering::Device,
     pub sync2: ash::khr::synchronization2::Device,
-    pub push_descriptor: ash::khr::push_descriptor::Device,
 
     #[cfg(debug_assertions)]
     pub debug_utils: ash::ext::debug_utils::Device,
@@ -104,7 +103,6 @@ impl VulkanDevice {
             ash::khr::swapchain::NAME.as_ptr(),
             ash::khr::dynamic_rendering::NAME.as_ptr(),
             ash::khr::synchronization2::NAME.as_ptr(),
-            ash::khr::push_descriptor::NAME.as_ptr(),
         ];
 
         let device_create_info = vk::DeviceCreateInfo::default()
@@ -124,7 +122,6 @@ impl VulkanDevice {
         // Load extensions
         let dynamic_rendering = ash::khr::dynamic_rendering::Device::new(&instance.handle, &handle);
         let sync2 = ash::khr::synchronization2::Device::new(&instance.handle, &handle);
-        let push_descriptor = ash::khr::push_descriptor::Device::new(&instance.handle, &handle);
 
         #[cfg(debug_assertions)]
         let debug_utils = ash::ext::debug_utils::Device::new(&instance.handle, &handle);
@@ -144,7 +141,6 @@ impl VulkanDevice {
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
             dynamic_rendering,
             sync2,
-            push_descriptor,
             #[cfg(debug_assertions)]
             debug_utils,
         })

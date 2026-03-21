@@ -49,7 +49,7 @@ fn test_full_baking_pipeline() {
 
     // 2. Verify with VFS and i3_io
     let backend = BundleBackend::mount(&catalog_path, &blob_path).expect("Failed to mount bundle");
-    let mut vfs = Vfs::new();
+    let vfs = Vfs::new();
     vfs.mount(Box::new(backend));
 
     let mut mesh_found = false;

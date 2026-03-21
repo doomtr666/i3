@@ -20,6 +20,7 @@ tracing-subscriber.workspace = true
 bytemuck.workspace = true
 nalgebra-glm.workspace = true
 image = "0.25.5"
+ddsfile.workspace = true
 intel_tex_2 = "0.3.0"
 asset-importer = "0.7.0"
 ron = "0.8"

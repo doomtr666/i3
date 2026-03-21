@@ -111,7 +111,7 @@ impl RenderPass for DeferredResolvePass {
         };
 
         self.push_constants = Some(DeferredResolvePushConstants {
-            inv_view_proj: common.view_projection.try_inverse().unwrap_or_default(),
+            inv_view_proj: common.inv_view_projection,
             inv_projection: common.inv_projection,
             camera_pos: common.camera_pos,
             near_plane: common.near_plane,

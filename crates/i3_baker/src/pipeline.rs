@@ -3,6 +3,8 @@
 //! Defines the Importer → Extractor model for asset baking:
 //! - Importers parse source files (e.g., AssimpImporter for glTF/FBX/OBJ)
 //! - Extractors produce typed outputs from imported data (e.g., MeshExtractor, SceneExtractor)
+//!
+//! Context passed to importers and extractors during baking.
 
 use crate::Result;
 use crate::writer::BundleWriter;
@@ -11,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use uuid::Uuid;
 
-/// Context passed to importers and extractors during baking.
 pub struct BakeContext {
     /// Path to the source file being baked.
     pub source_path: PathBuf,
@@ -37,6 +38,7 @@ impl BakeContext {
 
 /// A single baked asset output.
 /// Produced by an Extractor, consumed by BundleWriter.
+#[derive(Debug, Clone)]
 pub struct BakeOutput {
     /// Unique identifier for this asset (used for references).
     pub asset_id: Uuid,
@@ -360,4 +362,3 @@ impl BundleBaker {
         Ok(())
     }
 }
-

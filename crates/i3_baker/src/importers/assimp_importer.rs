@@ -23,16 +23,12 @@ const SCENE_TYPE_UUID: Uuid = i3_io::scene_asset::SCENE_ASSET_TYPE;
 // Texture resolution types (for parallel baking)
 // ---------------------------------------------------------------------------
 
-/// Source of a texture to bake (embedded in the model or external file).
 #[derive(Clone, Debug)]
 enum TextureSource {
-    /// Embedded texture at the given index in `AssimpScene::embedded_textures`.
     Embedded { index: usize },
-    /// External texture file at the given resolved absolute path.
     File { path: PathBuf },
 }
 
-/// A fully resolved texture reference, ready for parallel baking.
 #[derive(Clone, Debug)]
 struct ResolvedTexture {
     asset_id: Uuid,
@@ -41,10 +37,9 @@ struct ResolvedTexture {
 }
 
 // ---------------------------------------------------------------------------
-// Extracted data types (Send + Sync compatible)
+// Extracted data types
 // ---------------------------------------------------------------------------
 
-/// Extracted material data (Send + Sync compatible).
 #[derive(Debug, Clone)]
 pub struct ExtractedMaterial {
     pub name: String,
@@ -59,7 +54,6 @@ pub struct ExtractedMaterial {
     pub alpha_cutoff: f32,
 }
 
-/// Extracted mesh data (Send + Sync compatible).
 #[derive(Debug, Clone)]
 pub struct ExtractedMesh {
     pub vertices: Vec<f32>,
@@ -71,17 +65,11 @@ pub struct ExtractedMesh {
     pub material_index: Option<usize>,
 }
 
-/// Intermediate data from Assimp import (Send + Sync compatible).
 pub struct AssimpScene {
-    /// Source file path.
     pub source_path: PathBuf,
-    /// Extracted meshes.
     pub meshes: Vec<ExtractedMesh>,
-    /// Extracted materials.
     pub materials: Vec<ExtractedMaterial>,
-    /// Embedded textures (raw byte buffers from the glTF or FBX).
     pub embedded_textures: Vec<Vec<u8>>,
-    /// Mesh count for scene.
     pub mesh_count: usize,
 }
 
@@ -89,7 +77,6 @@ impl ImportedData for AssimpScene {
     fn source_path(&self) -> &Path {
         &self.source_path
     }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -99,7 +86,6 @@ impl ImportedData for AssimpScene {
 // AssimpImporter
 // ---------------------------------------------------------------------------
 
-/// Importer for 3D model formats using Assimp.
 pub struct AssimpImporter {
     extractors: Vec<Box<dyn Extractor>>,
 }
@@ -142,12 +128,20 @@ impl Importer for AssimpImporter {
             .unwrap_or_else(|_| source_path.to_path_buf());
         let path_str = clean_path.to_string_lossy();
 
+        // Optimized flags for i3 engine:
+        // - TRIANGULATE: ensure we only have triangles
+        // - CALC_TANGENT_SPACE: required for normal mapping
+        // - JOIN_IDENTICAL_VERTICES: optimize mesh data
+        // - SORT_BY_PTYPE: remove non-triangle primitives
+        // - MAKE_LEFT_HANDED: convert to Y-up left-handed system (Vulkan/i3 standard)
+        // - FLIP_UVS: match our texture coordinate system
         let scene = Scene::from_file_with_flags(
             path_str.as_ref(),
             PostProcessSteps::CALC_TANGENT_SPACE
                 | PostProcessSteps::TRIANGULATE
                 | PostProcessSteps::JOIN_IDENTICAL_VERTICES
                 | PostProcessSteps::SORT_BY_PTYPE
+                | PostProcessSteps::PRE_TRANSFORM_VERTICES
                 | PostProcessSteps::FLIP_UVS
                 | PostProcessSteps::FLIP_WINDING_ORDER,
         )
@@ -156,7 +150,6 @@ impl Importer for AssimpImporter {
         let materials = extract_materials(&scene, source_path);
         let meshes = extract_meshes(&scene);
 
-        // Extract embedded textures
         let mut embedded_textures = Vec::new();
         for tex in scene.textures() {
             if let Ok(data) = tex.data() {
@@ -167,7 +160,6 @@ impl Importer for AssimpImporter {
                     asset_importer::texture::TextureData::Texels(texels) => {
                         let mut bytes = Vec::with_capacity(texels.len() * 4);
                         for t in texels {
-                            // asset-importer Texel has b,g,r,a
                             bytes.push(t.b);
                             bytes.push(t.g);
                             bytes.push(t.r);
@@ -193,52 +185,22 @@ impl Importer for AssimpImporter {
     }
 
     fn extract(&self, data: &dyn ImportedData, ctx: &BakeContext) -> Result<Vec<BakeOutput>> {
-        let assimp_data = data
-            .as_any()
-            .downcast_ref::<AssimpScene>()
-            .ok_or_else(|| crate::BakerError::Pipeline("Invalid imported data type".to_string()))?;
+        let assimp_data = data.as_any().downcast_ref::<AssimpScene>().ok_or_else(|| {
+            crate::BakerError::Pipeline("Invalid imported data type".to_string())
+        })?;
 
-        println!(
-            "cargo:warning=AssimpImporter: Extracting from {}, meshes={}, materials={}",
-            assimp_data.source_path.display(),
-            assimp_data.meshes.len(),
-            assimp_data.materials.len()
-        );
-
-        println!(
-            "cargo:warning=AssimpImporter: Running {} extractors (parallel)",
-            self.extractors.len()
-        );
-
-        // Run all extractors in parallel via rayon.
-        // Each extractor reads from the shared &AssimpScene (Sync) and &BakeContext (Sync).
         let results: Result<Vec<Vec<BakeOutput>>> = self
             .extractors
             .par_iter()
-            .map(|extractor| {
-                let res = extractor.extract(assimp_data, ctx)?;
-                println!(
-                    "cargo:warning=AssimpImporter: Extractor '{}' produced {} outputs",
-                    extractor.name(),
-                    res.len()
-                );
-                Ok(res)
-            })
+            .map(|extractor| extractor.extract(assimp_data, ctx))
             .collect();
 
-        let all_outputs = results?;
-        let outputs: Vec<BakeOutput> = all_outputs.into_iter().flatten().collect();
-
-        println!(
-            "cargo:warning=AssimpImporter: TOTAL produced {} outputs",
-            outputs.len()
-        );
-        Ok(outputs)
+        Ok(results?.into_iter().flatten().collect())
     }
 }
 
 // ---------------------------------------------------------------------------
-// Assimp scene data extraction (from C++ scene into Rust structs)
+// Mesh Extraction
 // ---------------------------------------------------------------------------
 
 fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
@@ -247,11 +209,8 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
         let has_normals = mesh.has_normals();
         let has_uvs = mesh.has_texture_coords(0);
         let has_colors = mesh.has_vertex_colors(0);
-
         let num_vertices = mesh.num_vertices();
 
-        // If it has UVs, we now ALWAYS include tangents (48 bytes stride: P3, N3, UV2, T4)
-        // Otherwise, we use P3, N3, C3 (36 bytes stride)
         let has_tangents = mesh.tangents().is_some() && mesh.bitangents().is_some();
         let stride = if has_uvs { 12 } else { 9 };
         let mut vertices = Vec::with_capacity(num_vertices * stride);
@@ -294,8 +253,6 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
                     let b = bitangents[i];
                     let n = norm_iter[i];
 
-                    // Calculate handness (w component of tangent)
-                    // w = dot(cross(n, t), b) < 0 ? -1.0 : 1.0
                     let cross_nt = asset_importer::types::Vector3D::new(
                         n.y * t.z - n.z * t.y,
                         n.z * t.x - n.x * t.z,
@@ -337,6 +294,10 @@ fn extract_meshes(scene: &asset_importer::scene::Scene) -> Vec<ExtractedMesh> {
     extracted
 }
 
+// ---------------------------------------------------------------------------
+// Material Extraction
+// ---------------------------------------------------------------------------
+
 fn extract_materials(
     scene: &asset_importer::scene::Scene,
     _source_path: &Path,
@@ -362,18 +323,26 @@ fn extract_materials(
             if let Some(tex) = mat
                 .texture_ref(TextureType::Diffuse, 0)
                 .or_else(|| mat.texture_ref(TextureType::BaseColor, 0))
+                .or_else(|| mat.texture_ref(TextureType::Ambient, 0))
             {
                 albedo = Some(PathBuf::from(tex.path_str().as_ref()));
             }
-            if let Some(tex) = mat.texture_ref(TextureType::Normals, 0) {
+            if let Some(tex) = mat
+                .texture_ref(TextureType::Normals, 0)
+                .or_else(|| mat.texture_ref(TextureType::Height, 0))
+            {
                 normal = Some(PathBuf::from(tex.path_str().as_ref()));
             }
             if let Some(tex) = mat.texture_ref(TextureType::Emissive, 0) {
                 emissive = Some(PathBuf::from(tex.path_str().as_ref()));
             }
+            
+            // Bistro/Modern FBX: Specular slot often contains ORM (Occlusion, Roughness, Metalness)
             if let Some(tex) = mat
-                .texture_ref(TextureType::Unknown, 0)
-                .or_else(|| mat.texture_ref(TextureType::Metalness, 0))
+                .texture_ref(TextureType::Metalness, 0)
+                .or_else(|| mat.texture_ref(TextureType::Shininess, 0))
+                .or_else(|| mat.texture_ref(TextureType::Specular, 0))
+                .or_else(|| mat.texture_ref(TextureType::Unknown, 0))
             {
                 metallic_roughness = Some(PathBuf::from(tex.path_str().as_ref()));
             }
@@ -383,22 +352,68 @@ fn extract_materials(
                 mat.diffuse_color()
                     .map(|c| asset_importer::types::Color4D::new(c.x, c.y, c.z, 1.0))
             }) {
-                base_color_factor = [c.x, c.y, c.z, c.w];
+                // Opacity is often set in the Alpha channel of Diffuse/BaseColor in modern exports.
+                // Or explicitly in the opacity property. We prioritize the explicit property if not 1.0.
+                let opacity = mat.get_float_property_str("$mat.opacity").ok().flatten().unwrap_or(c.w);
+                base_color_factor = [c.x, c.y, c.z, opacity];
             }
 
-            let metallic_factor = mat.metallic_factor().unwrap_or(1.0);
-            let roughness_factor = mat.roughness_factor().unwrap_or(1.0);
+
+            let shininess = mat.get_float_property_str("$mat.shininess").ok().flatten().unwrap_or(0.0);
+            let specular_color = mat.specular_color().unwrap_or(asset_importer::types::Color3D::new(0.0, 0.0, 0.0));
+            let diffuse_color = mat.diffuse_color().unwrap_or(asset_importer::types::Color3D::new(1.0, 1.0, 1.0));
+            
+            let spec_lum = specular_color.x * 0.2126 + specular_color.y * 0.7152 + specular_color.z * 0.0722;
+            let diff_lum = diffuse_color.x * 0.2126 + diffuse_color.y * 0.7152 + diffuse_color.z * 0.0722;
+
+            let metallic_factor = mat
+                .metallic_factor()
+                .or_else(|| {
+                    mat.get_float_property_str("$mat.gltf.pbrMetallicRoughness.metallicFactor")
+                        .ok()
+                        .flatten()
+                })
+                .unwrap_or_else(|| {
+                    if metallic_roughness.is_some() {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                });
+
+            let roughness_factor = mat
+                .roughness_factor()
+                .or_else(|| {
+                    mat.get_float_property_str("$mat.gltf.pbrMetallicRoughness.roughnessFactor")
+                        .ok()
+                        .flatten()
+                })
+                .unwrap_or_else(|| {
+                    if metallic_roughness.is_some() {
+                        1.0
+                    } else {
+                        // Derive from shininess (FBX 0-100ish range)
+                        (2.0 / (shininess + 2.0)).sqrt().clamp(0.0, 1.0)
+                    }
+                });
 
             let mut emissive_factor = [0.0, 0.0, 0.0];
             if let Some(c) = mat.emissive_color() {
                 emissive_factor = [c.x, c.y, c.z];
             }
 
-            // Fallback for alpha cutoff if needed. 0.5 is default.
             let alpha_cutoff = mat
                 .get_float_property_str("$mat.gltf.alphaCutoff")
-                .unwrap_or_default()
+                .ok()
+                .flatten()
                 .unwrap_or(0.5);
+
+            println!("cargo:warning=[i3_baker] Material '{}': Met={:.2}, Rough={:.2}, Alpha={:.2} (Spec_Lum={:.2}, Diff_Lum={:.2}, Shin={:.1})", 
+                name, metallic_factor, roughness_factor, alpha_cutoff, spec_lum, diff_lum, shininess);
+
+
+            if let Some(p) = &metallic_roughness { println!("cargo:warning=[i3_baker]   -> MR: {:?}", p); }
+            if let Some(p) = &emissive { println!("cargo:warning=[i3_baker]   -> Emissive: {:?}", p); }
 
             ExtractedMaterial {
                 name,
@@ -416,10 +431,6 @@ fn extract_materials(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// MeshExtractor — parallel mesh baking
-// ---------------------------------------------------------------------------
-
 pub struct MeshExtractor;
 impl Extractor for MeshExtractor {
     fn name(&self) -> &str {
@@ -435,7 +446,6 @@ impl Extractor for MeshExtractor {
             assimp_data.source_path.to_string_lossy().as_bytes(),
         );
 
-        // Build all meshes in parallel via rayon.
         (0..assimp_data.meshes.len())
             .into_par_iter()
             .map(|i| build_mesh_output(assimp_data, i, namespace))
@@ -538,10 +548,6 @@ fn calculate_bounds(vertices: &[f32], stride_floats: usize) -> BoundingBox {
     BoundingBox { min, max }
 }
 
-// ---------------------------------------------------------------------------
-// MaterialExtractor — three-phase parallel texture baking
-// ---------------------------------------------------------------------------
-
 pub struct MaterialExtractor;
 impl Extractor for MaterialExtractor {
     fn name(&self) -> &str {
@@ -552,106 +558,49 @@ impl Extractor for MaterialExtractor {
     }
     fn extract(&self, data: &dyn ImportedData, ctx: &BakeContext) -> Result<Vec<BakeOutput>> {
         let assimp_data = data.as_any().downcast_ref::<AssimpScene>().unwrap();
-
-        // ---------------------------------------------------------------
-        // Phase 1: Collect all unique texture references across materials.
-        // Deduplication is by asset_id (deterministic UUID from path).
-        // ---------------------------------------------------------------
         let mut unique_textures: HashMap<Uuid, ResolvedTexture> = HashMap::new();
-
-        // Per-material texture UUIDs: [albedo, normal, metallic_roughness, emissive]
         let mut mat_texture_ids: Vec<[Uuid; 4]> = Vec::with_capacity(assimp_data.materials.len());
 
         for mat in &assimp_data.materials {
             let mut ids = [Uuid::nil(); 4];
-
-            // Albedo
-            if let Some(resolved) = resolve_texture_ref(
-                mat.albedo_path.as_ref(),
-                assimp_data,
-                ctx,
-                TextureSemantic::Albedo,
-            ) {
-                ids[0] = resolved.asset_id;
-                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            if let Some(res) = resolve_texture_ref(mat.albedo_path.as_ref(), assimp_data, ctx, TextureSemantic::Albedo) {
+                ids[0] = res.asset_id;
+                unique_textures.entry(res.asset_id).or_insert(res);
             }
-
-            // Normal
-            if let Some(resolved) = resolve_texture_ref(
-                mat.normal_path.as_ref(),
-                assimp_data,
-                ctx,
-                TextureSemantic::Normal,
-            ) {
-                ids[1] = resolved.asset_id;
-                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            if let Some(res) = resolve_texture_ref(mat.normal_path.as_ref(), assimp_data, ctx, TextureSemantic::Normal) {
+                ids[1] = res.asset_id;
+                unique_textures.entry(res.asset_id).or_insert(res);
             }
-
-            // MetallicRoughness
-            if let Some(resolved) = resolve_texture_ref(
-                mat.metallic_roughness_path.as_ref(),
-                assimp_data,
-                ctx,
-                TextureSemantic::MetallicRoughness,
-            ) {
-                ids[2] = resolved.asset_id;
-                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            if let Some(res) = resolve_texture_ref(mat.metallic_roughness_path.as_ref(), assimp_data, ctx, TextureSemantic::MetallicRoughness) {
+                ids[2] = res.asset_id;
+                unique_textures.entry(res.asset_id).or_insert(res);
             }
-
-            // Emissive
-            if let Some(resolved) = resolve_texture_ref(
-                mat.emissive_path.as_ref(),
-                assimp_data,
-                ctx,
-                TextureSemantic::Emissive,
-            ) {
-                ids[3] = resolved.asset_id;
-                unique_textures.entry(resolved.asset_id).or_insert(resolved);
+            if let Some(res) = resolve_texture_ref(mat.emissive_path.as_ref(), assimp_data, ctx, TextureSemantic::Emissive) {
+                ids[3] = res.asset_id;
+                unique_textures.entry(res.asset_id).or_insert(res);
             }
-
             mat_texture_ids.push(ids);
         }
 
-        println!(
-            "cargo:warning=MaterialExtractor: {} unique textures to bake (parallel)",
-            unique_textures.len()
-        );
-
-        // ---------------------------------------------------------------
-        // Phase 2: Bake all unique textures in parallel via rayon.
-        // This is where the heavy BC7/BC5 compression happens.
-        // ---------------------------------------------------------------
         let texture_entries: Vec<(Uuid, ResolvedTexture)> = unique_textures.into_iter().collect();
-
         let baked_results: Result<Vec<(Uuid, Vec<BakeOutput>)>> = texture_entries
             .par_iter()
-            .map(|(id, resolved)| {
-                println!(
-                    "cargo:warning=MaterialExtractor: Baking texture {:?} ({:?})",
-                    resolved.semantic, resolved.source
-                );
-                let outputs = bake_resolved_texture(resolved, assimp_data, ctx)?;
+            .map(|(id, res)| {
+                let outputs = bake_resolved_texture(res, assimp_data, ctx)?;
                 Ok((*id, outputs))
             })
             .collect();
 
         let baked_map: HashMap<Uuid, Vec<BakeOutput>> = baked_results?.into_iter().collect();
-
-        // ---------------------------------------------------------------
-        // Phase 3: Assemble material assets + collect texture outputs.
-        // ---------------------------------------------------------------
         let mut outputs: Vec<BakeOutput> = Vec::new();
 
-        // First, collect all baked texture outputs.
         for baked_outputs in baked_map.into_values() {
             outputs.extend(baked_outputs);
         }
 
-        // Then, build material assets using the resolved texture UUIDs.
         for (i, mat) in assimp_data.materials.iter().enumerate() {
             let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, mat.name.as_bytes());
             let ids = &mat_texture_ids[i];
-
             let header = MaterialHeader {
                 albedo_texture: ids[0].into_bytes(),
                 normal_texture: ids[1].into_bytes(),
@@ -664,7 +613,6 @@ impl Extractor for MaterialExtractor {
                 alpha_cutoff: mat.alpha_cutoff,
                 _padding: [0u8; 20],
             };
-
             outputs.push(BakeOutput {
                 asset_id,
                 asset_type: MATERIAL_ASSET_TYPE,
@@ -672,17 +620,10 @@ impl Extractor for MaterialExtractor {
                 name: mat.name.clone(),
             });
         }
-
         Ok(outputs)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Texture resolution helpers
-// ---------------------------------------------------------------------------
-
-/// Resolve a texture path to a `ResolvedTexture` without performing any I/O-heavy
-/// work. Returns `None` if the path is absent, empty, or cannot be resolved.
 fn resolve_texture_ref(
     path: Option<&PathBuf>,
     scene: &AssimpScene,
@@ -692,86 +633,38 @@ fn resolve_texture_ref(
     let path = path?;
     let source_dir = ctx.source_path.parent().unwrap();
     let filename = path.to_string_lossy().trim().to_string();
+    if filename.is_empty() { return None; }
 
-    if filename.is_empty() {
-        return None;
-    }
-
-    // Embedded texture (path starts with '*')
-    if let Some(embedded_idx_str) = filename.strip_prefix('*') {
-        if let Ok(idx) = embedded_idx_str.parse::<usize>() {
+    if let Some(idx_str) = filename.strip_prefix('*') {
+        if let Ok(idx) = idx_str.parse::<usize>() {
             if idx < scene.embedded_textures.len() {
-                let asset_id = Uuid::new_v5(
-                    &Uuid::NAMESPACE_URL,
-                    format!("embedded_{}_{}", scene.source_path.display(), idx).as_bytes(),
-                );
-                return Some(ResolvedTexture {
-                    asset_id,
-                    source: TextureSource::Embedded { index: idx },
-                    semantic,
-                });
+                let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("embedded_{}_{}", scene.source_path.display(), idx).as_bytes());
+                return Some(ResolvedTexture { asset_id, source: TextureSource::Embedded { index: idx }, semantic });
             }
         }
-        println!(
-            "cargo:warning=resolve_texture_ref: Failed to resolve embedded texture '{}'",
-            filename
-        );
         return None;
     }
 
-    // External file texture — resolve with heuristics
     let mut full_path = source_dir.join(&filename);
-
     if !full_path.exists() {
         let candidates = [
             source_dir.join(&filename),
             source_dir.parent().unwrap_or(source_dir).join(&filename),
             source_dir.join("textures").join(&filename),
-            source_dir
-                .parent()
-                .unwrap_or(source_dir)
-                .join("textures")
-                .join(&filename),
-            // glTF often has a 'textures' folder next to the .gltf
+            source_dir.parent().unwrap_or(source_dir).join("textures").join(&filename),
             source_dir.join("..").join("textures").join(&filename),
         ];
-
         for cand in candidates {
-            if cand.exists() {
-                full_path = cand;
-                break;
-            }
+            if cand.exists() { full_path = cand; break; }
         }
     }
 
-    if !full_path.exists() {
-        println!(
-            "cargo:warning=resolve_texture_ref: Texture NOT FOUND: '{}' (searched around {:?})",
-            filename, source_dir
-        );
-        return None;
-    }
-
-    if full_path.is_dir() {
-        println!(
-            "cargo:warning=resolve_texture_ref: Skipping directory texture at {:?}",
-            full_path
-        );
-        return None;
-    }
-
+    if !full_path.exists() || full_path.is_dir() { return None; }
     let full_path = full_path.canonicalize().unwrap_or(full_path);
     let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, full_path.to_string_lossy().as_bytes());
-
-    Some(ResolvedTexture {
-        asset_id,
-        source: TextureSource::File { path: full_path },
-        semantic,
-    })
+    Some(ResolvedTexture { asset_id, source: TextureSource::File { path: full_path }, semantic })
 }
 
-/// Bake a resolved texture into one or more `BakeOutput`s.
-/// This is the CPU-intensive step (image decode + BC7/BC5 compression + mipmap generation).
 fn bake_resolved_texture(
     resolved: &ResolvedTexture,
     scene: &AssimpScene,
@@ -782,7 +675,6 @@ fn bake_resolved_texture(
         generate_mips: true,
         format: None,
     });
-
     let mut outputs = match &resolved.source {
         TextureSource::Embedded { index } => {
             let buffer = &scene.embedded_textures[*index];
@@ -794,46 +686,24 @@ fn bake_resolved_texture(
             importer.extract(imported.as_ref(), ctx)?
         }
     };
-
-    // Override the asset_id to match our deterministic UUID from resolve_texture_ref.
-    for output in &mut outputs {
-        output.asset_id = resolved.asset_id;
-    }
-
+    for output in &mut outputs { output.asset_id = resolved.asset_id; }
     Ok(outputs)
 }
 
-// ---------------------------------------------------------------------------
-// SceneExtractor
-// ---------------------------------------------------------------------------
-
 pub struct SceneExtractor;
 impl Extractor for SceneExtractor {
-    fn name(&self) -> &str {
-        "SceneExtractor"
-    }
-    fn output_type(&self) -> Uuid {
-        SCENE_TYPE_UUID
-    }
+    fn name(&self) -> &str { "SceneExtractor" }
+    fn output_type(&self) -> Uuid { SCENE_TYPE_UUID }
     fn extract(&self, data: &dyn ImportedData, _ctx: &BakeContext) -> Result<Vec<BakeOutput>> {
         let assimp_data = data.as_any().downcast_ref::<AssimpScene>().unwrap();
         let mut objects = Vec::new();
         let mut mesh_refs = Vec::new();
         let mut string_table = Vec::new();
-
-        let namespace = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            assimp_data.source_path.to_string_lossy().as_bytes(),
-        );
-        let file_stem = assimp_data
-            .source_path
-            .file_stem()
-            .unwrap()
-            .to_string_lossy();
-
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, assimp_data.source_path.to_string_lossy().as_bytes());
+        let file_stem = assimp_data.source_path.file_stem().unwrap().to_string_lossy();
         let mut scene_bounds = BoundingBox::empty();
 
-        for mesh_idx in 0..assimp_data.meshes.len() {
+        for (mesh_idx, mesh_data) in assimp_data.meshes.iter().enumerate() {
             let mesh_name = format!("{}_mesh_{}", file_stem, mesh_idx);
             let mesh_id = Uuid::new_v5(&namespace, mesh_name.as_bytes());
             let mesh_ref_index = mesh_refs.len() as u32;
@@ -852,14 +722,8 @@ impl Extractor for SceneExtractor {
                 _reserved: [0u32; 3],
             });
 
-            let mesh_data = &assimp_data.meshes[mesh_idx];
-            let mesh_format = if mesh_data.has_uvs {
-                VertexFormat::POSITION_NORMAL_UV
-            } else {
-                VertexFormat::POSITION_NORMAL_COLOR
-            };
-            let mesh_bounds =
-                calculate_bounds(&mesh_data.vertices, mesh_format.stride() as usize / 4);
+            let mesh_format = if mesh_data.has_uvs { VertexFormat::POSITION_NORMAL_UV_TANGENT } else { VertexFormat::POSITION_NORMAL_COLOR };
+            let mesh_bounds = calculate_bounds(&mesh_data.vertices, mesh_format.stride() as usize / 4);
             scene_bounds.merge(&mesh_bounds);
         }
 
@@ -870,12 +734,9 @@ impl Extractor for SceneExtractor {
             skeleton_ref_count: 0,
             objects_offset: std::mem::size_of::<SceneHeader>() as u32,
             lights_offset: 0,
-            mesh_refs_offset: std::mem::size_of::<SceneHeader>() as u32
-                + (objects.len() * std::mem::size_of::<ObjectInstance>()) as u32,
+            mesh_refs_offset: std::mem::size_of::<SceneHeader>() as u32 + (objects.len() * std::mem::size_of::<ObjectInstance>()) as u32,
             skeleton_refs_offset: 0,
-            strings_offset: std::mem::size_of::<SceneHeader>() as u32
-                + (objects.len() * std::mem::size_of::<ObjectInstance>()) as u32
-                + (mesh_refs.len() * 16) as u32,
+            strings_offset: std::mem::size_of::<SceneHeader>() as u32 + (objects.len() * std::mem::size_of::<ObjectInstance>()) as u32 + (mesh_refs.len() * 16) as u32,
             strings_size: string_table.len() as u32,
             bounds: scene_bounds,
             _reserved: [0u8; 16],
@@ -883,12 +744,8 @@ impl Extractor for SceneExtractor {
 
         let mut binary = Vec::new();
         binary.extend_from_slice(bytes_of(&header));
-        for obj in &objects {
-            binary.extend_from_slice(bytes_of(obj));
-        }
-        for id in &mesh_refs {
-            binary.extend_from_slice(id.as_bytes());
-        }
+        for obj in &objects { binary.extend_from_slice(bytes_of(obj)); }
+        for id in &mesh_refs { binary.extend_from_slice(id.as_bytes()); }
         binary.extend_from_slice(&string_table);
 
         Ok(vec![BakeOutput {
@@ -902,10 +759,6 @@ impl Extractor for SceneExtractor {
 
 fn glm_to_array(m: &Mat4) -> [[f32; 4]; 4] {
     let mut r = [[0.0; 4]; 4];
-    for i in 0..4 {
-        for j in 0..4 {
-            r[i][j] = m[(i, j)];
-        }
-    }
+    for i in 0..4 { for j in 0..4 { r[i][j] = m[(i, j)]; } }
     r
 }
