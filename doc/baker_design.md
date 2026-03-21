@@ -458,8 +458,8 @@ flowchart TB
     subgraph i3_baker
         main[main.rs<br>CLI Entry Point]
         scan[scanner.rs<br>File Discovery]
-        reg[registry.rs<br>SQLite Cache]
         exec[executor.rs<br>Importer Dispatch + Rayon]
+        mtime[mtime_check.rs<br>Incremental Logic]
         writer[writer.rs<br>BundleWriter]
         err[error.rs<br>BakerError]
 
@@ -512,7 +512,7 @@ flowchart TB
 sequenceDiagram
     participant CLI as main.rs
     participant Scan as Scanner
-    participant Reg as Registry
+    participant MTime as MTimeChecker
     participant Pool as Rayon Pool
     participant Imp as Importer
     participant Ext as Extractors
@@ -521,10 +521,8 @@ sequenceDiagram
     CLI->>Scan: scan_directory source_dir, importers
     Scan-->>CLI: Vec of ScanResult
 
-    CLI->>Reg: open registry.db
-
     loop For each ScanResult
-        CLI->>Reg: should_rebake source_path
+        CLI->>MTime: should_rebake(source_path, target_catalog)
         alt Needs Rebake
             CLI->>Pool: spawn import + extract task
             Pool->>Imp: importer.import source_path
@@ -534,7 +532,6 @@ sequenceDiagram
             Ext-->>Pool: Vec of BakeOutput
             Pool-->>CLI: collect all outputs
             CLI->>Writer: add_asset for each output
-            CLI->>Reg: update_asset
         end
     end
 

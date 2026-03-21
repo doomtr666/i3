@@ -17,8 +17,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parent()
         .unwrap(); // debug/release
 
-    let helmet_src = manifest_path.join("../../assets/DamagedHelmet.glb");
-    let sponza_src = manifest_path.join("../../assets/Sponza/glTF/Sponza.gltf");
+    let helmet_src = manifest_path
+        .join("../../assets/gltf-sample-assets/Models/DamagedHelmet/glTF-Binary/DamagedHelmet.glb");
+    let sponza_src =
+        manifest_path.join("../../assets/gltf-sample-assets/Models/Sponza/glTF/Sponza.gltf");
     let bistro_ext_src = manifest_path.join("../../assets/Bistro_v5_2/BistroExterior.fbx");
     let bistro_int_src = manifest_path.join("../../assets/Bistro_v5_2/BistroInterior.fbx");
 

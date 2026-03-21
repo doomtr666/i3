@@ -15,14 +15,20 @@ i3/
 │   ├── i3_vulkan_backend/   # Vulkan 1.3 Implementation
 │   ├── i3_dx12_backend/     # DX12 Implementation (Future)
 │   ├── i3_null_backend/     # Logging & Validation Oracle
-│   └── i3_slang/           # Slang compiler wrapper & reflection
+│   ├── i3_slang/           # Slang compiler wrapper & reflection
+│   ├── i3_renderer/        # Default Render Pipeline (Deferred Clustered)
+│   ├── i3_baker/           # Asset Baking Toolchain
+│   ├── i3_io/              # VFS & Asset Loading Logic
+│   ├── i3_bundle/          # Asset Bundle Format & Packing
+│   └── i3_egui/            # Egui integration
 ├── doc/                    # Architecture & Design Docs
 │   ├── engine_hld.md       # This file
 │   └── frame_graph_design.md
+├── examples/               # Usage examples (Viewer, etc.)
 ├── third_party/            # Native dependencies & build support
 │   ├── libs/               # Downloaded binaries (gitignored)
 │   └── build-support/      # Shared build scripts
-└── tests/                  # Cross-crate integration tests (if any)
+└── tools/                  # Internal development tools (Diagnostics)
 ```
 
 ## 2. Core Components

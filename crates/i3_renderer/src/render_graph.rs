@@ -182,15 +182,11 @@ impl DefaultRenderGraph {
         let exe_dir = exe_path.parent().unwrap();
 
         let local_assets = std::path::Path::new("assets");
-        let catalog_path = if local_assets.exists() {
-            local_assets.join("system.i3c")
+        let catalog_path = local_assets.join("system.i3c");
+        let (catalog_path, blob_path) = if catalog_path.exists() {
+            (catalog_path, local_assets.join("system.i3b"))
         } else {
-            exe_dir.join("system.i3c")
-        };
-        let blob_path = if local_assets.exists() {
-            local_assets.join("system.i3b")
-        } else {
-            exe_dir.join("system.i3b")
+            (exe_dir.join("system.i3c"), exe_dir.join("system.i3b"))
         };
 
         // Cooperative Asset Loading: 
