@@ -13,5 +13,6 @@ ash.workspace = true
 sdl2.workspace = true
 vk-mem.workspace = true
 tracing.workspace = true
-i3_io.workspace = true
+i3_io = { workspace = true }
+rayon = { workspace = true }
 postcard = { workspace = true }

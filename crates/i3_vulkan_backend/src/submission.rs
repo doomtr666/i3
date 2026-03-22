@@ -132,6 +132,10 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
                 .handle
                 .reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
                 .expect("Failed to reset thread command pool");
+            device
+                .handle
+                .reset_descriptor_pool(tp.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .expect("Failed to reset thread descriptor pool");
             tp.cursor = 0;
         }
     }

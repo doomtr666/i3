@@ -44,6 +44,7 @@ use crate::resource_arena::PhysicalPipeline;
 /// Per-thread command pool for parallel command recording.
 pub(crate) struct ThreadCommandPool {
     pub(crate) pool: vk::CommandPool,
+    pub(crate) descriptor_pool: vk::DescriptorPool,
     pub(crate) allocated: Vec<vk::CommandBuffer>,
     pub(crate) cursor: usize,
 }
@@ -735,9 +736,9 @@ pub fn record_barriers(
     }
 
     let device = backend.get_device().clone();
-    let thread_idx = 0;
+    let thread_idx = rayon::current_thread_index().unwrap_or(0);
     let frame_ctx = &backend.frame_contexts[backend.global_frame_index];
-    let mut tp = frame_ctx.per_thread_pools[thread_idx].lock().unwrap();
+    let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
     // Allocate Command Buffer from Thread Pool
     let cmd = if tp.cursor < tp.allocated.len() {
@@ -854,9 +855,9 @@ pub fn record_pass(
 ) {
     let device = backend.get_device().clone();
 
-    let thread_idx = 0;
+    let thread_idx = rayon::current_thread_index().unwrap_or(0);
     let frame_ctx = &backend.frame_contexts[backend.global_frame_index];
-    let mut tp = frame_ctx.per_thread_pools[thread_idx].lock().unwrap();
+    let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
     // Allocate Command Buffer from Thread Pool
     let cmd = if tp.cursor < tp.allocated.len() {

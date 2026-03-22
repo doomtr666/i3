@@ -1,4 +1,4 @@
-﻿use ash::vk;
+use ash::vk;
 use ash::vk::Handle;
 use i3_gfx::graph::backend::RenderBackendInternal;
 use i3_gfx::graph::backend::*;
@@ -271,8 +271,15 @@ impl VulkanBackend {
                             None,
                         )
                         .map_err(|e| e.to_string())?;
+
+                    let tp_d_pool = device
+                        .handle
+                        .create_descriptor_pool(&pool_info, None)
+                        .map_err(|e| e.to_string())?;
+
                     per_thread_pools.push(std::sync::Mutex::new(ThreadCommandPool {
                         pool: tp,
+                        descriptor_pool: tp_d_pool,
                         allocated: Vec::new(),
                         cursor: 0,
                     }));
@@ -968,9 +975,9 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         let device = self.get_device().clone();
-        let thread_idx = 0;
+        let thread_idx = rayon::current_thread_index().unwrap_or(0);
         let frame_ctx = &self.frame_contexts[self.global_frame_index];
-        let mut tp = frame_ctx.per_thread_pools[thread_idx].lock().unwrap();
+        let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
         // Allocate Command Buffer from Thread Pool
         let cmd = if tp.cursor < tp.allocated.len() {
@@ -1052,9 +1059,9 @@ impl RenderBackendInternal for VulkanBackend {
     ) {
         let device = self.get_device().clone();
 
-        let thread_idx = 0;
+        let thread_idx = rayon::current_thread_index().unwrap_or(0);
         let frame_ctx = &self.frame_contexts[self.global_frame_index];
-        let mut tp = frame_ctx.per_thread_pools[thread_idx].lock().unwrap();
+        let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
         // Allocate Command Buffer from Thread Pool
         let cmd = if tp.cursor < tp.allocated.len() {
@@ -1095,7 +1102,7 @@ impl RenderBackendInternal for VulkanBackend {
             present_request: None,
             backend: self as *const Self as *mut Self,
             pipeline: None,
-            descriptor_pool: frame_ctx.descriptor_pool,
+            descriptor_pool: tp.descriptor_pool,
             current_pipeline_layout: vk::PipelineLayout::null(),
             current_bind_point: vk::PipelineBindPoint::GRAPHICS,
             pending_descriptor_sets: prepared.descriptor_sets.clone(),
@@ -1265,6 +1272,9 @@ impl Drop for VulkanBackend {
                     for tp_mutex in &ctx.per_thread_pools {
                         let tp = tp_mutex.lock().unwrap();
                         device.handle.destroy_command_pool(tp.pool, None);
+                        device
+                            .handle
+                            .destroy_descriptor_pool(tp.descriptor_pool, None);
                     }
                 }
 

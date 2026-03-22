@@ -4,6 +4,7 @@ use crate::graph::backend::{
 };
 use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::types::*;
+use rayon::prelude::*;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -925,20 +926,28 @@ impl CompiledGraph {
                     }
                 }
                 ExecutionStep::ExecuteParallel(pass_indices) => {
-                    for &pass_idx in pass_indices {
-                        if let Some(prepared) = &prepared_passes[pass_idx] {
-                            let flat = &self.flat_passes[pass_idx];
-                            if let Some(node_ptr) = node_map.get(&flat.node_id) {
-                                let node = unsafe { &mut *node_ptr.0 };
-                                let (_sem, cb, present_req) =
-                                    backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
-                                if let Some(c) = cb {
-                                    all_command_buffers.push(c);
-                                }
-                                if let Some(h) = present_req {
-                                    backend.mark_image_as_presented(h);
+                    let parallel_results: Vec<_> = pass_indices
+                        .par_iter()
+                        .filter_map(|&pass_idx| {
+                            if let Some(prepared) = &prepared_passes[pass_idx] {
+                                let flat = &self.flat_passes[pass_idx];
+                                if let Some(node_ptr) = node_map.get(&flat.node_id) {
+                                    let node = unsafe { &mut *node_ptr.0 };
+                                    let (_sem, cb, present_req) = backend
+                                        .record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
+                                    return Some((cb, present_req));
                                 }
                             }
+                            None
+                        })
+                        .collect();
+
+                    for (cb, present_req) in parallel_results {
+                        if let Some(c) = cb {
+                            all_command_buffers.push(c);
+                        }
+                        if let Some(h) = present_req {
+                            backend.mark_image_as_presented(h);
                         }
                     }
                 }
