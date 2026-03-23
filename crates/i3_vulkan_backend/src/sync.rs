@@ -300,6 +300,9 @@ pub fn get_buffer_state(
     } else if usage.intersects(ResourceUsage::TRANSFER_READ) {
         access = vk::AccessFlags2::TRANSFER_READ;
         stage = vk::PipelineStageFlags2::TRANSFER;
+    } else if usage.intersects(ResourceUsage::INDIRECT_READ) {
+        access = vk::AccessFlags2::INDIRECT_COMMAND_READ;
+        stage = vk::PipelineStageFlags2::DRAW_INDIRECT;
     }
 
     (access, stage)

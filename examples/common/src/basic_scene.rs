@@ -5,7 +5,7 @@ use i3_gfx::prelude::*;
 use i3_io::mesh::{IndexFormat, MeshAsset};
 use i3_io::scene_asset::{LightType as AssetLightType, SceneAsset};
 use i3_renderer::scene::{
-    LightData, LightId, LightType, MaterialData, MaterialId, Mesh, ObjectData, ObjectId,
+    GpuInstanceData, GpuMeshDescriptor, LightData, LightId, LightType, MaterialData, MaterialId, Mesh, ObjectData, ObjectId,
     SceneProvider,
 };
 use nalgebra_glm as glm;
@@ -85,7 +85,7 @@ impl BasicScene {
     ) -> u32 {
         let vb = backend.create_buffer(&BufferDesc {
             size: vertices.len() as u64,
-            usage: BufferUsageFlags::VERTEX_BUFFER,
+            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
             memory: MemoryType::CpuToGpu,
         });
         backend
@@ -100,7 +100,7 @@ impl BasicScene {
         };
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
-            usage: BufferUsageFlags::INDEX_BUFFER,
+            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
             memory: MemoryType::CpuToGpu,
         });
         backend
@@ -226,7 +226,7 @@ impl BasicScene {
         // Create vertex buffer
         let vb = backend.create_buffer(&BufferDesc {
             size: mesh_asset.vertex_data.len() as u64,
-            usage: BufferUsageFlags::VERTEX_BUFFER,
+            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
             memory: MemoryType::CpuToGpu,
         });
         debug!(
@@ -240,7 +240,7 @@ impl BasicScene {
         // Create index buffer
         let ib = backend.create_buffer(&BufferDesc {
             size: mesh_asset.index_data.len() as u64,
-            usage: BufferUsageFlags::INDEX_BUFFER,
+            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
             memory: MemoryType::CpuToGpu,
         });
         backend
@@ -447,6 +447,49 @@ impl SceneProvider for BasicScene {
 
     fn mesh(&self, id: u32) -> &Mesh {
         &self.meshes[id as usize]
+    }
+
+    fn mesh_descriptor_count(&self) -> usize {
+        self.meshes.len()
+    }
+
+    fn iter_mesh_descriptors<'a>(&'a self, backend: &'a dyn RenderBackend) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
+        Box::new(self.meshes.iter().enumerate().map(|(i, m)| {
+            let desc = GpuMeshDescriptor {
+                vertex_buffer_address: backend.get_buffer_device_address(m.vertex_buffer),
+                index_buffer_address:  backend.get_buffer_device_address(m.index_buffer),
+                index_count:           m.index_count,
+                vertex_stride:         m.stride,
+                first_index:           0, 
+                vertex_offset:         0, 
+                aabb_min:              [0.0; 3], 
+                _pad0:                 0.0,
+                aabb_max:              [0.0; 3],
+                _pad1:                 0.0,
+            };
+            (i as u32, desc)
+        }))
+    }
+
+    fn iter_dirty_mesh_descriptors<'a>(&'a self, backend: &'a dyn RenderBackend) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
+        self.iter_mesh_descriptors(backend)
+    }
+
+    fn iter_instances(&self) -> Box<dyn Iterator<Item = GpuInstanceData> + '_> {
+        Box::new(self.objects.iter().map(|(_, obj)| {
+            GpuInstanceData {
+                world_transform: obj.world_transform,
+                prev_transform:  obj.prev_transform,
+                mesh_idx:        obj.mesh_id,
+                material_id:     obj.material_id,
+                flags:           0,
+                _pad:            0,
+                world_aabb_min:  [0.0; 3], 
+                _pad2:           0.0,
+                world_aabb_max:  [0.0; 3],
+                _pad3:           0.0,
+            }
+        }))
     }
 }
 

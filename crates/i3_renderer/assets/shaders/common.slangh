@@ -19,6 +19,33 @@ struct CommonData
     uint lightCount;
 };
 
+// --- GPU-Driven Structures ---
+struct GpuMeshDescriptor {
+    uint64_t vertexBufferAddress;
+    uint64_t indexBufferAddress;
+    uint     indexCount;
+    uint     vertexStride;
+    uint     firstIndex;
+    int      vertexOffset;
+    float3   aabbMin;
+    float    _pad0;
+    float3   aabbMax;
+    float    _pad1;
+};
+
+struct GpuInstanceData {
+    float4x4 worldTransform;
+    float4x4 prevTransform;
+    uint     meshIdx;
+    uint     materialId;
+    uint     flags;
+    uint     _pad;
+    float3   worldAabbMin;
+    float    _pad2;
+    float3   worldAabbMax;
+    float    _pad3;
+};
+
 // --- Material Data (Standardized for GBuffer) ---
 struct MaterialData
 {

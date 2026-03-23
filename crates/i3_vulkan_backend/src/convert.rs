@@ -127,6 +127,9 @@ pub fn convert_buffer_usage_flags(usage_flags: BufferUsageFlags) -> vk::BufferUs
     if usage_flags.contains(BufferUsageFlags::INDIRECT_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::INDIRECT_BUFFER;
     }
+    if usage_flags.contains(BufferUsageFlags::DEVICE_ADDRESS) {
+        vk_usage_flags |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+    }
 
     vk_usage_flags
 }

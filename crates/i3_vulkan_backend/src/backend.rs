@@ -509,6 +509,15 @@ impl RenderBackend for VulkanBackend {
         Ok(())
     }
 
+    fn get_buffer_device_address(&self, handle: BackendBuffer) -> u64 {
+        if let Some(buf) = self.buffers.get(handle.0) {
+            let info = vk::BufferDeviceAddressInfo::default().buffer(buf.buffer);
+            unsafe { self.get_device().handle.get_buffer_device_address(&info) }
+        } else {
+            0
+        }
+    }
+
     fn create_window(&mut self, desc: WindowDesc) -> Result<WindowHandle, String> {
         crate::window_context::create_window(self, desc)
     }

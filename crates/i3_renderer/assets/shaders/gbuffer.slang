@@ -2,26 +2,29 @@
 #include "common.slangh"
 
 // Bindings
-[vk::binding(0, 1)]
+[[vk::binding(0, 1)]]
+StructuredBuffer<GpuMeshDescriptor> meshDescriptors;
+
+[[vk::binding(1, 1)]]
+StructuredBuffer<GpuInstanceData> instances;
+
+[[vk::binding(2, 1)]]
 StructuredBuffer<MaterialData> materials;
 
 struct PushConstants
 {
     float4x4 viewProjection;
-    float4x4 model;
-    uint materialId;
-    uint3 _pad;
 };
 
 [[vk::push_constant]]
 PushConstants pc;
 
-struct VertexInput
+struct Vertex
 {
-    [[vk::location(0)]] float3 position : POSITION;
-    [[vk::location(1)]] float3 normal   : NORMAL;
-    [[vk::location(2)]] float2 uv       : TEXCOORD0;
-    [[vk::location(3)]] float4 tangent  : TANGENT;
+    float3 position;
+    float3 normal;
+    float2 uv;
+    float4 tangent;
 };
 
 struct VertexOutput
@@ -31,6 +34,7 @@ struct VertexOutput
     float3 worldTangent : TANGENT;
     float3 worldBitangent : BITANGENT;
     float2 uv           : TEXCOORD0;
+    [[vk::flat]] uint materialId : MAT_ID;
 };
 
 struct GBufferOutput
@@ -42,30 +46,44 @@ struct GBufferOutput
 };
 
 [shader("vertex")]
-VertexOutput vertexMain(VertexInput input)
+VertexOutput vertexMain(uint indexId : SV_VertexID, uint instanceId : SV_InstanceID)
 {
+    GpuInstanceData instance = instances[instanceId];
+    GpuMeshDescriptor mesh = meshDescriptors[instance.meshIdx];
+    
+    // Vertex Pulling via BDA
+    uint vertexIdx;
+    if (mesh.indexCount > 0) {
+        vertexIdx = ((uint*)mesh.indexBufferAddress)[indexId];
+    } else {
+        vertexIdx = indexId;
+    }
+    
+    Vertex v = ((Vertex*)mesh.vertexBufferAddress)[vertexIdx];
+
     VertexOutput output;
-    float4 worldPos = mul(pc.model, float4(input.position, 1.0));
+    float4 worldPos = mul(instance.worldTransform, float4(v.position, 1.0));
     output.clipPosition = mul(pc.viewProjection, worldPos);
 
-    float3x3 normalMatrix = (float3x3)pc.model;
-    float3 worldNormal = normalize(mul(normalMatrix, input.normal));
-    float3 worldTangent = normalize(mul(normalMatrix, input.tangent.xyz));
+    float3x3 normalMatrix = (float3x3)instance.worldTransform;
+    float3 worldNormal = normalize(mul(normalMatrix, v.normal));
+    float3 worldTangent = normalize(mul(normalMatrix, v.tangent.xyz));
     
     worldTangent = normalize(worldTangent - dot(worldTangent, worldNormal) * worldNormal);
-    float3 worldBitangent = cross(worldNormal, worldTangent) * input.tangent.w;
+    float3 worldBitangent = cross(worldNormal, worldTangent) * v.tangent.w;
 
     output.worldNormal = worldNormal;
     output.worldTangent = worldTangent;
     output.worldBitangent = worldBitangent;
-    output.uv = input.uv;
+    output.uv = v.uv;
+    output.materialId = instance.materialId;
     return output;
 }
 
 [shader("fragment")]
 GBufferOutput fragmentMain(VertexOutput input)
 {
-    MaterialData mat = materials[pc.materialId];
+    MaterialData mat = materials[input.materialId];
     
     float4 albedo = float4(mat.baseColorFactor);
     if (mat.textureIndices.x >= 0)

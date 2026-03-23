@@ -1,29 +1,25 @@
-use crate::scene::{MaterialData, ObjectData};
+use crate::scene::{MaterialData, GpuMeshDescriptor, GpuInstanceData};
 use i3_gfx::prelude::*;
 
-pub struct ObjectSyncPass {
-    pub max_objects: usize,
-
-    // Resolved handles (updated in record)
-    object_buffer: BufferHandle,
-    staging_buffer: Option<BufferHandle>,
-    objects: Vec<(u64, ObjectData)>,
+pub struct MeshRegistrySyncPass {
+    mesh_descriptors:       Vec<(u32, GpuMeshDescriptor)>,
+    mesh_descriptor_buffer: BufferHandle,
+    staging_buffer:         Option<BufferHandle>,
 }
 
-impl ObjectSyncPass {
-    pub fn new(max_objects: usize) -> Self {
+impl MeshRegistrySyncPass {
+    pub fn new() -> Self {
         Self {
-            object_buffer: BufferHandle::INVALID,
-            max_objects,
-            staging_buffer: None,
-            objects: Vec::new(),
+            mesh_descriptors:       Vec::new(),
+            mesh_descriptor_buffer: BufferHandle::INVALID,
+            staging_buffer:         None,
         }
     }
 }
 
-impl RenderPass for ObjectSyncPass {
+impl RenderPass for MeshRegistrySyncPass {
     fn name(&self) -> &str {
-        "ObjectSyncPass"
+        "MeshRegistrySyncPass"
     }
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
@@ -32,32 +28,22 @@ impl RenderPass for ObjectSyncPass {
         if builder.is_setup() {
             return;
         }
-        self.object_buffer = builder.resolve_buffer("ObjectBuffer");
 
-        let objects = builder.consume::<Vec<(u64, ObjectData)>>("SceneObjects");
-        self.objects = objects.clone();
-        let count = self.objects.len();
+        self.mesh_descriptor_buffer = builder.resolve_buffer("MeshDescriptorBuffer");
 
-        // 1. Write to the target persistent SSBO
-        builder.write_buffer(self.object_buffer, ResourceUsage::WRITE);
+        let mesh_descriptors = builder.consume::<Vec<(u32, GpuMeshDescriptor)>>("SceneMeshDescriptors");
+        self.mesh_descriptors = mesh_descriptors.clone();
+        let count = self.mesh_descriptors.len();
 
-        // 2. Allocate a transient staging buffer
+        builder.write_buffer(self.mesh_descriptor_buffer, ResourceUsage::WRITE);
+
         if count > 0 {
-            let mut max_id = 0;
-            for (id, _) in &self.objects {
-                if *id as usize > max_id {
-                    max_id = *id as usize;
-                }
-            }
-            let array_len = max_id + 1;
-
-            let staging_size = (array_len * std::mem::size_of::<ObjectData>()) as u64;
-            let staging_desc = BufferDesc {
+            let staging_size = (count * std::mem::size_of::<GpuMeshDescriptor>()) as u64;
+            let staging = builder.declare_buffer("MeshRegistrySync_Staging", BufferDesc {
                 size: staging_size,
                 usage: BufferUsageFlags::TRANSFER_SRC,
                 memory: MemoryType::CpuToGpu,
-            };
-            let staging = builder.declare_buffer("ObjectSync_Staging", staging_desc);
+            });
             builder.read_buffer(staging, ResourceUsage::READ);
             self.staging_buffer = Some(staging);
         } else {
@@ -67,45 +53,15 @@ impl RenderPass for ObjectSyncPass {
 
     fn execute(&self, ctx: &mut dyn PassContext) {
         if let Some(staging) = self.staging_buffer {
-            let mut max_id = 0;
-            for (id, _) in &self.objects {
-                if *id as usize > max_id {
-                    max_id = *id as usize;
-                }
-            }
+            let count = self.mesh_descriptors.len();
+            if count == 0 { return; }
 
-            let count = if !self.objects.is_empty() {
-                max_id + 1
-            } else {
-                0
-            };
-
-            if count == 0 {
-                return;
-            }
-
-            let mut objects = vec![
-                ObjectData {
-                    world_transform: nalgebra_glm::Mat4::identity(),
-                    prev_transform: nalgebra_glm::Mat4::identity(),
-                    material_id: 0,
-                    mesh_id: 0,
-                    flags: 0,
-                    _pad: 0,
-                };
-                count
-            ];
-
-            for (id, data) in &self.objects {
-                objects[*id as usize] = data.clone();
-            }
-
-            let size = (count * std::mem::size_of::<ObjectData>()) as u64;
+            let size = (count * std::mem::size_of::<GpuMeshDescriptor>()) as u64;
             let ptr = ctx.map_buffer(staging);
             if !ptr.is_null() {
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        objects.as_ptr() as *const u8,
+                        self.mesh_descriptors.as_ptr() as *const u8,
                         ptr,
                         size as usize,
                     );
@@ -113,8 +69,80 @@ impl RenderPass for ObjectSyncPass {
                 ctx.unmap_buffer(staging);
             }
 
-            // Copy from staging to main SSBO
-            ctx.copy_buffer(staging, self.object_buffer, 0, 0, size);
+            ctx.copy_buffer(staging, self.mesh_descriptor_buffer, 0, 0, size);
+        }
+    }
+}
+
+pub struct InstanceSyncPass {
+    instances:       Vec<GpuInstanceData>,
+    instance_buffer: BufferHandle,
+    staging_buffer:  Option<BufferHandle>,
+}
+
+impl InstanceSyncPass {
+    pub fn new() -> Self {
+        Self {
+            instances:       Vec::new(),
+            instance_buffer: BufferHandle::INVALID,
+            staging_buffer:  None,
+        }
+    }
+}
+
+impl RenderPass for InstanceSyncPass {
+    fn name(&self) -> &str {
+        "InstanceSyncPass"
+    }
+
+    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+
+    fn record(&mut self, builder: &mut PassBuilder) {
+        if builder.is_setup() {
+            return;
+        }
+
+        self.instance_buffer = builder.resolve_buffer("InstanceBuffer");
+
+        let instances = builder.consume::<Vec<GpuInstanceData>>("SceneInstances");
+        self.instances = instances.clone();
+        let count = self.instances.len();
+
+        builder.write_buffer(self.instance_buffer, ResourceUsage::WRITE);
+
+        if count > 0 {
+            let staging_size = (count * std::mem::size_of::<GpuInstanceData>()) as u64;
+            let staging = builder.declare_buffer("InstanceSync_Staging", BufferDesc {
+                size: staging_size,
+                usage: BufferUsageFlags::TRANSFER_SRC,
+                memory: MemoryType::CpuToGpu,
+            });
+            builder.read_buffer(staging, ResourceUsage::READ);
+            self.staging_buffer = Some(staging);
+        } else {
+            self.staging_buffer = None;
+        }
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext) {
+        if let Some(staging) = self.staging_buffer {
+            let count = self.instances.len();
+            if count == 0 { return; }
+
+            let size = (count * std::mem::size_of::<GpuInstanceData>()) as u64;
+            let ptr = ctx.map_buffer(staging);
+            if !ptr.is_null() {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.instances.as_ptr() as *const u8,
+                        ptr,
+                        size as usize,
+                    );
+                }
+                ctx.unmap_buffer(staging);
+            }
+
+            ctx.copy_buffer(staging, self.instance_buffer, 0, 0, size);
         }
     }
 }

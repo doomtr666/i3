@@ -230,6 +230,7 @@ bitflags! {
         const INDEX_BUFFER = 0x40;
         const VERTEX_BUFFER = 0x80;
         const INDIRECT_BUFFER = 0x100;
+        const DEVICE_ADDRESS = 0x200;
     }
 }
 
@@ -315,6 +316,8 @@ bitflags! {
         const TRANSFER_READ = 1 << 6;
         const TRANSFER_WRITE = 1 << 7;
         const PRESENT = 1 << 8;
+
+        const INDIRECT_READ = 1 << 10;
     }
 }
 

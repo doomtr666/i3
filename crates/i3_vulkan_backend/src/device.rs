@@ -73,20 +73,23 @@ impl VulkanDevice {
 
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .buffer_device_address(true)
+            .draw_indirect_count(true)
             .timeline_semaphore(true)
             .descriptor_indexing(true)
             .shader_sampled_image_array_non_uniform_indexing(true)
             .runtime_descriptor_array(true)
             .descriptor_binding_variable_descriptor_count(true)
             .descriptor_binding_sampled_image_update_after_bind(true)
-            .descriptor_binding_partially_bound(true);
+            .descriptor_binding_partially_bound(true)
+            .scalar_block_layout(true);
 
         let mut features11 =
             vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
 
         let features10 = vk::PhysicalDeviceFeatures::default()
             .fill_mode_non_solid(true)
-            .sampler_anisotropy(true);
+            .sampler_anisotropy(true)
+            .shader_int64(true);
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features10)
@@ -126,9 +129,11 @@ impl VulkanDevice {
         #[cfg(debug_assertions)]
         let debug_utils = ash::ext::debug_utils::Device::new(&instance.handle, &handle);
 
-        // Initialize VMA Allocator
-        let allocator_create_info =
+        // Initialize VMA Allocator with BDA support
+        let mut allocator_create_info =
             AllocatorCreateInfo::new(&instance.handle, &handle, physical_device);
+        allocator_create_info.flags = vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+
         let allocator = unsafe { Allocator::new(allocator_create_info) }
             .map_err(|e| format!("Failed to create VMA allocator: {}", e))?;
 
