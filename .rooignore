@@ -1,6 +1,5 @@
-assets/
+/assets/
 old/
-logs/
 target/
 third_party/libs
 third_party/target

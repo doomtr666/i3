@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "draw_call_gen",
+    shader: Path("../shaders/draw_call_gen.slang"),
+    graphics: None,
+)

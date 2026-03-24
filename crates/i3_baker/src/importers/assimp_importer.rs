@@ -388,12 +388,15 @@ fn extract_materials(
                         .ok()
                         .flatten()
                 })
+                .map(|r| (r * 1.5).clamp(0.0, 1.0)) // Scale existing roughness even more
                 .unwrap_or_else(|| {
                     if metallic_roughness.is_some() {
                         1.0
                     } else {
-                        // Derive from shininess (FBX 0-100ish range)
-                        (2.0 / (shininess + 2.0)).sqrt().clamp(0.0, 1.0)
+                        // Derive from shininess (FBX 0-100ish range). 
+                        // Using a very conservative mapping to reduce "too shiny" look.
+                        let s = shininess.max(0.0);
+                        (2.0 / (s / 4.0 + 2.0)).sqrt().clamp(0.1, 1.0)
                     }
                 });
 
@@ -475,22 +478,8 @@ fn build_mesh_output(
     let stride = vertex_format.stride();
     let vertex_data: Vec<u8> = mesh.vertices.iter().flat_map(|f| f.to_ne_bytes()).collect();
 
-    let max_index = mesh.indices.iter().copied().max().unwrap_or(0);
-    let (index_format, index_data): (IndexFormat, Vec<u8>) = if max_index > u16::MAX as u32 {
-        (
-            IndexFormat::U32,
-            mesh.indices.iter().flat_map(|i| i.to_ne_bytes()).collect(),
-        )
-    } else {
-        (
-            IndexFormat::U16,
-            mesh.indices
-                .iter()
-                .map(|&i| i as u16)
-                .flat_map(|i| i.to_ne_bytes())
-                .collect(),
-        )
-    };
+    let index_format = IndexFormat::U32;
+    let index_data: Vec<u8> = mesh.indices.iter().flat_map(|i| i.to_ne_bytes()).collect();
 
     let bounds = calculate_bounds(&mesh.vertices, stride as usize / 4);
     let header = MeshHeader {

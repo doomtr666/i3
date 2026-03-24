@@ -1,4 +1,5 @@
 use i3_gfx::prelude::*;
+use crate::scene::{GpuMeshDescriptor, GpuInstanceData};
 
 /// Manages persistent GPU buffers for the renderer's scene data.
 ///
@@ -9,6 +10,13 @@ pub struct GpuBuffers {
     pub material_buffer: BackendBuffer,
     pub light_buffer: BackendBuffer,
     pub camera_ubo: BackendBuffer,
+
+    // GPU-Driven Rendering Buffers
+    pub mesh_descriptor_buffer: BackendBuffer,
+    pub instance_buffer:        BackendBuffer,
+    pub draw_call_buffer:       BackendBuffer,
+    pub draw_count_buffer:      BackendBuffer,
+    pub visible_instance_buffer: BackendBuffer,
 }
 
 /// Per-frame camera data uploaded to the CameraUBO.
@@ -55,12 +63,39 @@ impl GpuBuffers {
             })
         };
 
-        #[allow(unused_mut)]
-        let mut buffers = Self {
+        // GPU-Driven Buffers
+        let max_meshes = 16384;
+        let max_instances = 262144;
+
+        let mesh_descriptor_buffer_size = max_meshes * std::mem::size_of::<GpuMeshDescriptor>() as u64;
+        let instance_buffer_size = max_instances * std::mem::size_of::<GpuInstanceData>() as u64;
+        let draw_call_buffer_size = max_instances * 16; // DrawIndirectCommand is 16 bytes
+        let draw_count_buffer_size = 16; // 4 bytes + padding
+        let visible_instance_buffer_size = max_instances * 4;
+
+        let buffers = Self {
             object_buffer: create_storage(backend, object_buffer_size),
             material_buffer: create_storage(backend, material_buffer_size),
             light_buffer: create_storage(backend, light_buffer_size),
             camera_ubo: create_ubo(backend, camera_ubo_size),
+
+            mesh_descriptor_buffer: create_storage(backend, mesh_descriptor_buffer_size),
+            instance_buffer:        create_storage(backend, instance_buffer_size),
+            draw_call_buffer: backend.create_buffer(&BufferDesc {
+                size: draw_call_buffer_size,
+                usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::INDIRECT_BUFFER | BufferUsageFlags::TRANSFER_DST,
+                memory: MemoryType::GpuOnly,
+            }),
+            draw_count_buffer: backend.create_buffer(&BufferDesc {
+                size: draw_count_buffer_size,
+                usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::INDIRECT_BUFFER | BufferUsageFlags::TRANSFER_DST,
+                memory: MemoryType::GpuOnly,
+            }),
+            visible_instance_buffer: backend.create_buffer(&BufferDesc {
+                size: visible_instance_buffer_size,
+                usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+                memory: MemoryType::GpuOnly,
+            }),
         };
 
         #[cfg(debug_assertions)]
@@ -69,6 +104,11 @@ impl GpuBuffers {
             backend.set_buffer_name(buffers.material_buffer, "MaterialBuffer");
             backend.set_buffer_name(buffers.light_buffer, "LightBuffer");
             backend.set_buffer_name(buffers.camera_ubo, "CameraUBO");
+            backend.set_buffer_name(buffers.mesh_descriptor_buffer, "MeshDescriptorBuffer");
+            backend.set_buffer_name(buffers.instance_buffer, "InstanceBuffer");
+            backend.set_buffer_name(buffers.draw_call_buffer, "DrawCallBuffer");
+            backend.set_buffer_name(buffers.draw_count_buffer, "DrawCountBuffer");
+            backend.set_buffer_name(buffers.visible_instance_buffer, "VisibleInstanceBuffer");
         }
 
         buffers

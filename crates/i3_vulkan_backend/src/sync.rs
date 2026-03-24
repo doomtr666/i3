@@ -294,12 +294,15 @@ pub fn get_buffer_state(
         } else {
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER
         };
-    } else if usage.intersects(ResourceUsage::TRANSFER_WRITE) {
+    } else if usage.intersects(ResourceUsage::TRANSFER_WRITE | ResourceUsage::WRITE) {
         access = vk::AccessFlags2::TRANSFER_WRITE;
         stage = vk::PipelineStageFlags2::TRANSFER;
-    } else if usage.intersects(ResourceUsage::TRANSFER_READ) {
+    } else if usage.intersects(ResourceUsage::TRANSFER_READ | ResourceUsage::READ) {
         access = vk::AccessFlags2::TRANSFER_READ;
         stage = vk::PipelineStageFlags2::TRANSFER;
+    } else if usage.intersects(ResourceUsage::INDIRECT_READ) {
+        access = vk::AccessFlags2::INDIRECT_COMMAND_READ;
+        stage = vk::PipelineStageFlags2::DRAW_INDIRECT;
     }
 
     (access, stage)

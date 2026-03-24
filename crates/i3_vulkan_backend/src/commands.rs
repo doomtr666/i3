@@ -357,6 +357,62 @@ impl PassContext for VulkanPassContext {
             device.handle.cmd_dispatch(self.cmd, x, y, z);
         }
     }
+    
+    fn draw_indexed_indirect_count(
+        &mut self,
+        indirect_buffer: BufferHandle,
+        indirect_offset: u64,
+        count_buffer: BufferHandle,
+        count_offset: u64,
+        max_draw_count: u32,
+        stride: u32,
+    ) {
+        let indirect_buf = self.backend().resolve_buffer(indirect_buffer);
+        let count_buf = self.backend().resolve_buffer(count_buffer);
+        
+        let indirect_vk = self.backend().buffers.get(indirect_buf.0).unwrap().buffer;
+        let count_vk = self.backend().buffers.get(count_buf.0).unwrap().buffer;
+        
+        unsafe {
+            self.device.handle.cmd_draw_indexed_indirect_count(
+                self.cmd,
+                indirect_vk,
+                indirect_offset,
+                count_vk,
+                count_offset,
+                max_draw_count,
+                stride,
+            );
+        }
+    }
+
+    fn draw_indirect_count(
+        &mut self,
+        indirect_buffer: BufferHandle,
+        indirect_offset: u64,
+        count_buffer: BufferHandle,
+        count_offset: u64,
+        max_draw_count: u32,
+        stride: u32,
+    ) {
+        let indirect_buf = self.backend().resolve_buffer(indirect_buffer);
+        let count_buf = self.backend().resolve_buffer(count_buffer);
+        
+        let indirect_vk = self.backend().buffers.get(indirect_buf.0).unwrap().buffer;
+        let count_vk = self.backend().buffers.get(count_buf.0).unwrap().buffer;
+        
+        unsafe {
+            self.device.handle.cmd_draw_indirect_count(
+                self.cmd,
+                indirect_vk,
+                indirect_offset,
+                count_vk,
+                count_offset,
+                max_draw_count,
+                stride,
+            );
+        }
+    }
 
     fn clear_buffer(&mut self, buffer: BufferHandle, clear_value: u32) {
         let physical_id =
@@ -915,22 +971,6 @@ pub fn record_pass(
     let is_compute = matches!(prepared.domain, PreparedDomain::Compute);
 
     if !is_compute {
-        // Dynamic Viewport/Scissor setup (Use resolved extent)
-        let viewport_extent = prepared.viewport_extent;
-        let viewport = vk::Viewport::default()
-            .x(0.0)
-            .y(viewport_extent.height as f32)
-            .width(viewport_extent.width as f32)
-            .height(-(viewport_extent.height as f32))
-            .min_depth(0.0)
-            .max_depth(1.0);
-        let scissor = vk::Rect2D::default().extent(viewport_extent);
-
-        unsafe {
-            device.handle.cmd_set_viewport(cmd, 0, &[viewport]);
-            device.handle.cmd_set_scissor(cmd, 0, &[scissor]);
-        }
-
         if let PreparedDomain::Graphics {
             color_attachments,
             color_count,
@@ -938,6 +978,16 @@ pub fn record_pass(
         } = &prepared.domain
         {
             if *color_count > 0 || depth_attachment.is_some() {
+                let viewport_extent = prepared.viewport_extent;
+                let viewport = vk::Viewport::default()
+                    .x(0.0)
+                    .y(viewport_extent.height as f32)
+                    .width(viewport_extent.width as f32)
+                    .height(-(viewport_extent.height as f32))
+                    .min_depth(0.0)
+                    .max_depth(1.0);
+                let scissor = vk::Rect2D::default().extent(viewport_extent);
+
                 let rendering_info = vk::RenderingInfo::default()
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D { x: 0, y: 0 },
@@ -954,6 +1004,8 @@ pub fn record_pass(
 
                 unsafe {
                     device.handle.cmd_begin_rendering(cmd, &rendering_info);
+                    device.handle.cmd_set_viewport(cmd, 0, &[viewport]);
+                    device.handle.cmd_set_scissor(cmd, 0, &[scissor]);
                 }
             }
         }

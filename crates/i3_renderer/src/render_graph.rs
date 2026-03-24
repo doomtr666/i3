@@ -1,11 +1,12 @@
 use crate::groups::{ClusteringGroup, PostProcessGroup, sync::SyncGroup};
+use crate::passes::cull::DrawCallGenPass;
 use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
 use crate::passes::deferred_resolve::DeferredResolvePass;
-use crate::passes::gbuffer::{self, DrawCommand, GBufferPass};
+use crate::passes::gbuffer::GBufferPass;
 use crate::passes::sky::SkyPass;
 use crate::scene::SceneProvider;
-use i3_gfx::prelude::*;
 use i3_egui::UiSystem;
+use i3_gfx::prelude::*;
 use std::sync::Arc;
 
 /// Shared data published to the FrameGraph blackboard.
@@ -74,6 +75,7 @@ impl RenderPass for PresentPass {
 pub struct DefaultRenderGraph {
     pub graph: FrameGraph,
     pub gbuffer_pass: GBufferPass,
+    pub draw_call_gen_pass: DrawCallGenPass,
     pub sky_pass: SkyPass,
     pub sync_group: SyncGroup,
     pub clustering_group: ClusteringGroup,
@@ -88,6 +90,9 @@ pub struct DefaultRenderGraph {
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
     pub bindless_manager: crate::bindless::BindlessManager,
     pub ui: Option<Arc<i3_egui::UiSystem>>,
+
+    // Scene data cached during sync() for record()
+    pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -118,6 +123,7 @@ impl DefaultRenderGraph {
         });
 
         let gbuffer_pass = GBufferPass::new();
+        let draw_call_gen_pass = DrawCallGenPass::new();
         let sky_pass = SkyPass::new();
         let clustering_group = ClusteringGroup::new();
         let deferred_resolve_pass = DeferredResolvePass::new(linear_sampler);
@@ -127,10 +133,7 @@ impl DefaultRenderGraph {
         let graph = FrameGraph::new();
         let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(_backend);
 
-        let sync_group = SyncGroup::new(
-            1024 * 64, // max_objects approx
-            1024 * 64, // max_materials approx
-        );
+        let sync_group = SyncGroup::new();
 
         let mut bindless_manager = crate::bindless::BindlessManager::new(
             1000, // Capacity for 1000 bindless global textures
@@ -158,6 +161,7 @@ impl DefaultRenderGraph {
         Self {
             graph,
             gbuffer_pass,
+            draw_call_gen_pass,
             sky_pass,
             sync_group,
             clustering_group,
@@ -171,6 +175,7 @@ impl DefaultRenderGraph {
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
             ui: None,
+            scene_mesh_descriptors: Vec::new(),
         }
     }
 
@@ -181,19 +186,26 @@ impl DefaultRenderGraph {
         let exe_path = std::env::current_exe().unwrap();
         let exe_dir = exe_path.parent().unwrap();
 
-        let local_assets = std::path::Path::new("assets");
-        let catalog_path = local_assets.join("system.i3c");
-        let (catalog_path, blob_path) = if catalog_path.exists() {
-            (catalog_path, local_assets.join("system.i3b"))
+        let catalog_path_exe = exe_dir.join("system.i3c");
+        let (catalog_path, blob_path) = if catalog_path_exe.exists() {
+            (catalog_path_exe, exe_dir.join("system.i3b"))
         } else {
-            (exe_dir.join("system.i3c"), exe_dir.join("system.i3b"))
+            let local_assets = std::path::Path::new("assets");
+            (
+                local_assets.join("system.i3c"),
+                local_assets.join("system.i3b"),
+            )
         };
 
-        // Cooperative Asset Loading: 
-        let loader = self.graph.try_consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader")
+        // Cooperative Asset Loading:
+        let loader = self
+            .graph
+            .try_consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader")
             .cloned()
             .unwrap_or_else(|| {
-                let loader = Arc::new(i3_io::asset::AssetLoader::new(Arc::new(i3_io::vfs::Vfs::new())));
+                let loader = Arc::new(i3_io::asset::AssetLoader::new(Arc::new(
+                    i3_io::vfs::Vfs::new(),
+                )));
                 self.graph.publish("AssetLoader", loader.clone());
                 loader
             });
@@ -202,16 +214,20 @@ impl DefaultRenderGraph {
         let vfs = loader.vfs();
         if catalog_path.exists() && blob_path.exists() {
             if let Ok(bundle) = i3_io::vfs::BundleBackend::mount(
-                catalog_path.to_str().unwrap(), 
-                blob_path.to_str().unwrap()
+                catalog_path.to_str().unwrap(),
+                blob_path.to_str().unwrap(),
             ) {
                 let _ = vfs.mount(Box::new(bundle));
-                tracing::info!("System bundle cooperatively mounted from {:?}", catalog_path.parent().unwrap());
+                tracing::info!(
+                    "System bundle cooperatively mounted from {:?}",
+                    catalog_path.parent().unwrap()
+                );
             }
         }
 
         // 1. Setup Phase: Register all potential passes
         let gbuffer_pass = &mut self.gbuffer_pass;
+        let draw_call_gen_pass = &mut self.draw_call_gen_pass;
         let sky_pass = &mut self.sky_pass;
         let sync_group = &mut self.sync_group;
         let clustering_group = &mut self.clustering_group;
@@ -221,6 +237,7 @@ impl DefaultRenderGraph {
 
         self.graph.setup(|builder| {
             builder.add_pass(gbuffer_pass);
+            builder.add_pass(draw_call_gen_pass);
             builder.add_pass(sky_pass);
             builder.add_pass(sync_group);
             builder.add_pass(clustering_group);
@@ -260,6 +277,9 @@ struct GpuLightData {
 impl DefaultRenderGraph {
     pub fn sync(&mut self, backend: &mut dyn RenderBackend, scene: &dyn SceneProvider) {
         self.temporal_registry.advance_frame();
+
+        // Prefetch mesh descriptors (they need RenderBackend to resolve BDA)
+        self.scene_mesh_descriptors = scene.iter_mesh_descriptors(backend).collect();
 
         let mut gpu_lights = Vec::with_capacity(1024);
         for (_, light) in scene.iter_lights() {
@@ -428,40 +448,16 @@ impl DefaultRenderGraph {
             light_count,
         };
 
-        // Extract draw commands from scene
-        let draw_commands: Vec<DrawCommand> = scene
-            .iter_objects()
-            .map(|(_, obj)| {
-                let mesh = *scene.mesh(obj.mesh_id);
-                DrawCommand {
-                    mesh,
-                    push_constants: gbuffer::GBufferPushConstants {
-                        view_projection,
-                        model: obj.world_transform,
-                        material_id: obj.material_id,
-                        ..Default::default()
-                    },
-                }
-            })
-            .collect();
-
         let channel = self.debug_channel;
         let light_buffer_physical = self.gpu_buffers.light_buffer;
 
-        let (sun_dir, sun_int, sun_col) = scene
-            .iter_lights()
-            .find(|(_, l)| l.light_type == crate::scene::LightType::Directional)
-            .map(|(_, l)| (l.direction, l.intensity, l.color))
-            .unwrap_or((
-                nalgebra_glm::vec3(0.0, -1.0, 0.0),
-                1.0,
-                nalgebra_glm::vec3(1.0, 0.9, 0.8),
-            ));
+        let sun_light = scene.sun();
+        let sun_dir = sun_light.direction;
+        let sun_int = sun_light.intensity;
+        let sun_col = sun_light.color;
 
-        let scene_objects: Vec<(u64, crate::scene::ObjectData)> = scene
-            .iter_objects()
-            .map(|(id, data)| (id.0, data.clone()))
-            .collect();
+        let scene_mesh_descriptors = self.scene_mesh_descriptors.clone();
+        let scene_instances: Vec<crate::scene::GpuInstanceData> = scene.iter_instances().collect();
         let scene_materials: Vec<(u32, crate::scene::MaterialData)> = scene
             .iter_materials()
             .map(|(id, data)| (id.0, data.clone()))
@@ -470,9 +466,9 @@ impl DefaultRenderGraph {
         graph.record(|builder| {
             builder.publish("Common", common);
             builder.publish("BindlessSet", self.bindless_manager.bindless_set);
-            builder.publish("SceneObjects", scene_objects);
+            builder.publish("SceneMeshDescriptors", scene_mesh_descriptors);
+            builder.publish("SceneInstances", scene_instances);
             builder.publish("SceneMaterials", scene_materials);
-            builder.publish("GBufferCommands", draw_commands);
             builder.publish("SunDirection", sun_dir);
             builder.publish("SunIntensity", sun_int);
             builder.publish("SunColor", sun_col);
@@ -482,14 +478,33 @@ impl DefaultRenderGraph {
             builder.publish("Backbuffer", backbuffer);
             builder.import_buffer("LightBuffer", light_buffer_physical);
 
-            let object_buffer_physical = self.gpu_buffers.object_buffer;
-            builder.import_buffer("ObjectBuffer", object_buffer_physical);
+            let mesh_descriptor_buffer_physical = self.gpu_buffers.mesh_descriptor_buffer;
+            builder.import_buffer("MeshDescriptorBuffer", mesh_descriptor_buffer_physical);
+
+            let instance_buffer_physical = self.gpu_buffers.instance_buffer;
+            builder.import_buffer("InstanceBuffer", instance_buffer_physical);
+
+            let draw_call_buffer_physical = self.gpu_buffers.draw_call_buffer;
+            builder.import_buffer("DrawCallBuffer", draw_call_buffer_physical);
+
+            let draw_count_buffer_physical = self.gpu_buffers.draw_count_buffer;
+            let draw_count_buffer_handle =
+                builder.import_buffer("DrawCountBuffer", draw_count_buffer_physical);
 
             let material_buffer_physical = self.gpu_buffers.material_buffer;
             builder.import_buffer("MaterialBuffer", material_buffer_physical);
 
             // 0. Sync CPU scene delta to GPU
             builder.add_pass(&mut self.sync_group);
+
+            // 1a. Clear draw count to 0 before GPU culling (InterlockedAdd accumulates across frames)
+            builder.add_owned_pass(ClearBufferPass {
+                name: "ClearDrawCount".to_string(),
+                buffer: draw_count_buffer_handle,
+            });
+
+            // 1b. Draw Call Generation & Culling
+            builder.add_pass(&mut self.draw_call_gen_pass);
 
             // 1. Clustering & Culling
             let (grid_x, grid_y, grid_z) = self.record_clustering(builder);

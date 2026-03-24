@@ -139,6 +139,24 @@ pub trait PassContext {
         data: &[u8],
     );
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
+    fn draw_indexed_indirect_count(
+        &mut self,
+        indirect_buffer: BufferHandle,
+        indirect_offset: u64,
+        count_buffer:    BufferHandle,
+        count_offset:    u64,
+        max_draw_count:  u32,
+        stride:          u32,
+    );
+    fn draw_indirect_count(
+        &mut self,
+        indirect_buffer: BufferHandle,
+        indirect_offset: u64,
+        count_buffer:    BufferHandle,
+        count_offset:    u64,
+        max_draw_count:  u32,
+        stride:          u32,
+    );
     fn clear_buffer(&mut self, buffer: crate::graph::types::BufferHandle, clear_value: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
 
@@ -177,6 +195,29 @@ impl<T: PassContext + ?Sized> PassContextExt for T {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DescriptorSetHandle(pub u64);
 
+/// GPU-side structure for indirect indexed drawing.
+/// Matches VkDrawIndexedIndirectCommand.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DrawIndexedIndirectCommand {
+    pub index_count:    u32,
+    pub instance_count: u32,
+    pub first_index:    u32,
+    pub vertex_offset:  i32,
+    pub first_instance: u32,
+}
+
+/// GPU-side structure for indirect drawing (non-indexed).
+/// Matches VkDrawIndirectCommand.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DrawIndirectCommand {
+    pub vertex_count:   u32,
+    pub instance_count: u32,
+    pub first_vertex:   u32,
+    pub first_instance: u32,
+}
+
 /// The main interface for hardware backends (Vulkan, DX12, Null).
 /// This trait exposes only user-facing operations: lifecycle, windowing, resource creation,
 /// pipeline management, and data upload.
@@ -189,6 +230,9 @@ pub trait RenderBackend {
     /// Initialize the backend with a specific device.
     /// Should be called before any other operation.
     fn initialize(&mut self, device_id: u32) -> Result<(), String>;
+
+    /// Returns the GPU device address for a buffer (requires BDA feature).
+    fn get_buffer_device_address(&self, handle: BackendBuffer) -> u64;
 
     // --- Windowing & Events (Managed by Backend) ---
 

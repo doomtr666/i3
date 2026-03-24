@@ -3,7 +3,7 @@ PipelineConfig(
     shader: Path("../shaders/gbuffer.slang"),
     graphics: Some(GraphicsConfig(
         rasterization: (
-            cull_mode: Back,
+            cull_mode: None,
         ),
         depth_stencil: (
             depth_test_enable: true,
@@ -18,16 +18,6 @@ PipelineConfig(
             (format: R8G8_UNORM),           // RoughMetal
             (format: R11G11B10_UFLOAT),     // Emissive
         ],
-        vertex_layout: Some(VertexLayoutConfig(
-            bindings: [
-                (binding: 0, stride: 48, input_rate: Vertex),
-            ],
-            attributes: [
-                (location: 0, binding: 0, format: Float3, offset: 0),
-                (location: 1, binding: 0, format: Float3, offset: 12),
-                (location: 2, binding: 0, format: Float2, offset: 24),
-                (location: 3, binding: 0, format: Float4, offset: 32),
-            ],
-        )),
+        vertex_layout: None,
     ))
 )

@@ -25,7 +25,7 @@ pub struct ObjectData {
 }
 
 /// GPU-ready data for a material.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct MaterialData {
     pub base_color_factor: [f32; 4],
@@ -59,6 +59,40 @@ pub struct LightData {
     pub intensity: f32,
     pub radius: f32,
     pub light_type: LightType,
+}
+
+/// GPU-resident mesh description as expected by the GPU-driven pipeline.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuMeshDescriptor {
+    pub vertex_buffer_address: u64,
+    pub index_buffer_address: u64,
+    pub index_count: u32,
+    pub vertex_stride: u32,
+    pub first_index: u32, // renamed from index_offset for clarity
+    pub vertex_offset: i32,
+    pub aabb_min: [f32; 3],
+    /// Byte stride of one index entry: 2 for IndexFormat::U16, 4 for U32.
+    /// Used by the GBuffer shader to read BDA index data correctly.
+    pub index_stride: u32,
+    pub aabb_max: [f32; 3],
+    pub _pad1: f32,
+}
+
+/// GPU-resident instance data for the GPU-driven pipeline.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuInstanceData {
+    pub world_transform: Mat4,
+    pub prev_transform: Mat4,
+    pub mesh_idx: u32, // index in MeshDescriptorBuffer
+    pub material_id: u32,
+    pub flags: u32,
+    pub _pad: u32,
+    pub world_aabb_min: [f32; 3],
+    pub _pad2: f32,
+    pub world_aabb_max: [f32; 3],
+    pub _pad3: f32,
 }
 
 /// A GPU-resident mesh. Carries buffer handles only, no CPU vertex data.
@@ -103,6 +137,46 @@ pub trait SceneProvider {
     /// Iterate all lights.
     fn iter_lights(&self) -> Box<dyn Iterator<Item = (LightId, &LightData)> + '_>;
 
+    /// Returns the primary directional light (the "sun").
+    fn sun(&self) -> LightData {
+        self.iter_lights()
+            .find(|(_, l)| l.light_type == LightType::Directional)
+            .map(|(_, l)| l.clone())
+            .unwrap_or(LightData {
+                position: nalgebra_glm::vec3(0.0, 0.0, 0.0),
+                direction: nalgebra_glm::vec3(0.0, -1.0, 0.0),
+                color: nalgebra_glm::vec3(1.0, 0.9, 0.8),
+                intensity: 1.0,
+                radius: 0.0,
+                light_type: LightType::Directional,
+            })
+    }
+
     /// Access a GPU-resident mesh by ID.
     fn mesh(&self, id: u32) -> &Mesh;
+
+    // --- GPU-Driven Extensions ---
+
+    /// Number of mesh descriptors registered.
+    fn mesh_descriptor_count(&self) -> usize;
+
+    /// Iterate all mesh descriptors (initial upload).
+    fn iter_mesh_descriptors<'a>(
+        &'a self,
+        backend: &'a dyn i3_gfx::graph::backend::RenderBackend,
+    ) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a>;
+
+    /// Iterate only newly registered mesh descriptors this frame.
+    fn iter_dirty_mesh_descriptors<'a>(
+        &'a self,
+        backend: &'a dyn i3_gfx::graph::backend::RenderBackend,
+    ) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a>;
+
+    /// Iterate all instances for the scene.
+    fn iter_instances(&self) -> Box<dyn Iterator<Item = GpuInstanceData> + '_>;
+
+    /// Instance count total (= object_count alias).
+    fn instance_count(&self) -> usize {
+        self.object_count()
+    }
 }

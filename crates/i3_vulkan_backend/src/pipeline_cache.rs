@@ -555,10 +555,9 @@ pub fn create_graphics_pipeline_from_baked(
     use i3_gfx::graph::pipeline::ShaderReflection;
     let reflection: ShaderReflection =
         postcard::from_bytes(reflection_bytes).expect("Failed to deserialize reflection");
-
+    tracing::info!("Creating Baked Graphics Pipeline with {} bindings", reflection.bindings.len());
     let device = backend.get_device().clone();
     let _id = backend.next_id();
-    debug!("Creating Baked Graphics Pipeline");
 
     // 1. Shader Module
     let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
@@ -842,9 +841,8 @@ pub fn create_compute_pipeline_from_baked(
     use i3_gfx::graph::pipeline::ShaderReflection;
     let reflection: ShaderReflection =
         postcard::from_bytes(reflection_bytes).expect("Failed to deserialize reflection");
-
+    tracing::info!("Creating Baked Compute Pipeline with {} bindings", reflection.bindings.len());
     let device = backend.get_device().clone();
-    debug!("Creating Baked Compute Pipeline");
 
     // 1. Shader Module
     let create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {

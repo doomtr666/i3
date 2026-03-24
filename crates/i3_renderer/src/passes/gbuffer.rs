@@ -24,18 +24,12 @@ pub struct GBufferVertex {
 #[derive(Clone, Copy, Debug)]
 pub struct GBufferPushConstants {
     pub view_projection: nalgebra_glm::Mat4,
-    pub model: nalgebra_glm::Mat4,
-    pub material_id: u32,
-    pub _pad: [u32; 3],
 }
 
 impl Default for GBufferPushConstants {
     fn default() -> Self {
         Self {
             view_projection: nalgebra_glm::identity(),
-            model: nalgebra_glm::identity(),
-            material_id: 0,
-            _pad: [0; 3],
         }
     }
 }
@@ -44,30 +38,41 @@ pub struct GBufferPass {
     pub bindless_set: u64,
 
     // Resolved handles (updated in record)
-    depth_buffer: ImageHandle,
-    gbuffer_albedo: ImageHandle,
-    gbuffer_normal: ImageHandle,
-    gbuffer_roughmetal: ImageHandle,
-    gbuffer_emissive: ImageHandle,
-    material_buffer: BufferHandle,
+    depth_buffer:           ImageHandle,
+    gbuffer_albedo:         ImageHandle,
+    gbuffer_normal:         ImageHandle,
+    gbuffer_roughmetal:     ImageHandle,
+    gbuffer_emissive:       ImageHandle,
+    
+    mesh_descriptor_buffer: BufferHandle,
+    instance_buffer:        BufferHandle,
+    draw_call_buffer:       BufferHandle,
+    draw_count_buffer:      BufferHandle,
+    material_buffer:        BufferHandle,
 
     // Persistence
     pipeline: Option<BackendPipeline>,
-    draw_commands: Vec<DrawCommand>,
+    common:   crate::render_graph::CommonData,
 }
 
 impl GBufferPass {
     pub fn new() -> Self {
         Self {
-            depth_buffer: ImageHandle::INVALID,
-            gbuffer_albedo: ImageHandle::INVALID,
-            gbuffer_normal: ImageHandle::INVALID,
-            gbuffer_roughmetal: ImageHandle::INVALID,
-            gbuffer_emissive: ImageHandle::INVALID,
-            material_buffer: BufferHandle::INVALID,
+            depth_buffer:           ImageHandle::INVALID,
+            gbuffer_albedo:         ImageHandle::INVALID,
+            gbuffer_normal:         ImageHandle::INVALID,
+            gbuffer_roughmetal:     ImageHandle::INVALID,
+            gbuffer_emissive:       ImageHandle::INVALID,
+            
+            mesh_descriptor_buffer: BufferHandle::INVALID,
+            instance_buffer:        BufferHandle::INVALID,
+            draw_call_buffer:       BufferHandle::INVALID,
+            draw_count_buffer:      BufferHandle::INVALID,
+            material_buffer:        BufferHandle::INVALID,
+            
             bindless_set: 0,
-            pipeline: None,
-            draw_commands: Vec::new(),
+            pipeline:     None,
+            common:       unsafe { std::mem::zeroed() },
         }
     }
 
@@ -111,15 +116,25 @@ impl RenderPass for GBufferPass {
         self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
         self.gbuffer_emissive = builder.resolve_image("GBuffer_Emissive");
         self.depth_buffer = builder.resolve_image("DepthBuffer");
-        self.material_buffer = builder.resolve_buffer("MaterialBuffer");
+        
+        self.mesh_descriptor_buffer = builder.resolve_buffer("MeshDescriptorBuffer");
+        self.instance_buffer        = builder.resolve_buffer("InstanceBuffer");
+        self.draw_call_buffer       = builder.resolve_buffer("DrawCallBuffer");
+        self.draw_count_buffer      = builder.resolve_buffer("DrawCountBuffer");
+        self.material_buffer        = builder.resolve_buffer("MaterialBuffer");
+
+        // Declare reads
+        builder.read_buffer(self.mesh_descriptor_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.instance_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.draw_call_buffer, ResourceUsage::INDIRECT_READ);
+        builder.read_buffer(self.draw_count_buffer, ResourceUsage::INDIRECT_READ);
+        builder.read_buffer(self.material_buffer, ResourceUsage::SHADER_READ);
 
         // Resolve bindless descriptor set from blackboard
         self.bindless_set = *builder.consume::<u64>("BindlessSet");
 
-        // Consume draw commands from blackboard
-        self.draw_commands = builder
-            .consume::<Vec<DrawCommand>>("GBufferCommands")
-            .clone();
+        // Consume CommonData to compute push constants
+        self.common = *builder.consume::<crate::render_graph::CommonData>("Common");
 
         // Declare write targets
         builder.write_image(self.gbuffer_albedo, ResourceUsage::COLOR_ATTACHMENT);
@@ -128,7 +143,12 @@ impl RenderPass for GBufferPass {
         builder.write_image(self.gbuffer_emissive, ResourceUsage::COLOR_ATTACHMENT);
         builder.write_image(self.depth_buffer, ResourceUsage::DEPTH_STENCIL);
 
-        builder.read_buffer(self.material_buffer, ResourceUsage::READ);
+        // Declare reads
+        builder.read_buffer(self.mesh_descriptor_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.instance_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.draw_call_buffer, ResourceUsage::INDIRECT_READ);
+        builder.read_buffer(self.draw_count_buffer, ResourceUsage::INDIRECT_READ);
+        builder.read_buffer(self.material_buffer, ResourceUsage::SHADER_READ);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
@@ -138,41 +158,42 @@ impl RenderPass for GBufferPass {
         };
         ctx.bind_pipeline_raw(pipeline);
 
-        // Bind Material SSBO at set 1
-        let mat_set = ctx.create_descriptor_set(
+        // Bind Global Scene Data at set 0
+        // Binding 0: MeshDescriptors
+        // Binding 1: Instances
+        // Binding 2: Materials
+        let scene_set = ctx.create_descriptor_set(
             pipeline,
-            1,
-            &[DescriptorWrite::buffer(0, self.material_buffer)],
+            0,
+            &[
+                DescriptorWrite::buffer(0, self.mesh_descriptor_buffer),
+                DescriptorWrite::buffer(1, self.instance_buffer),
+                DescriptorWrite::buffer(2, self.material_buffer),
+            ],
         );
-        ctx.bind_descriptor_set(1, mat_set);
+        ctx.bind_descriptor_set(0, scene_set);
 
         // Bind Bindless Set at set 2
         ctx.bind_descriptor_set_raw(2, self.bindless_set);
 
-        let expected_stride = std::mem::size_of::<GBufferVertex>() as u32;
+        // Push global view info
+        ctx.push_constant_data(
+            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+            0,
+            &GBufferPushConstants {
+                view_projection: self.common.view_projection,
+                ..Default::default()
+            },
+        );
 
-        for cmd in &self.draw_commands {
-            if cmd.mesh.stride != expected_stride {
-                tracing::warn!(
-                    "GBufferPass: Skipping mesh with incompatible stride {} (expected {})",
-                    cmd.mesh.stride,
-                    expected_stride
-                );
-                continue;
-            }
-
-            ctx.push_constant_data(
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                &cmd.push_constants,
-            );
-
-            let vb = BufferHandle(SymbolId(cmd.mesh.vertex_buffer.0));
-            let ib = BufferHandle(SymbolId(cmd.mesh.index_buffer.0));
-
-            ctx.bind_vertex_buffer(0, vb);
-            ctx.bind_index_buffer(ib, cmd.mesh.index_type);
-            ctx.draw_indexed(cmd.mesh.index_count, 0, 0);
-        }
+        // Perform GPU-driven indirect drawing
+        ctx.draw_indirect_count(
+            self.draw_call_buffer,
+            0,
+            self.draw_count_buffer,
+            0,
+            1024 * 64, // max_draw_count
+            std::mem::size_of::<i3_gfx::graph::backend::DrawIndirectCommand>() as u32,
+        );
     }
 }

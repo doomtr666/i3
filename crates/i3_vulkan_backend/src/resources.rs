@@ -25,10 +25,14 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
     let mut usage = crate::convert::convert_image_usage_flags(desc.usage);
     usage |= vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
 
+    let mut actual_extent = extent;
+    if actual_extent.width == 0 { actual_extent.width = 1; }
+    if actual_extent.height == 0 { actual_extent.height = 1; }
+
     let create_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .format(format)
-        .extent(extent)
+        .extent(actual_extent)
         .mip_levels(desc.mip_levels.max(1))
         .array_layers(desc.array_layers.max(1))
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -46,7 +50,7 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         let allocator = device.allocator.lock().unwrap();
         allocator
             .create_image(&create_info, &allocation_info)
-            .expect("Failed to create image")
+            .expect(&format!("Failed to create image with extent {:?}", actual_extent))
     };
 
     // Create View
@@ -101,8 +105,9 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
     let device = backend.get_device().clone();
     debug!("Creating Buffer: {:?}", desc);
 
+    let actual_size = desc.size.max(4);
     let create_info = vk::BufferCreateInfo::default()
-        .size(desc.size)
+        .size(actual_size)
         .usage(crate::convert::convert_buffer_usage_flags(desc.usage))
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
@@ -133,7 +138,7 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
         let allocator = device.allocator.lock().unwrap();
         allocator
             .create_buffer(&create_info, &allocation_info)
-            .expect("Failed to create buffer")
+            .expect(&format!("Failed to create buffer of size {}", actual_size))
     };
 
     let physical = crate::resource_arena::PhysicalBuffer {
