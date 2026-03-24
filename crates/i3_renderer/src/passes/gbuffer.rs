@@ -24,18 +24,12 @@ pub struct GBufferVertex {
 #[derive(Clone, Copy, Debug)]
 pub struct GBufferPushConstants {
     pub view_projection: nalgebra_glm::Mat4,
-    pub model: nalgebra_glm::Mat4,
-    pub material_id: u32,
-    pub _pad: [u32; 3],
 }
 
 impl Default for GBufferPushConstants {
     fn default() -> Self {
         Self {
             view_projection: nalgebra_glm::identity(),
-            model: nalgebra_glm::identity(),
-            material_id: 0,
-            _pad: [0; 3],
         }
     }
 }
@@ -129,6 +123,13 @@ impl RenderPass for GBufferPass {
         self.draw_count_buffer      = builder.resolve_buffer("DrawCountBuffer");
         self.material_buffer        = builder.resolve_buffer("MaterialBuffer");
 
+        // Declare reads
+        builder.read_buffer(self.mesh_descriptor_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.instance_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.draw_call_buffer, ResourceUsage::INDIRECT_READ);
+        builder.read_buffer(self.draw_count_buffer, ResourceUsage::INDIRECT_READ);
+        builder.read_buffer(self.material_buffer, ResourceUsage::SHADER_READ);
+
         // Resolve bindless descriptor set from blackboard
         self.bindless_set = *builder.consume::<u64>("BindlessSet");
 
@@ -172,8 +173,8 @@ impl RenderPass for GBufferPass {
         );
         ctx.bind_descriptor_set(0, scene_set);
 
-        // Bind Bindless Set at set 1
-        ctx.bind_descriptor_set_raw(1, self.bindless_set);
+        // Bind Bindless Set at set 2
+        ctx.bind_descriptor_set_raw(2, self.bindless_set);
 
         // Push global view info
         ctx.push_constant_data(
@@ -186,13 +187,13 @@ impl RenderPass for GBufferPass {
         );
 
         // Perform GPU-driven indirect drawing
-        ctx.draw_indexed_indirect_count(
+        ctx.draw_indirect_count(
             self.draw_call_buffer,
             0,
             self.draw_count_buffer,
             0,
             1024 * 64, // max_draw_count
-            std::mem::size_of::<i3_gfx::graph::backend::DrawIndexedIndirectCommand>() as u32,
+            std::mem::size_of::<i3_gfx::graph::backend::DrawIndirectCommand>() as u32,
         );
     }
 }

@@ -148,6 +148,15 @@ pub trait PassContext {
         max_draw_count:  u32,
         stride:          u32,
     );
+    fn draw_indirect_count(
+        &mut self,
+        indirect_buffer: BufferHandle,
+        indirect_offset: u64,
+        count_buffer:    BufferHandle,
+        count_offset:    u64,
+        max_draw_count:  u32,
+        stride:          u32,
+    );
     fn clear_buffer(&mut self, buffer: crate::graph::types::BufferHandle, clear_value: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
 
@@ -195,6 +204,17 @@ pub struct DrawIndexedIndirectCommand {
     pub instance_count: u32,
     pub first_index:    u32,
     pub vertex_offset:  i32,
+    pub first_instance: u32,
+}
+
+/// GPU-side structure for indirect drawing (non-indexed).
+/// Matches VkDrawIndirectCommand.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DrawIndirectCommand {
+    pub vertex_count:   u32,
+    pub instance_count: u32,
+    pub first_vertex:   u32,
     pub first_instance: u32,
 }
 

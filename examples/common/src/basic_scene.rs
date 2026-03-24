@@ -5,8 +5,8 @@ use i3_gfx::prelude::*;
 use i3_io::mesh::{IndexFormat, MeshAsset};
 use i3_io::scene_asset::{LightType as AssetLightType, SceneAsset};
 use i3_renderer::scene::{
-    GpuInstanceData, GpuMeshDescriptor, LightData, LightId, LightType, MaterialData, MaterialId, Mesh, ObjectData, ObjectId,
-    SceneProvider,
+    GpuInstanceData, GpuMeshDescriptor, LightData, LightId, LightType, MaterialData, MaterialId,
+    Mesh, ObjectData, ObjectId, SceneProvider,
 };
 use nalgebra_glm as glm;
 use uuid::Uuid;
@@ -188,7 +188,6 @@ impl BasicScene {
         };
         self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
     }
-
 
     /// Convenience: adds default directional lights (key light and backlight).
     pub fn add_default_lights(&mut self) {
@@ -453,42 +452,52 @@ impl SceneProvider for BasicScene {
         self.meshes.len()
     }
 
-    fn iter_mesh_descriptors<'a>(&'a self, backend: &'a dyn RenderBackend) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
+    fn iter_mesh_descriptors<'a>(
+        &'a self,
+        backend: &'a dyn RenderBackend,
+    ) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
         Box::new(self.meshes.iter().enumerate().map(|(i, m)| {
             let desc = GpuMeshDescriptor {
                 vertex_buffer_address: backend.get_buffer_device_address(m.vertex_buffer),
-                index_buffer_address:  backend.get_buffer_device_address(m.index_buffer),
-                index_count:           m.index_count,
-                vertex_stride:         m.stride,
-                first_index:           0, 
-                vertex_offset:         0, 
-                aabb_min:              [0.0; 3], 
-                _pad0:                 0.0,
-                aabb_max:              [0.0; 3],
-                _pad1:                 0.0,
+                index_buffer_address: backend.get_buffer_device_address(m.index_buffer),
+                index_count: m.index_count,
+                vertex_stride: m.stride,
+                first_index: 0,
+                vertex_offset: 0,
+                aabb_min: [0.0; 3],
+                // 2 bytes per index for U16, 4 bytes for U32 — used by the GBuffer shader
+                // to correctly unpack BDA index reads (avoid treating two U16 as one U32).
+                index_stride: if m.index_type == IndexType::Uint16 {
+                    2
+                } else {
+                    4
+                },
+                aabb_max: [0.0; 3],
+                _pad1: 0.0,
             };
             (i as u32, desc)
         }))
     }
 
-    fn iter_dirty_mesh_descriptors<'a>(&'a self, backend: &'a dyn RenderBackend) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
+    fn iter_dirty_mesh_descriptors<'a>(
+        &'a self,
+        backend: &'a dyn RenderBackend,
+    ) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
         self.iter_mesh_descriptors(backend)
     }
 
     fn iter_instances(&self) -> Box<dyn Iterator<Item = GpuInstanceData> + '_> {
-        Box::new(self.objects.iter().map(|(_, obj)| {
-            GpuInstanceData {
-                world_transform: obj.world_transform,
-                prev_transform:  obj.prev_transform,
-                mesh_idx:        obj.mesh_id,
-                material_id:     obj.material_id,
-                flags:           0,
-                _pad:            0,
-                world_aabb_min:  [0.0; 3], 
-                _pad2:           0.0,
-                world_aabb_max:  [0.0; 3],
-                _pad3:           0.0,
-            }
+        Box::new(self.objects.iter().map(|(_, obj)| GpuInstanceData {
+            world_transform: obj.world_transform,
+            prev_transform: obj.prev_transform,
+            mesh_idx: obj.mesh_id,
+            material_id: obj.material_id,
+            flags: 0,
+            _pad: 0,
+            world_aabb_min: [0.0; 3],
+            _pad2: 0.0,
+            world_aabb_max: [0.0; 3],
+            _pad3: 0.0,
         }))
     }
 }

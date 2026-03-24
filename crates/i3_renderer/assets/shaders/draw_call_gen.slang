@@ -1,67 +1,82 @@
-struct GpuMeshDescriptor {
-    uint2    vertexBufferAddress;
-    uint2    indexBufferAddress;
-    uint     indexCount;
-    uint     vertexStride;
-    uint     firstIndex;
-    int      vertexOffset;
-    float3   aabbMin;
-    float    _pad0;
-    float3   aabbMax;
-    float    _pad1;
+struct GpuMeshDescriptor
+{
+    uint64_t vertexBufferAddress; // BDA — cohérent avec common.slangh et GpuMeshDescriptor Rust (u64)
+    uint64_t indexBufferAddress;  // BDA — cohérent avec common.slangh et GpuMeshDescriptor Rust (u64)
+    uint indexCount;
+    uint vertexStride;
+    uint firstIndex;
+    int vertexOffset;
+    float aabbMinX;
+    float aabbMinY;
+    float aabbMinZ;
+    uint indexStride; // 2 = U16, 4 = U32 — cohérent avec common.slangh et scene.rs
+    float aabbMaxX;
+    float aabbMaxY;
+    float aabbMaxZ;
+    float _pad1;
 };
 
-struct GpuInstanceData {
+struct GpuInstanceData
+{
     float4x4 worldTransform;
     float4x4 prevTransform;
-    uint     meshIdx;
-    uint     materialId;
-    uint     flags;
-    uint     _pad;
-    float3   worldAabbMin;
-    float    _pad2;
-    float3   worldAabbMax;
-    float    _pad3;
+    uint meshIdx;
+    uint materialId;
+    uint flags;
+    uint _pad;
+    float worldAabbMinX;
+    float worldAabbMinY;
+    float worldAabbMinZ;
+    float _pad2;
+    float worldAabbMaxX;
+    float worldAabbMaxY;
+    float worldAabbMaxZ;
+    float _pad3;
 };
 
-struct DrawIndexedIndirectCommand {
-    uint indexCount;
+struct DrawIndirectCommand
+{
+    uint vertexCount;
     uint instanceCount;
-    uint firstIndex;
-    int  vertexOffset;
+    uint firstVertex;
     uint firstInstance;
 };
 
-struct PushConstants {
+struct PushConstants
+{
     uint instanceCount;
 };
 
 [[vk::push_constant]]
 PushConstants pc;
 
-[[vk::binding(0, 0)]] StructuredBuffer<GpuMeshDescriptor> meshDescriptors;
-[[vk::binding(1, 0)]] StructuredBuffer<GpuInstanceData> instances;
-[[vk::binding(2, 0)]] RWStructuredBuffer<DrawIndexedIndirectCommand> drawCalls;
-[[vk::binding(3, 0)]] RWStructuredBuffer<uint> drawCount;
+[[vk::binding(0, 0)]]
+StructuredBuffer<GpuMeshDescriptor> meshDescriptors;
+[[vk::binding(1, 0)]]
+StructuredBuffer<GpuInstanceData> instances;
+[[vk::binding(2, 0)]]
+RWStructuredBuffer<DrawIndirectCommand> drawCalls;
+[[vk::binding(3, 0)]]
+RWStructuredBuffer<uint> drawCount;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+void main(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx >= pc.instanceCount) return;
+    if (idx >= pc.instanceCount)
+        return;
 
     GpuInstanceData instance = instances[idx];
     GpuMeshDescriptor mesh = meshDescriptors[instance.meshIdx];
-    
+
     uint drawIdx;
     InterlockedAdd(drawCount[0], 1, drawIdx);
 
-    DrawIndexedIndirectCommand cmd;
-    cmd.indexCount    = mesh.indexCount;
+    DrawIndirectCommand cmd;
+    cmd.vertexCount = mesh.indexCount > 0 ? mesh.indexCount : 3; // Fallback to 3 if no indices? No, mesh.indexCount should be vertices to draw
     cmd.instanceCount = 1;
-    cmd.firstIndex    = mesh.firstIndex;
-    cmd.vertexOffset  = mesh.vertexOffset;
+    cmd.firstVertex = 0;
     cmd.firstInstance = idx;
 
     drawCalls[drawIdx] = cmd;

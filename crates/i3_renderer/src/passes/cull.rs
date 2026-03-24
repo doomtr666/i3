@@ -69,6 +69,11 @@ impl RenderPass for DrawCallGenPass {
         self.draw_call_buffer       = builder.resolve_buffer("DrawCallBuffer");
         self.draw_count_buffer      = builder.resolve_buffer("DrawCountBuffer");
 
+        builder.read_buffer(self.mesh_descriptor_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.instance_buffer, ResourceUsage::SHADER_READ);
+        builder.write_buffer(self.draw_call_buffer, ResourceUsage::SHADER_WRITE);
+        builder.write_buffer(self.draw_count_buffer, ResourceUsage::SHADER_WRITE);
+
         // The number of instances is published to the graph
         self.instance_count = builder.try_consume::<Vec<crate::scene::GpuInstanceData>>("SceneInstances")
             .map(|v| v.len() as u32)

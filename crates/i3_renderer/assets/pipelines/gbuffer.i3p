@@ -3,7 +3,7 @@ PipelineConfig(
     shader: Path("../shaders/gbuffer.slang"),
     graphics: Some(GraphicsConfig(
         rasterization: (
-            cull_mode: Back,
+            cull_mode: None,
         ),
         depth_stencil: (
             depth_test_enable: true,

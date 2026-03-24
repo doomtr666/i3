@@ -386,6 +386,34 @@ impl PassContext for VulkanPassContext {
         }
     }
 
+    fn draw_indirect_count(
+        &mut self,
+        indirect_buffer: BufferHandle,
+        indirect_offset: u64,
+        count_buffer: BufferHandle,
+        count_offset: u64,
+        max_draw_count: u32,
+        stride: u32,
+    ) {
+        let indirect_buf = self.backend().resolve_buffer(indirect_buffer);
+        let count_buf = self.backend().resolve_buffer(count_buffer);
+        
+        let indirect_vk = self.backend().buffers.get(indirect_buf.0).unwrap().buffer;
+        let count_vk = self.backend().buffers.get(count_buf.0).unwrap().buffer;
+        
+        unsafe {
+            self.device.handle.cmd_draw_indirect_count(
+                self.cmd,
+                indirect_vk,
+                indirect_offset,
+                count_vk,
+                count_offset,
+                max_draw_count,
+                stride,
+            );
+        }
+    }
+
     fn clear_buffer(&mut self, buffer: BufferHandle, clear_value: u32) {
         let physical_id =
             if let Some(&phy) = self.backend().external_buffer_to_physical.get(&buffer.0.0) {

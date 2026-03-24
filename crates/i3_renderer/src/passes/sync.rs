@@ -59,9 +59,31 @@ impl RenderPass for MeshRegistrySyncPass {
             let size = (count * std::mem::size_of::<GpuMeshDescriptor>()) as u64;
             let ptr = ctx.map_buffer(staging);
             if !ptr.is_null() {
+                let mut flat_descriptors = vec![
+                    GpuMeshDescriptor {
+                        vertex_buffer_address: 0,
+                        index_buffer_address: 0,
+                        index_count: 0,
+                        vertex_stride: 0,
+                        first_index: 0,
+                        vertex_offset: 0,
+                        aabb_min: [0.0; 3],
+                        index_stride: 0,
+                        aabb_max: [0.0; 3],
+                        _pad1: 0.0,
+                    };
+                    count
+                ];
+                for (id, desc) in &self.mesh_descriptors {
+                    let idx = *id as usize;
+                    if idx < count {
+                        flat_descriptors[idx] = *desc;
+                    }
+                }
+
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        self.mesh_descriptors.as_ptr() as *const u8,
+                        flat_descriptors.as_ptr() as *const u8,
                         ptr,
                         size as usize,
                     );

@@ -517,6 +517,21 @@ impl<'a> PassContext for NullPassContext<'a> {
         );
     }
 
+    fn draw_indirect_count(
+        &mut self,
+        _indirect_buffer: i3_gfx::graph::types::BufferHandle,
+        _indirect_offset: u64,
+        _count_buffer: i3_gfx::graph::types::BufferHandle,
+        _count_offset: u64,
+        _max_draw_count: u32,
+        _stride: u32,
+    ) {
+        info!(
+            pass = %self.pass_name,
+            max_draw_count = _max_draw_count, "DRAW_INDIRECT_COUNT"
+        );
+    }
+
     fn clear_buffer(&mut self, _buffer: i3_gfx::graph::types::BufferHandle, _clear_value: u32) {
         info!(pass = %self.pass_name, "CLEAR_BUFFER");
     }

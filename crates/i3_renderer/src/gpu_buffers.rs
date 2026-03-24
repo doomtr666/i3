@@ -69,7 +69,7 @@ impl GpuBuffers {
 
         let mesh_descriptor_buffer_size = max_meshes * std::mem::size_of::<GpuMeshDescriptor>() as u64;
         let instance_buffer_size = max_instances * std::mem::size_of::<GpuInstanceData>() as u64;
-        let draw_call_buffer_size = max_instances * 20; // VkDrawIndexedIndirectCommand is 20 bytes
+        let draw_call_buffer_size = max_instances * 16; // DrawIndirectCommand is 16 bytes
         let draw_count_buffer_size = 16; // 4 bytes + padding
         let visible_instance_buffer_size = max_instances * 4;
 

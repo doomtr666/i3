@@ -66,15 +66,17 @@ pub struct LightData {
 #[derive(Debug, Clone, Copy)]
 pub struct GpuMeshDescriptor {
     pub vertex_buffer_address: u64,
-    pub index_buffer_address:  u64,
-    pub index_count:           u32,
-    pub vertex_stride:         u32,
-    pub first_index:           u32,  // renamed from index_offset for clarity
-    pub vertex_offset:         i32,
-    pub aabb_min:         [f32; 3],
-    pub _pad0:            f32,
-    pub aabb_max:         [f32; 3],
-    pub _pad1:            f32,
+    pub index_buffer_address: u64,
+    pub index_count: u32,
+    pub vertex_stride: u32,
+    pub first_index: u32, // renamed from index_offset for clarity
+    pub vertex_offset: i32,
+    pub aabb_min: [f32; 3],
+    /// Byte stride of one index entry: 2 for IndexFormat::U16, 4 for U32.
+    /// Used by the GBuffer shader to read BDA index data correctly.
+    pub index_stride: u32,
+    pub aabb_max: [f32; 3],
+    pub _pad1: f32,
 }
 
 /// GPU-resident instance data for the GPU-driven pipeline.
@@ -82,15 +84,15 @@ pub struct GpuMeshDescriptor {
 #[derive(Debug, Clone, Copy)]
 pub struct GpuInstanceData {
     pub world_transform: Mat4,
-    pub prev_transform:  Mat4,
-    pub mesh_idx:        u32, // index in MeshDescriptorBuffer
-    pub material_id:     u32,
-    pub flags:           u32,
-    pub _pad:            u32,
-    pub world_aabb_min:  [f32; 3],
-    pub _pad2:           f32,
-    pub world_aabb_max:  [f32; 3],
-    pub _pad3:           f32,
+    pub prev_transform: Mat4,
+    pub mesh_idx: u32, // index in MeshDescriptorBuffer
+    pub material_id: u32,
+    pub flags: u32,
+    pub _pad: u32,
+    pub world_aabb_min: [f32; 3],
+    pub _pad2: f32,
+    pub world_aabb_max: [f32; 3],
+    pub _pad3: f32,
 }
 
 /// A GPU-resident mesh. Carries buffer handles only, no CPU vertex data.

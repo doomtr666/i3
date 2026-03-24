@@ -20,30 +20,40 @@ struct CommonData
 };
 
 // --- GPU-Driven Structures ---
-struct GpuMeshDescriptor {
+struct GpuMeshDescriptor
+{
     uint64_t vertexBufferAddress;
     uint64_t indexBufferAddress;
-    uint     indexCount;
-    uint     vertexStride;
-    uint     firstIndex;
-    int      vertexOffset;
-    float3   aabbMin;
-    float    _pad0;
-    float3   aabbMax;
-    float    _pad1;
+    uint indexCount;
+    uint vertexStride;
+    uint firstIndex;
+    int vertexOffset;
+    float aabbMinX;
+    float aabbMinY;
+    float aabbMinZ;
+    uint indexStride; // 2 = U16, 4 = U32 — must match GpuMeshDescriptor::index_stride in scene.rs
+    float aabbMaxX;
+    float aabbMaxY;
+    float aabbMaxZ;
+    float _pad1;
 };
 
-struct GpuInstanceData {
+struct GpuInstanceData
+{
     float4x4 worldTransform;
     float4x4 prevTransform;
-    uint     meshIdx;
-    uint     materialId;
-    uint     flags;
-    uint     _pad;
-    float3   worldAabbMin;
-    float    _pad2;
-    float3   worldAabbMax;
-    float    _pad3;
+    uint meshIdx;
+    uint materialId;
+    uint flags;
+    uint _pad;
+    float worldAabbMinX;
+    float worldAabbMinY;
+    float worldAabbMinZ;
+    float _pad2;
+    float worldAabbMaxX;
+    float worldAabbMaxY;
+    float worldAabbMaxZ;
+    float _pad3;
 };
 
 // --- Material Data (Standardized for GBuffer) ---

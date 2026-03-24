@@ -1,12 +1,12 @@
 use crate::groups::{ClusteringGroup, PostProcessGroup, sync::SyncGroup};
+use crate::passes::cull::DrawCallGenPass;
 use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
 use crate::passes::deferred_resolve::DeferredResolvePass;
-use crate::passes::cull::DrawCallGenPass;
 use crate::passes::gbuffer::GBufferPass;
 use crate::passes::sky::SkyPass;
 use crate::scene::SceneProvider;
-use i3_gfx::prelude::*;
 use i3_egui::UiSystem;
+use i3_gfx::prelude::*;
 use std::sync::Arc;
 
 /// Shared data published to the FrameGraph blackboard.
@@ -191,14 +191,21 @@ impl DefaultRenderGraph {
             (catalog_path_exe, exe_dir.join("system.i3b"))
         } else {
             let local_assets = std::path::Path::new("assets");
-            (local_assets.join("system.i3c"), local_assets.join("system.i3b"))
+            (
+                local_assets.join("system.i3c"),
+                local_assets.join("system.i3b"),
+            )
         };
 
-        // Cooperative Asset Loading: 
-        let loader = self.graph.try_consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader")
+        // Cooperative Asset Loading:
+        let loader = self
+            .graph
+            .try_consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader")
             .cloned()
             .unwrap_or_else(|| {
-                let loader = Arc::new(i3_io::asset::AssetLoader::new(Arc::new(i3_io::vfs::Vfs::new())));
+                let loader = Arc::new(i3_io::asset::AssetLoader::new(Arc::new(
+                    i3_io::vfs::Vfs::new(),
+                )));
                 self.graph.publish("AssetLoader", loader.clone());
                 loader
             });
@@ -207,11 +214,14 @@ impl DefaultRenderGraph {
         let vfs = loader.vfs();
         if catalog_path.exists() && blob_path.exists() {
             if let Ok(bundle) = i3_io::vfs::BundleBackend::mount(
-                catalog_path.to_str().unwrap(), 
-                blob_path.to_str().unwrap()
+                catalog_path.to_str().unwrap(),
+                blob_path.to_str().unwrap(),
             ) {
                 let _ = vfs.mount(Box::new(bundle));
-                tracing::info!("System bundle cooperatively mounted from {:?}", catalog_path.parent().unwrap());
+                tracing::info!(
+                    "System bundle cooperatively mounted from {:?}",
+                    catalog_path.parent().unwrap()
+                );
             }
         }
 
@@ -410,8 +420,7 @@ impl DefaultRenderGraph {
         screen_height: u32,
         dt: f32,
     ) {
-        let view_projection = projection
-            * view;
+        let view_projection = projection * view;
         let inv_projection = projection
             .try_inverse()
             .unwrap_or_else(nalgebra_glm::identity);
@@ -448,9 +457,7 @@ impl DefaultRenderGraph {
         let sun_col = sun_light.color;
 
         let scene_mesh_descriptors = self.scene_mesh_descriptors.clone();
-        let scene_instances: Vec<crate::scene::GpuInstanceData> = scene
-            .iter_instances()
-            .collect();
+        let scene_instances: Vec<crate::scene::GpuInstanceData> = scene.iter_instances().collect();
         let scene_materials: Vec<(u32, crate::scene::MaterialData)> = scene
             .iter_materials()
             .map(|(id, data)| (id.0, data.clone()))
@@ -476,12 +483,13 @@ impl DefaultRenderGraph {
 
             let instance_buffer_physical = self.gpu_buffers.instance_buffer;
             builder.import_buffer("InstanceBuffer", instance_buffer_physical);
-            
+
             let draw_call_buffer_physical = self.gpu_buffers.draw_call_buffer;
             builder.import_buffer("DrawCallBuffer", draw_call_buffer_physical);
 
             let draw_count_buffer_physical = self.gpu_buffers.draw_count_buffer;
-            builder.import_buffer("DrawCountBuffer", draw_count_buffer_physical);
+            let draw_count_buffer_handle =
+                builder.import_buffer("DrawCountBuffer", draw_count_buffer_physical);
 
             let material_buffer_physical = self.gpu_buffers.material_buffer;
             builder.import_buffer("MaterialBuffer", material_buffer_physical);
@@ -489,7 +497,13 @@ impl DefaultRenderGraph {
             // 0. Sync CPU scene delta to GPU
             builder.add_pass(&mut self.sync_group);
 
-            // 1. Draw Call Generation & Culling
+            // 1a. Clear draw count to 0 before GPU culling (InterlockedAdd accumulates across frames)
+            builder.add_owned_pass(ClearBufferPass {
+                name: "ClearDrawCount".to_string(),
+                buffer: draw_count_buffer_handle,
+            });
+
+            // 1b. Draw Call Generation & Culling
             builder.add_pass(&mut self.draw_call_gen_pass);
 
             // 1. Clustering & Culling
