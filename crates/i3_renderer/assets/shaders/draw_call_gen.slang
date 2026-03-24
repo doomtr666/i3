@@ -43,8 +43,8 @@ void main(uint3 dispatchThreadID: SV_DispatchThreadID)
     if (drawIdx < pc.maxDrawCalls)
     {
         DrawIndirectCommand cmd;
-        cmd.vertexCount = mesh.indexCount > 0 ? mesh.indexCount : 3;
-        cmd.instanceCount = 1;
+        cmd.vertexCount = mesh.indexCount;
+        cmd.instanceCount = mesh.indexCount > 0 ? 1 : 0; // Drop empty meshes entirely (prevents out-of-bounds BDA reads)
         cmd.firstVertex = 0; // Starts with SV_VertexID = 0
         cmd.firstInstance = idx; // Absolute instance index passed via gl_InstanceIndex (Vulkan)
 

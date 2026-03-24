@@ -1127,22 +1127,6 @@ impl RenderBackendInternal for VulkanBackend {
         let is_compute = matches!(prepared.domain, PreparedDomain::Compute);
 
         if !is_compute {
-            // Dynamic Viewport/Scissor setup (Use resolved extent)
-            let viewport_extent = prepared.viewport_extent;
-            let viewport = vk::Viewport::default()
-                .x(0.0)
-                .y(viewport_extent.height as f32)
-                .width(viewport_extent.width as f32)
-                .height(-(viewport_extent.height as f32))
-                .min_depth(0.0)
-                .max_depth(1.0);
-            let scissor = vk::Rect2D::default().extent(viewport_extent);
-
-            unsafe {
-                device.handle.cmd_set_viewport(cmd, 0, &[viewport]);
-                device.handle.cmd_set_scissor(cmd, 0, &[scissor]);
-            }
-
             if let PreparedDomain::Graphics {
                 color_attachments,
                 color_count,
@@ -1150,6 +1134,16 @@ impl RenderBackendInternal for VulkanBackend {
             } = &prepared.domain
             {
                 if *color_count > 0 || depth_attachment.is_some() {
+                    let viewport_extent = prepared.viewport_extent;
+                    let viewport = vk::Viewport::default()
+                        .x(0.0)
+                        .y(viewport_extent.height as f32)
+                        .width(viewport_extent.width as f32)
+                        .height(-(viewport_extent.height as f32))
+                        .min_depth(0.0)
+                        .max_depth(1.0);
+                    let scissor = vk::Rect2D::default().extent(viewport_extent);
+
                     let rendering_info = vk::RenderingInfo::default()
                         .render_area(vk::Rect2D {
                             offset: vk::Offset2D { x: 0, y: 0 },
@@ -1166,6 +1160,8 @@ impl RenderBackendInternal for VulkanBackend {
 
                     unsafe {
                         device.handle.cmd_begin_rendering(cmd, &rendering_info);
+                        device.handle.cmd_set_viewport(cmd, 0, &[viewport]);
+                        device.handle.cmd_set_scissor(cmd, 0, &[scissor]);
                     }
                 }
             }

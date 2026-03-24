@@ -83,13 +83,16 @@ impl VulkanDevice {
             .descriptor_binding_partially_bound(true)
             .scalar_block_layout(true);
 
-        let mut features11 =
-            vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
+        let mut features11 = vk::PhysicalDeviceVulkan11Features::default()
+            .shader_draw_parameters(true)
+            .storage_buffer16_bit_access(true)
+            .uniform_and_storage_buffer16_bit_access(true);
 
         let features10 = vk::PhysicalDeviceFeatures::default()
             .fill_mode_non_solid(true)
             .sampler_anisotropy(true)
-            .shader_int64(true);
+            .shader_int64(true)
+            .shader_int16(true);
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features10)

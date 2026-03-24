@@ -3,16 +3,20 @@ use i3_gfx::prelude::*;
 
 pub struct MeshRegistrySyncPass {
     mesh_descriptors:       Vec<(u32, GpuMeshDescriptor)>,
+    mesh_descriptors_cache: Vec<(u32, GpuMeshDescriptor)>, // Cache for dirty check
     mesh_descriptor_buffer: BufferHandle,
     staging_buffer:         Option<BufferHandle>,
+    is_dirty:               bool,
 }
 
 impl MeshRegistrySyncPass {
     pub fn new() -> Self {
         Self {
             mesh_descriptors:       Vec::new(),
+            mesh_descriptors_cache: Vec::new(),
             mesh_descriptor_buffer: BufferHandle::INVALID,
             staging_buffer:         None,
+            is_dirty:               false,
         }
     }
 }
@@ -32,10 +36,22 @@ impl RenderPass for MeshRegistrySyncPass {
         self.mesh_descriptor_buffer = builder.resolve_buffer("MeshDescriptorBuffer");
 
         let mesh_descriptors = builder.consume::<Vec<(u32, GpuMeshDescriptor)>>("SceneMeshDescriptors");
+        
+        // Dirty check: only update if the data has changed
+        self.is_dirty = mesh_descriptors.len() != self.mesh_descriptors_cache.len() 
+            || mesh_descriptors.iter().zip(self.mesh_descriptors_cache.iter()).any(|(a, b)| a != b);
+
+        if !self.is_dirty {
+            self.staging_buffer = None;
+            return;
+        }
+
         self.mesh_descriptors = mesh_descriptors.clone();
+        self.mesh_descriptors_cache = mesh_descriptors.clone();
         let count = self.mesh_descriptors.len();
 
-        builder.write_buffer(self.mesh_descriptor_buffer, ResourceUsage::WRITE);
+        // Use TRANSFER_WRITE for better synchronization in the backend
+        builder.write_buffer(self.mesh_descriptor_buffer, ResourceUsage::TRANSFER_WRITE);
 
         if count > 0 {
             let staging_size = (count * std::mem::size_of::<GpuMeshDescriptor>()) as u64;
@@ -44,7 +60,7 @@ impl RenderPass for MeshRegistrySyncPass {
                 usage: BufferUsageFlags::TRANSFER_SRC,
                 memory: MemoryType::CpuToGpu,
             });
-            builder.read_buffer(staging, ResourceUsage::READ);
+            builder.read_buffer(staging, ResourceUsage::TRANSFER_READ);
             self.staging_buffer = Some(staging);
         } else {
             self.staging_buffer = None;
@@ -98,16 +114,20 @@ impl RenderPass for MeshRegistrySyncPass {
 
 pub struct InstanceSyncPass {
     instances:       Vec<GpuInstanceData>,
+    instances_cache: Vec<GpuInstanceData>,
     instance_buffer: BufferHandle,
     staging_buffer:  Option<BufferHandle>,
+    is_dirty:        bool,
 }
 
 impl InstanceSyncPass {
     pub fn new() -> Self {
         Self {
             instances:       Vec::new(),
+            instances_cache: Vec::new(),
             instance_buffer: BufferHandle::INVALID,
             staging_buffer:  None,
+            is_dirty:        false,
         }
     }
 }
@@ -127,10 +147,21 @@ impl RenderPass for InstanceSyncPass {
         self.instance_buffer = builder.resolve_buffer("InstanceBuffer");
 
         let instances = builder.consume::<Vec<GpuInstanceData>>("SceneInstances");
+        
+        // Dirty check
+        self.is_dirty = instances.len() != self.instances_cache.len() 
+            || instances.iter().zip(self.instances_cache.iter()).any(|(a, b)| a != b);
+
+        if !self.is_dirty {
+            self.staging_buffer = None;
+            return;
+        }
+
         self.instances = instances.clone();
+        self.instances_cache = instances.clone();
         let count = self.instances.len();
 
-        builder.write_buffer(self.instance_buffer, ResourceUsage::WRITE);
+        builder.write_buffer(self.instance_buffer, ResourceUsage::TRANSFER_WRITE);
 
         if count > 0 {
             let staging_size = (count * std::mem::size_of::<GpuInstanceData>()) as u64;
@@ -139,7 +170,7 @@ impl RenderPass for InstanceSyncPass {
                 usage: BufferUsageFlags::TRANSFER_SRC,
                 memory: MemoryType::CpuToGpu,
             });
-            builder.read_buffer(staging, ResourceUsage::READ);
+            builder.read_buffer(staging, ResourceUsage::TRANSFER_READ);
             self.staging_buffer = Some(staging);
         } else {
             self.staging_buffer = None;
@@ -176,6 +207,8 @@ pub struct MaterialSyncPass {
     material_buffer: BufferHandle,
     staging_buffer: Option<BufferHandle>,
     materials: Vec<(u32, MaterialData)>,
+    materials_cache: Vec<(u32, MaterialData)>,
+    is_dirty: bool,
 }
 
 impl MaterialSyncPass {
@@ -185,6 +218,8 @@ impl MaterialSyncPass {
             max_materials,
             staging_buffer: None,
             materials: Vec::new(),
+            materials_cache: Vec::new(),
+            is_dirty: false,
         }
     }
 }
@@ -203,10 +238,21 @@ impl RenderPass for MaterialSyncPass {
         self.material_buffer = builder.resolve_buffer("MaterialBuffer");
 
         let materials = builder.consume::<Vec<(u32, MaterialData)>>("SceneMaterials");
+        
+        // Dirty check
+        self.is_dirty = materials.len() != self.materials_cache.len() 
+            || materials.iter().zip(self.materials_cache.iter()).any(|(a, b)| a != b);
+
+        if !self.is_dirty {
+            self.staging_buffer = None;
+            return;
+        }
+
         self.materials = materials.clone();
+        self.materials_cache = materials.clone();
         let material_count = self.materials.len();
 
-        builder.write_buffer(self.material_buffer, ResourceUsage::WRITE);
+        builder.write_buffer(self.material_buffer, ResourceUsage::TRANSFER_WRITE);
 
         if material_count > 0 {
             let staging_size = (material_count * std::mem::size_of::<MaterialData>()) as u64;
@@ -216,7 +262,7 @@ impl RenderPass for MaterialSyncPass {
                 memory: MemoryType::CpuToGpu,
             };
             let staging = builder.declare_buffer("MaterialSync_Staging", staging_desc);
-            builder.read_buffer(staging, ResourceUsage::READ);
+            builder.read_buffer(staging, ResourceUsage::TRANSFER_READ);
             self.staging_buffer = Some(staging);
         } else {
             self.staging_buffer = None;

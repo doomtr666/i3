@@ -25,7 +25,7 @@ pub struct ObjectData {
 }
 
 /// GPU-ready data for a material.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct MaterialData {
     pub base_color_factor: [f32; 4],
@@ -63,7 +63,7 @@ pub struct LightData {
 
 /// GPU-resident mesh description as expected by the GPU-driven pipeline.
 #[repr(C, align(16))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GpuMeshDescriptor {
     pub vertex_buffer_address: u64,
     pub index_buffer_address: u64,
@@ -81,7 +81,7 @@ pub struct GpuMeshDescriptor {
 
 /// GPU-resident instance data for the GPU-driven pipeline.
 #[repr(C, align(16))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GpuInstanceData {
     pub world_transform: Mat4,
     pub prev_transform: Mat4,

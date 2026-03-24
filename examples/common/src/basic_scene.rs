@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
 use i3_gfx::prelude::*;
-use i3_io::mesh::{IndexFormat, MeshAsset};
+use i3_io::mesh::MeshAsset;
 use i3_io::scene_asset::{LightType as AssetLightType, SceneAsset};
 use i3_renderer::scene::{
     GpuInstanceData, GpuMeshDescriptor, LightData, LightId, LightType, MaterialData, MaterialId,
@@ -175,7 +175,40 @@ impl BasicScene {
                 vertices.len() * std::mem::size_of::<[f32; 12]>(),
             )
         };
-        self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
+        let ib_bytes = unsafe {
+            std::slice::from_raw_parts(
+                indices.as_ptr() as *const u8,
+                indices.len() * std::mem::size_of::<u32>(),
+            )
+        };
+
+        // Create vertex buffer
+        let vb = backend.create_buffer(&BufferDesc {
+            size: vb_bytes.len() as u64,
+            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            memory: MemoryType::CpuToGpu,
+        });
+        backend.upload_buffer(vb, vb_bytes, 0).unwrap();
+
+        // Create index buffer
+        let ib = backend.create_buffer(&BufferDesc {
+            size: ib_bytes.len() as u64,
+            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            memory: MemoryType::CpuToGpu,
+        });
+        backend.upload_buffer(ib, ib_bytes, 0).unwrap();
+
+        let id = self.meshes.len() as u32;
+
+        self.meshes.push(Mesh {
+            vertex_buffer: vb,
+            index_buffer: ib,
+            index_count: indices.len() as u32,
+            index_type: IndexType::Uint32,
+            stride: 48,
+        });
+
+        id
     }
 
     pub fn add_white_cube_mesh(&mut self, backend: &mut dyn RenderBackend) -> u32 {
@@ -186,7 +219,40 @@ impl BasicScene {
                 vertices.len() * std::mem::size_of::<[f32; 12]>(),
             )
         };
-        self.add_mesh(backend, vb_bytes, vertices.len() as u32, &indices)
+        let ib_bytes = unsafe {
+            std::slice::from_raw_parts(
+                indices.as_ptr() as *const u8,
+                indices.len() * std::mem::size_of::<u32>(),
+            )
+        };
+
+        // Create vertex buffer
+        let vb = backend.create_buffer(&BufferDesc {
+            size: vb_bytes.len() as u64,
+            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            memory: MemoryType::CpuToGpu,
+        });
+        backend.upload_buffer(vb, vb_bytes, 0).unwrap();
+
+        // Create index buffer
+        let ib = backend.create_buffer(&BufferDesc {
+            size: ib_bytes.len() as u64,
+            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            memory: MemoryType::CpuToGpu,
+        });
+        backend.upload_buffer(ib, ib_bytes, 0).unwrap();
+
+        let id = self.meshes.len() as u32;
+
+        self.meshes.push(Mesh {
+            vertex_buffer: vb,
+            index_buffer: ib,
+            index_count: indices.len() as u32,
+            index_type: IndexType::Uint32,
+            stride: 48,
+        });
+
+        id
     }
 
     /// Convenience: adds default directional lights (key light and backlight).
@@ -247,11 +313,7 @@ impl BasicScene {
             .expect("Failed to upload baked mesh indices");
 
         let id = self.meshes.len() as u32;
-        let index_type = if mesh_asset.header.index_format == IndexFormat::U32 {
-            IndexType::Uint32
-        } else {
-            IndexType::Uint16
-        };
+        let index_type = IndexType::Uint32;
 
         self.meshes.push(Mesh {
             vertex_buffer: vb,
@@ -465,13 +527,7 @@ impl SceneProvider for BasicScene {
                 first_index: 0,
                 vertex_offset: 0,
                 aabb_min: [0.0; 3],
-                // 2 bytes per index for U16, 4 bytes for U32 — used by the GBuffer shader
-                // to correctly unpack BDA index reads (avoid treating two U16 as one U32).
-                index_stride: if m.index_type == IndexType::Uint16 {
-                    2
-                } else {
-                    4
-                },
+                index_stride: 4,
                 aabb_max: [0.0; 3],
                 _pad1: 0.0,
             };
@@ -503,7 +559,7 @@ impl SceneProvider for BasicScene {
 }
 
 /// Generates a white unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
-fn generate_white_cube() -> (Vec<[f32; 12]>, Vec<u16>) {
+fn generate_white_cube() -> (Vec<[f32; 12]>, Vec<u32>) {
     let (mut vertices, indices) = generate_cube();
     for v in &mut vertices {
         // v[3..6] is normal, v[6..8] is UV, v[8..12] is tangent
@@ -514,7 +570,7 @@ fn generate_white_cube() -> (Vec<[f32; 12]>, Vec<u16>) {
 }
 
 /// Generates a unit cube: 24 vertices (4 per face), 36 indices (CCW winding).
-fn generate_cube() -> (Vec<[f32; 12]>, Vec<u16>) {
+fn generate_cube() -> (Vec<[f32; 12]>, Vec<u32>) {
     #[rustfmt::skip]
     let vertices: Vec<[f32; 12]> = vec![
         // Front face (Z+)
@@ -550,7 +606,7 @@ fn generate_cube() -> (Vec<[f32; 12]>, Vec<u16>) {
     ];
 
     #[rustfmt::skip]
-    let indices: Vec<u16> = vec![
+    let indices: Vec<u32> = vec![
          0,  2,  1,  0,  3,  2, // Front
          4,  6,  5,  4,  7,  6, // Back
          8, 10,  9,  8, 11, 10, // Top
