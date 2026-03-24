@@ -113,16 +113,16 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
 
     let (mem_usage, alloc_flags) = match desc.memory {
         MemoryType::GpuOnly => (
-            vk_mem::MemoryUsage::AutoPreferDevice,
+            vk_mem::MemoryUsage::Auto,
             vk_mem::AllocationCreateFlags::empty(),
         ),
         MemoryType::CpuToGpu => (
-            vk_mem::MemoryUsage::AutoPreferHost,
+            vk_mem::MemoryUsage::Auto,
             vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
                 | vk_mem::AllocationCreateFlags::MAPPED,
         ),
         MemoryType::GpuToCpu => (
-            vk_mem::MemoryUsage::AutoPreferHost,
+            vk_mem::MemoryUsage::Auto,
             vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
                 | vk_mem::AllocationCreateFlags::MAPPED,
         ),
@@ -224,8 +224,32 @@ pub fn upload_buffer(
     offset: u64,
 ) -> Result<(), String> {
     let device = backend.get_device().clone();
-    if let Some(buf) = backend.buffers.get_mut(handle.0) {
-        if let Some(alloc) = &mut buf.allocation {
+    let buffer_obj = backend
+        .buffers
+        .get_mut(handle.0)
+        .ok_or_else(|| format!("Buffer not found: {:?}", handle))?;
+    let buffer = buffer_obj.buffer;
+
+    // Check if the buffer is directly mappable
+    let is_mappable = if let Some(alloc) = &buffer_obj.allocation {
+        let allocator = device.allocator.lock().unwrap();
+        let info = allocator.get_allocation_info(alloc);
+        let mem_props = unsafe {
+            device
+                .instance
+                .handle
+                .get_physical_device_memory_properties(device.physical_device)
+        };
+        let mem_type = mem_props.memory_types[info.memory_type as usize];
+        mem_type
+            .property_flags
+            .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+    } else {
+        false
+    };
+
+    if is_mappable {
+        if let Some(alloc) = &mut buffer_obj.allocation {
             unsafe {
                 let allocator = device.allocator.lock().unwrap();
                 let ptr = allocator.map_memory(alloc).map_err(|e| e.to_string())?;
@@ -235,17 +259,116 @@ pub fn upload_buffer(
                 let _ = allocator.flush_allocation(alloc, offset, data.len() as u64);
                 allocator.unmap_memory(alloc);
             }
-
-            // Update state to reflect HOST_WRITE
-            buf.last_access = vk::AccessFlags2::HOST_WRITE;
-            buf.last_stage = vk::PipelineStageFlags2::HOST;
-            Ok(())
-        } else {
-            Err("Buffer has no allocation (external?)".to_string())
+            return Ok(());
         }
-    } else {
-        Err(format!("Buffer not found: {:?}", handle))
     }
+
+    // --- Staging Path (for GpuOnly memory) ---
+    unsafe {
+        // 1. Create Staging Buffer
+        let staging_create_info = vk::BufferCreateInfo::default()
+            .size(data.len() as u64)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let staging_alloc_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::Auto,
+            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | vk_mem::AllocationCreateFlags::MAPPED,
+            ..Default::default()
+        };
+
+        let (staging_buffer, mut staging_alloc) = {
+            let allocator = device.allocator.lock().unwrap();
+            let mut res = allocator
+                .create_buffer(&staging_create_info, &staging_alloc_info)
+                .map_err(|e| e.to_string())?;
+
+            // 2. Copy Data to Staging
+            let ptr = allocator
+                .map_memory(&mut res.1)
+                .map_err(|e| e.to_string())?;
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+            allocator.unmap_memory(&mut res.1);
+            res
+        };
+
+        // 3. Command Buffer for Transfer
+        let cmd_pool_info = vk::CommandPoolCreateInfo::default()
+            .queue_family_index(device.graphics_family)
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+
+        let cmd_pool = device
+            .handle
+            .create_command_pool(&cmd_pool_info, None)
+            .map_err(|e| e.to_string())?;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(cmd_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+
+        let cmd = device
+            .handle
+            .allocate_command_buffers(&alloc_info)
+            .map_err(|e| e.to_string())?[0];
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        device
+            .handle
+            .begin_command_buffer(cmd, &begin_info)
+            .map_err(|e| e.to_string())?;
+
+        let region = vk::BufferCopy::default()
+            .src_offset(0)
+            .dst_offset(offset)
+            .size(data.len() as u64);
+
+        device.handle.cmd_copy_buffer(cmd, staging_buffer, buffer, &[region]);
+
+        // Transition/Barrier to ensure visibility for following stages (e.g. VERTEX_SHADER | COMPUTE_SHADER)
+        // We use a general ALL_TRANSFER to ALL_COMMANDS barrier for now to be safe.
+        let barrier = vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_GRAPHICS | vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::INDEX_READ | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)
+            .buffer(buffer)
+            .offset(offset)
+            .size(data.len() as u64);
+
+        let barriers2 = [barrier];
+        let dependency2 = vk::DependencyInfo::default().buffer_memory_barriers(&barriers2);
+        device.handle.cmd_pipeline_barrier2(cmd, &dependency2);
+
+        device
+            .handle
+            .end_command_buffer(cmd)
+            .map_err(|e| e.to_string())?;
+
+        // Submit and Wait
+        let cmd_bufs = [cmd];
+        let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
+
+        device
+            .handle
+            .queue_submit(device.graphics_queue, &[submit_info], vk::Fence::null())
+            .map_err(|e| e.to_string())?;
+
+        device
+            .handle
+            .device_wait_idle()
+            .map_err(|e| e.to_string())?;
+
+        // Cleanup
+        device.handle.destroy_command_pool(cmd_pool, None);
+        let allocator = device.allocator.lock().unwrap();
+        allocator.destroy_buffer(staging_buffer, &mut staging_alloc);
+    }
+
+    Ok(())
 }
 
 pub fn upload_image(

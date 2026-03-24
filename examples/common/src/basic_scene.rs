@@ -186,7 +186,7 @@ impl BasicScene {
         let vb = backend.create_buffer(&BufferDesc {
             size: vb_bytes.len() as u64,
             usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
-            memory: MemoryType::CpuToGpu,
+            memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(vb, vb_bytes, 0).unwrap();
 
@@ -194,7 +194,7 @@ impl BasicScene {
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
             usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
-            memory: MemoryType::CpuToGpu,
+            memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
 
@@ -230,7 +230,7 @@ impl BasicScene {
         let vb = backend.create_buffer(&BufferDesc {
             size: vb_bytes.len() as u64,
             usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
-            memory: MemoryType::CpuToGpu,
+            memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(vb, vb_bytes, 0).unwrap();
 
@@ -238,7 +238,7 @@ impl BasicScene {
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
             usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
-            memory: MemoryType::CpuToGpu,
+            memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
 
@@ -292,7 +292,7 @@ impl BasicScene {
         let vb = backend.create_buffer(&BufferDesc {
             size: mesh_asset.vertex_data.len() as u64,
             usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
-            memory: MemoryType::CpuToGpu,
+            memory: MemoryType::GpuOnly,
         });
         debug!(
             "Loading baked mesh {:?} with stride {}",
@@ -306,7 +306,7 @@ impl BasicScene {
         let ib = backend.create_buffer(&BufferDesc {
             size: mesh_asset.index_data.len() as u64,
             usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
-            memory: MemoryType::CpuToGpu,
+            memory: MemoryType::GpuOnly,
         });
         backend
             .upload_buffer(ib, &mesh_asset.index_data, 0)
