@@ -5,6 +5,7 @@ use i3_gfx::prelude::*;
 #[derive(Debug, Clone, Copy)]
 pub struct DrawCallGenPushConstants {
     pub instance_count: u32,
+    pub max_draw_calls: u32,
 }
 
 pub struct DrawCallGenPass {
@@ -151,6 +152,7 @@ impl RenderPass for DrawCallGenPass {
             0,
             &DrawCallGenPushConstants {
                 instance_count: self.instance_count,
+                max_draw_calls: 262144, // Match GpuBuffers::max_instances
             },
         );
 

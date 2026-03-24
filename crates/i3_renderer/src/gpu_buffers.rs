@@ -64,8 +64,8 @@ impl GpuBuffers {
         };
 
         // GPU-Driven Buffers
-        let max_meshes = 4096;
-        let max_instances = 65536;
+        let max_meshes = 16384;
+        let max_instances = 262144;
 
         let mesh_descriptor_buffer_size = max_meshes * std::mem::size_of::<GpuMeshDescriptor>() as u64;
         let instance_buffer_size = max_instances * std::mem::size_of::<GpuInstanceData>() as u64;

@@ -47,27 +47,29 @@ struct GBufferOutput
 };
 
 [shader("vertex")]
-VertexOutput vertexMain(uint indexId: SV_VertexID, uint instanceId: SV_InstanceID)
+VertexOutput vertexMain(uint indexId: SV_VertexID, 
+                         uint instanceId : SV_InstanceID,
+                         [[vk::builtin("BaseInstance")]] uint baseInstance : SV_StartInstanceLocation)
 {
-    GpuInstanceData instance = instances[instanceId];
+    uint absoluteInstanceId = baseInstance + instanceId;
+    GpuInstanceData instance = instances[absoluteInstanceId];
     GpuMeshDescriptor mesh = meshDescriptors[instance.meshIdx];
 
     // Vertex Pulling via BDA — index format aware
     // mesh.indexStride: 2 = U16, 4 = U32 (matches GpuMeshDescriptor::index_stride in scene.rs)
     uint vertexIdx;
-    if (mesh.indexCount > 0u)
+    if (mesh.indexCount > 0u && mesh.indexBufferAddress != 0)
     {
+        uint indexIdWithOffset = indexId + mesh.firstIndex;
         if (mesh.indexStride == 2u)
         {
-            // U16 indices: two uint16s are packed per uint32 in memory (little-endian).
-            // Read the containing uint32 then extract the correct 16-bit entry.
-            uint packedPair = ((uint *)mesh.indexBufferAddress)[indexId >> 1u];
-            vertexIdx = (indexId & 1u) == 0u ? (packedPair & 0xFFFFu) : (packedPair >> 16u);
+            // U16 indices: read safely as uint16_t via BDA.
+            vertexIdx = (uint)((uint16_t *)mesh.indexBufferAddress)[indexIdWithOffset];
         }
         else
         {
             // U32 indices: read directly as uint.
-            vertexIdx = ((uint *)mesh.indexBufferAddress)[indexId];
+            vertexIdx = ((uint *)mesh.indexBufferAddress)[indexIdWithOffset];
         }
     }
     else
@@ -85,7 +87,8 @@ VertexOutput vertexMain(uint indexId: SV_VertexID, uint instanceId: SV_InstanceI
     //   [+12] float3 normal   (12B)
     //   [+24] float2 uv       (8B)
     //   [+32] float4 tangent  (16B)
-    uint64_t vBase = mesh.vertexBufferAddress + uint64_t(vertexIdx) * uint64_t(mesh.vertexStride);
+    // Using mesh.vertexOffset to support base vertex offset in packed buffers.
+    uint64_t vBase = mesh.vertexBufferAddress + uint64_t(vertexIdx + mesh.vertexOffset) * uint64_t(mesh.vertexStride);
     float3 vPos = *(float3 *)(vBase);
     float3 vNormal = *(float3 *)(vBase + uint64_t(12));
     float2 vUV = *(float2 *)(vBase + uint64_t(24));
