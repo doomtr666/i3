@@ -237,7 +237,6 @@ impl BundleBaker {
     }
 
     /// Execute the baking process.
-    /// Execute the baking process.
     pub fn execute(self) -> Result<()> {
         let blob_path = self.output_dir.join(format!("{}.i3b", self.bundle_name));
         let catalog_path = self.output_dir.join(format!("{}.i3c", self.bundle_name));
@@ -257,7 +256,7 @@ impl BundleBaker {
         // Global mtime check for incremental baking
         let mut needs_bake =
             !catalog_path.exists() || !blob_path.exists() || std::env::var("FORCE_BAKE").is_ok();
-        
+
         if !needs_bake {
             let output_metadata =
                 std::fs::metadata(&catalog_path).map_err(|e| crate::BakerError::Os {
@@ -295,10 +294,11 @@ impl BundleBaker {
 
                     for dep in all_deps {
                         if dep.exists() {
-                            let metadata = std::fs::metadata(&dep).map_err(|e| crate::BakerError::Os {
-                                path: dep.clone(),
-                                source: e,
-                            })?;
+                            let metadata =
+                                std::fs::metadata(&dep).map_err(|e| crate::BakerError::Os {
+                                    path: dep.clone(),
+                                    source: e,
+                                })?;
                             if metadata.modified().map_err(|e| crate::BakerError::Os {
                                 path: dep.clone(),
                                 source: e,
@@ -338,7 +338,11 @@ impl BundleBaker {
                 .enumerate()
                 .map(|(idx, job)| {
                     let start = Instant::now();
-                    let asset_name = job.source_path.file_name().unwrap_or_default().to_string_lossy();
+                    let asset_name = job
+                        .source_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
                     println!(
                         "cargo:warning=[i3_baker] [{}/{}] Baking {}...",
                         idx + 1,

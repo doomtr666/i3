@@ -71,10 +71,6 @@ Explicit GPU APIs (Vulkan, DX12) require manual synchronization barriers between
 - **Barrier resolution is purely a graph-level problem.** The compiler only needs to reason about transitions *between* nodes, never within them.
 - **Parallelism is clean.** Any two passes without a data dependency can execute concurrently.
 - **Separation of Initialization.** Passes boot up once using the **Global Scope**, avoiding per-frame lookups for static services.
-
-### What this enables
-- **Barrier resolution is purely a graph-level problem.** The compiler only needs to reason about transitions *between* nodes, never within them.
-- **Parallelism is clean.** Any two passes without a data dependency can execute concurrently — no risk of hidden internal sync requirements.
 - **Error detection.** A pass that violates this invariant (e.g., undeclared resource access) can be caught by validation layers or debug tooling.
 
 ### Examples
