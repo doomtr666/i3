@@ -493,7 +493,7 @@ fn build_mesh_output(
         bounds_offset: (std::mem::size_of::<MeshHeader>() + vertex_data.len() + index_data.len())
             as u32,
         skeleton_id: [0u8; 16],
-        material_id: get_material_id(assimp_data, mesh.material_index).into_bytes(),
+        material_id: get_material_id(assimp_data, mesh.material_index, namespace).into_bytes(),
     };
 
     let mut data = Vec::new();
@@ -510,10 +510,10 @@ fn build_mesh_output(
     })
 }
 
-fn get_material_id(scene: &AssimpScene, material_idx: Option<usize>) -> Uuid {
+fn get_material_id(scene: &AssimpScene, material_idx: Option<usize>, namespace: Uuid) -> Uuid {
     if let Some(idx) = material_idx {
         if idx < scene.materials.len() {
-            return Uuid::new_v5(&Uuid::NAMESPACE_OID, scene.materials[idx].name.as_bytes());
+            return Uuid::new_v5(&namespace, scene.materials[idx].name.as_bytes());
         }
     }
     Uuid::nil()
@@ -587,8 +587,13 @@ impl Extractor for MaterialExtractor {
             outputs.extend(baked_outputs);
         }
 
+        let namespace = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            assimp_data.source_path.to_string_lossy().as_bytes(),
+        );
+
         for (i, mat) in assimp_data.materials.iter().enumerate() {
-            let asset_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, mat.name.as_bytes());
+            let asset_id = Uuid::new_v5(&namespace, mat.name.as_bytes());
             let ids = &mat_texture_ids[i];
             let header = MaterialHeader {
                 albedo_texture: ids[0].into_bytes(),

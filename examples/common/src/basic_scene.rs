@@ -185,7 +185,9 @@ impl BasicScene {
         // Create vertex buffer
         let vb = backend.create_buffer(&BufferDesc {
             size: vb_bytes.len() as u64,
-            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::VERTEX_BUFFER
+                | BufferUsageFlags::DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(vb, vb_bytes, 0).unwrap();
@@ -193,7 +195,9 @@ impl BasicScene {
         // Create index buffer
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
-            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::INDEX_BUFFER
+                | BufferUsageFlags::DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
@@ -229,7 +233,9 @@ impl BasicScene {
         // Create vertex buffer
         let vb = backend.create_buffer(&BufferDesc {
             size: vb_bytes.len() as u64,
-            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::VERTEX_BUFFER
+                | BufferUsageFlags::DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(vb, vb_bytes, 0).unwrap();
@@ -237,7 +243,9 @@ impl BasicScene {
         // Create index buffer
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
-            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::INDEX_BUFFER
+                | BufferUsageFlags::DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
@@ -291,7 +299,9 @@ impl BasicScene {
         // Create vertex buffer
         let vb = backend.create_buffer(&BufferDesc {
             size: mesh_asset.vertex_data.len() as u64,
-            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::VERTEX_BUFFER
+                | BufferUsageFlags::DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });
         debug!(
@@ -305,7 +315,9 @@ impl BasicScene {
         // Create index buffer
         let ib = backend.create_buffer(&BufferDesc {
             size: mesh_asset.index_data.len() as u64,
-            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::INDEX_BUFFER
+                | BufferUsageFlags::DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });
         backend

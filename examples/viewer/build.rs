@@ -23,6 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         manifest_path.join("../../assets/gltf-sample-assets/Models/Sponza/glTF/Sponza.gltf");
     let bistro_ext_src = manifest_path.join("../../assets/Bistro_v5_2/BistroExterior.fbx");
     let bistro_int_src = manifest_path.join("../../assets/Bistro_v5_2/BistroInterior.fbx");
+    let normal_tangent_src = manifest_path.join("../../assets/gltf-sample-assets/Models/NormalTangentTest/glTF/NormalTangentTest.gltf");
+    let normal_tangent_mirror_src = manifest_path.join("../../assets/gltf-sample-assets/Models/NormalTangentMirrorTest/glTF/NormalTangentMirrorTest.gltf");
 
     BundleBaker::new("viewer_scenes")?
         .with_output_dir(target_dir)
@@ -30,6 +32,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_asset(&sponza_src, AssimpImporter::new())
         .add_asset(&bistro_ext_src, AssimpImporter::new())
         .add_asset(&bistro_int_src, AssimpImporter::new())
+        .add_asset(&normal_tangent_src, AssimpImporter::new())
+        .add_asset(&normal_tangent_mirror_src, AssimpImporter::new())
         .execute()?;
 
     // Copy shaders to target directory

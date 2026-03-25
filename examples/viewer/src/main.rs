@@ -217,6 +217,12 @@ impl ExampleApp for DeferredGltfApp {
                     if ui.selectable_label(self.current_scene == "DamagedHelmet_scene", "Damaged Helmet").clicked() {
                         scene_to_load = Some("DamagedHelmet_scene");
                     }
+                    if ui.selectable_label(self.current_scene == "NormalTangentTest_scene", "Normal Tangent Test").clicked() {
+                        scene_to_load = Some("NormalTangentTest_scene");
+                    }
+                    if ui.selectable_label(self.current_scene == "NormalTangentMirrorTest_scene", "Normal Tangent Mirror").clicked() {
+                        scene_to_load = Some("NormalTangentMirrorTest_scene");
+                    }
                 });
 
             ui.separator();

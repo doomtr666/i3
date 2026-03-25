@@ -237,8 +237,8 @@ impl BundleBaker {
     }
 
     /// Execute the baking process.
+    /// Execute the baking process.
     pub fn execute(self) -> Result<()> {
-        println!("cargo:rerun-if-changed=build.rs");
         let blob_path = self.output_dir.join(format!("{}.i3b", self.bundle_name));
         let catalog_path = self.output_dir.join(format!("{}.i3c", self.bundle_name));
 
@@ -257,6 +257,7 @@ impl BundleBaker {
         // Global mtime check for incremental baking
         let mut needs_bake =
             !catalog_path.exists() || !blob_path.exists() || std::env::var("FORCE_BAKE").is_ok();
+        
         if !needs_bake {
             let output_metadata =
                 std::fs::metadata(&catalog_path).map_err(|e| crate::BakerError::Os {
@@ -270,30 +271,47 @@ impl BundleBaker {
                     source: e,
                 })?;
 
-            for asset in &self.assets {
-                let mut all_deps = vec![asset.source_path.clone()];
-                if let Ok(deps) = asset.importer.get_dependencies(&asset.source_path) {
-                    all_deps.extend(deps);
-                }
-
-                for dep in all_deps {
-                    if dep.exists() {
-                        let metadata = std::fs::metadata(&dep).map_err(|e| crate::BakerError::Os {
-                            path: dep.clone(),
-                            source: e,
-                        })?;
-                        if metadata.modified().map_err(|e| crate::BakerError::Os {
-                            path: dep.clone(),
-                            source: e,
-                        })? > output_mtime
-                        {
-                            needs_bake = true;
-                            break;
+            // If the build script itself changed (where the asset list is defined), we must re-bake.
+            if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                let build_rs = Path::new(&manifest_dir).join("build.rs");
+                if build_rs.exists() {
+                    let build_metadata = std::fs::metadata(&build_rs).ok();
+                    if let Some(m) = build_metadata {
+                        if let Ok(mtime) = m.modified() {
+                            if mtime > output_mtime {
+                                needs_bake = true;
+                            }
                         }
                     }
                 }
-                if needs_bake {
-                    break;
+            }
+
+            if !needs_bake {
+                for asset in &self.assets {
+                    let mut all_deps = vec![asset.source_path.clone()];
+                    if let Ok(deps) = asset.importer.get_dependencies(&asset.source_path) {
+                        all_deps.extend(deps);
+                    }
+
+                    for dep in all_deps {
+                        if dep.exists() {
+                            let metadata = std::fs::metadata(&dep).map_err(|e| crate::BakerError::Os {
+                                path: dep.clone(),
+                                source: e,
+                            })?;
+                            if metadata.modified().map_err(|e| crate::BakerError::Os {
+                                path: dep.clone(),
+                                source: e,
+                            })? > output_mtime
+                            {
+                                needs_bake = true;
+                                break;
+                            }
+                        }
+                    }
+                    if needs_bake {
+                        break;
+                    }
                 }
             }
         }
@@ -307,7 +325,7 @@ impl BundleBaker {
 
         if needs_bake {
             println!(
-                "Baking bundle '{}' with {} assets (parallel)...",
+                "cargo:warning=[i3_baker] Baking bundle '{}' with {} assets (parallel)...",
                 self.bundle_name,
                 self.assets.len()
             );

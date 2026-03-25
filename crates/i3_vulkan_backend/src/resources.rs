@@ -106,9 +106,14 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
     debug!("Creating Buffer: {:?}", desc);
 
     let actual_size = desc.size.max(4);
+    let mut usage = crate::convert::convert_buffer_usage_flags(desc.usage);
+    if matches!(desc.memory, MemoryType::GpuOnly) {
+        usage |= vk::BufferUsageFlags::TRANSFER_DST;
+    }
+
     let create_info = vk::BufferCreateInfo::default()
         .size(actual_size)
-        .usage(crate::convert::convert_buffer_usage_flags(desc.usage))
+        .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
     let (mem_usage, alloc_flags) = match desc.memory {
