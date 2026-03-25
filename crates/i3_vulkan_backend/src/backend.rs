@@ -357,7 +357,11 @@ impl VulkanBackend {
                 .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
                 .address_mode_u(vk::SamplerAddressMode::REPEAT)
                 .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT);
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE);
 
             let sampler = device
                 .handle
