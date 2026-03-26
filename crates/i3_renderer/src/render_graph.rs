@@ -1,11 +1,10 @@
-use crate::groups::{ClusteringGroup, PostProcessGroup, sync::SyncGroup};
+use crate::prelude::*;
 use crate::passes::cull::DrawCallGenPass;
 use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
 use crate::passes::deferred_resolve::DeferredResolvePass;
 use crate::passes::gbuffer::GBufferPass;
 use crate::passes::sky::SkyPass;
-use crate::scene::SceneProvider;
-use i3_egui::UiSystem;
+use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 

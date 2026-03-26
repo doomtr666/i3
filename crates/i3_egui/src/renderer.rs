@@ -1,4 +1,5 @@
 use i3_gfx::prelude::*;
+use crate::prelude::*;
 use std::sync::{Arc, Mutex};
 
 pub struct EguiRenderer {

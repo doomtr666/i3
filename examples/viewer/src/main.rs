@@ -2,19 +2,12 @@ extern crate nalgebra_glm;
 
 use examples_common::basic_scene::BasicScene;
 use examples_common::{ExampleApp, init_tracing, main_loop};
-use i3_egui::egui;
-use i3_gfx::graph::types::*;
+use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
-use i3_io::asset::AssetLoader;
-use i3_io::material::MaterialAsset;
-use i3_io::mesh::MeshAsset;
-use i3_io::scene_asset::SceneAsset;
-use i3_io::texture::{TextureAsset, TextureFormat};
-use i3_io::vfs::{BundleBackend, Vfs};
+use i3_io::prelude::*;
+use i3_renderer::prelude::*;
+use i3_vulkan_backend::prelude::*;
 use i3_renderer::passes::debug_viz::DebugChannel;
-use i3_renderer::render_graph::{DefaultRenderGraph, RenderConfig};
-use i3_renderer::scene::SceneProvider;
-use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -529,7 +522,7 @@ impl ExampleApp for DeferredGltfApp {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let _guard = init_tracing("viewer.log");
     info!("Starting I3 viewer demo application");
 

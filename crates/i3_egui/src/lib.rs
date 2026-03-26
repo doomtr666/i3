@@ -1,5 +1,6 @@
 pub mod input;
 pub mod renderer;
+pub mod prelude;
 
 use std::sync::Arc;
 use i3_gfx::graph::backend::RenderBackend;
