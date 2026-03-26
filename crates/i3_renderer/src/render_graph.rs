@@ -140,6 +140,9 @@ impl DefaultRenderGraph {
             material_sampler,
         );
         bindless_manager.bindless_set = _backend.get_bindless_set_handle();
+        
+        // Update the global sampler in the bindless set
+        _backend.update_bindless_sampler(material_sampler, bindless_manager.bindless_set, 1);
 
         // Register a default 1x1 white texture at index 0
         let white_image = _backend.create_image(&ImageDesc {

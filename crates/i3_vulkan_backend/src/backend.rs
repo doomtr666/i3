@@ -350,40 +350,6 @@ impl VulkanBackend {
 
             let set = sets[0];
 
-            // Create a default sampler for the bindless set
-            let sampler_info = vk::SamplerCreateInfo::default()
-                .mag_filter(vk::Filter::LINEAR)
-                .min_filter(vk::Filter::LINEAR)
-                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-                .address_mode_u(vk::SamplerAddressMode::REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT)
-                .anisotropy_enable(true)
-                .max_anisotropy(16.0)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE);
-
-            let sampler = device
-                .handle
-                .create_sampler(&sampler_info, None)
-                .map_err(|e| e.to_string())?;
-            
-            self.samplers.insert(sampler);
-
-            let sampler_info_vk = [vk::DescriptorImageInfo {
-                sampler,
-                image_view: vk::ImageView::null(),
-                image_layout: vk::ImageLayout::UNDEFINED,
-            }];
-
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::SAMPLER)
-                .image_info(&sampler_info_vk);
-
-            device.handle.update_descriptor_sets(&[write], &[]);
-
             let handle_id = self.descriptor_sets.lock().unwrap().insert(set);
             self.bindless_set_handle = handle_id;
         }
@@ -731,6 +697,10 @@ impl RenderBackend for VulkanBackend {
         crate::descriptors::update_bindless_texture_raw(
             self, texture, sampler, index, set, binding,
         );
+    }
+
+    fn update_bindless_sampler(&mut self, sampler: SamplerHandle, set: u64, binding: u32) {
+        crate::descriptors::update_bindless_sampler(self, sampler, set, binding);
     }
 
     #[cfg(debug_assertions)]

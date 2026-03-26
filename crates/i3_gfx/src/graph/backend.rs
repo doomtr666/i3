@@ -358,6 +358,14 @@ pub trait RenderBackend {
         binding: u32,
     );
 
+    /// Updates a specific binding in a bindless descriptor set with a sampler.
+    fn update_bindless_sampler(
+        &mut self,
+        sampler: SamplerHandle,
+        set: u64,
+        binding: u32,
+    );
+
     // --- Debug Utilities ---
     /// Nests a name for an image (no-op in release).
     fn set_image_name(&mut self, _image: BackendImage, _name: &str) {}

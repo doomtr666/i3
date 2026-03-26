@@ -215,6 +215,15 @@ impl RenderBackend for NullBackend {
         info!("Updated Bindless Texture (raw) index {}", index);
     }
 
+    fn update_bindless_sampler(
+        &mut self,
+        _sampler: i3_gfx::graph::backend::SamplerHandle,
+        _set: u64,
+        _binding: u32,
+    ) {
+        info!("Updated Bindless Sampler");
+    }
+
     // --- Handle Registration ---
     fn register_external_image(
         &mut self,

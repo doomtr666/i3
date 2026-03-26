@@ -105,6 +105,45 @@ pub fn update_bindless_texture_raw(
     }
 }
 
+/// Update a bindless sampler in the global bindless descriptor set.
+pub fn update_bindless_sampler(
+    backend: &mut VulkanBackend,
+    sampler: SamplerHandle,
+    set: u64,
+    binding: u32,
+) {
+    let vk_set = if let Some(s) = backend.descriptor_sets.lock().unwrap().get(set as u64) {
+        *s
+    } else {
+        error!("Descriptor set (bindless) not found: {}", set);
+        return;
+    };
+
+    if let Some(&vk_sampler) = backend.samplers.get(sampler.0) {
+        let image_info = vk::DescriptorImageInfo {
+            sampler: vk_sampler,
+            image_view: vk::ImageView::null(),
+            image_layout: vk::ImageLayout::UNDEFINED,
+        };
+
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(vk_set)
+            .dst_binding(binding)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::SAMPLER)
+            .image_info(std::slice::from_ref(&image_info));
+
+        unsafe {
+            backend
+                .get_device()
+                .handle
+                .update_descriptor_sets(std::slice::from_ref(&write), &[]);
+        }
+    } else {
+        error!("Sampler not found for bindless update: {:?}", sampler.0);
+    }
+}
+
 /// Allocate a descriptor set from the static pool.
 ///
 /// This function allocates a descriptor set from the static descriptor pool.
