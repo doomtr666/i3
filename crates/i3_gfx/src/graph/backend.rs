@@ -300,6 +300,10 @@ pub trait RenderBackend {
         &mut self,
         handle: BackendImage,
         data: &[u8],
+        offset_x: u32,
+        offset_y: u32,
+        data_width: u32,
+        data_height: u32,
         mip_level: u32,
         array_layer: u32,
     ) -> Result<(), String>;

@@ -41,6 +41,7 @@ pub struct FrameStats {
     last_frame: Instant,
     frame_count: u32,
     accumulated_time: Duration,
+    displayed_dt: Duration,
 }
 
 impl Default for FrameStats {
@@ -49,6 +50,7 @@ impl Default for FrameStats {
             last_frame: Instant::now(),
             frame_count: 0,
             accumulated_time: Duration::ZERO,
+            displayed_dt: Duration::from_millis(16),
         }
     }
 }
@@ -62,17 +64,23 @@ impl FrameStats {
         self.frame_count += 1;
         self.accumulated_time += delta;
 
-        if self.frame_count >= 1000 {
+        // Update the displayed average every 300ms for readability
+        if self.accumulated_time.as_secs_f32() >= 0.3 {
+            self.displayed_dt = self.accumulated_time / self.frame_count;
             self.frame_count = 0;
             self.accumulated_time = Duration::ZERO;
         }
 
         delta
     }
+
+    pub fn smoothed_dt(&self) -> Duration {
+        self.displayed_dt
+    }
 }
 
 pub trait ExampleApp {
-    fn update(&mut self, delta: Duration);
+    fn update(&mut self, delta: Duration, smoothed_delta: Duration);
     fn render(&mut self);
     fn poll_events(&mut self) -> Vec<i3_gfx::graph::backend::Event>;
     fn handle_event(&mut self, event: &i3_gfx::graph::backend::Event);
@@ -121,7 +129,7 @@ pub fn main_loop<T: ExampleApp>(mut app: T) {
         }
 
         let delta = stats.update();
-        app.update(delta);
+        app.update(delta, stats.smoothed_dt());
         app.render();
     }
     info!("Main loop finished. Shutting down...");

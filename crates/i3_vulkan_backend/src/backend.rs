@@ -573,10 +573,24 @@ impl RenderBackend for VulkanBackend {
         &mut self,
         handle: BackendImage,
         data: &[u8],
+        offset_x: u32,
+        offset_y: u32,
+        data_width: u32,
+        data_height: u32,
         mip_level: u32,
         array_layer: u32,
     ) -> Result<(), String> {
-        crate::resources::upload_image(self, handle, data, mip_level, array_layer)
+        crate::resources::upload_image(
+            self,
+            handle,
+            data,
+            offset_x,
+            offset_y,
+            data_width,
+            data_height,
+            mip_level,
+            array_layer,
+        )
     }
 
     fn get_bindless_set_handle(&self) -> u64 {

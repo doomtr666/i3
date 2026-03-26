@@ -85,7 +85,8 @@ impl UiSystem {
         let mut storage = self.stored_output.lock().unwrap();
         
         if let Some(full_output) = storage.take() {
-            let primitives = self.ctx.tessellate(full_output.shapes, 1.0); 
+            let ppp = full_output.pixels_per_point;
+            let primitives = self.ctx.tessellate(full_output.shapes, ppp); 
             Some(renderer::EguiPass::new(self.renderer.clone(), primitives, width, height, backbuffer))
         } else {
             // Return an empty pass for initialization purposes if no output is pending

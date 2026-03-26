@@ -157,6 +157,10 @@ impl RenderBackend for NullBackend {
         &mut self,
         _handle: BackendImage,
         _data: &[u8],
+        _offset_x: u32,
+        _offset_y: u32,
+        _data_width: u32,
+        _data_height: u32,
         _mip_level: u32,
         _array_layer: u32,
     ) -> Result<(), String> {

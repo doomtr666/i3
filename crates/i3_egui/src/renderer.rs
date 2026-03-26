@@ -36,30 +36,39 @@ impl EguiRenderer {
 
     pub fn update_textures(&mut self, backend: &mut dyn RenderBackend, delta: &egui::TexturesDelta) {
         for (_id, image_delta) in &delta.set {
-            // For now, we only support the font atlas (id 0) or user textures.
-            // But we only have one persistent slot in EguiRenderer.
-            // Let's refine this to at least handle the font atlas correctly.
             if let egui::ImageData::Font(image) = &image_delta.image {
                 let width = image.width() as u32;
                 let height = image.height() as u32;
                 let pixels: Vec<u8> = image.srgba_pixels(None).flat_map(|c| [c.r(), c.g(), c.b(), c.a()]).collect();
-                
-                let desc = ImageDesc {
-                    width,
-                    height,
-                    depth: 1,
-                    format: Format::R8G8B8A8_SRGB,
-                    mip_levels: 1,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: Default::default(),
-                };
 
-                // For now, simple recreate if it's the font atlas (usually first texture).
-                self.font_image = Some(backend.create_image(&desc));
-                self.font_image_desc = Some(desc);
-                backend.upload_image(self.font_image.unwrap(), &pixels, 0, 0).unwrap();
+                if let Some(pos) = image_delta.pos {
+                    // Incremental patch
+                    if let Some(handle) = self.font_image {
+                        backend.upload_image(handle, &pixels, pos[0] as u32, pos[1] as u32, width, height, 0, 0).expect("Failed to patch font atlas");
+                    }
+                } else {
+                    // Full replacement (e.g. resize)
+                    if let Some(old) = self.font_image.take() {
+                        backend.destroy_image(old);
+                    }
+
+                    let desc = ImageDesc {
+                        width,
+                        height,
+                        depth: 1,
+                        format: Format::R8G8B8A8_SRGB,
+                        view_type: ImageViewType::Type2D,
+                        usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
+                        mip_levels: 1,
+                        array_layers: 1,
+                        swizzle: ComponentMapping::default(),
+                    };
+
+                    let handle = backend.create_image(&desc);
+                    backend.upload_image(handle, &pixels, 0, 0, width, height, 0, 0).expect("Failed to upload font atlas");
+                    self.font_image = Some(handle);
+                    self.font_image_desc = Some(desc); // Update the descriptor as well
+                }
             }
         }
     }
@@ -68,12 +77,12 @@ impl EguiRenderer {
 pub struct EguiPass {
     renderer: Arc<Mutex<EguiRenderer>>,
     primitives: Vec<egui::ClippedPrimitive>,
-    vb: BufferHandle,
-    ib: BufferHandle,
-    font_handle: ImageHandle,
     width: u32,
     height: u32,
     backbuffer: ImageHandle,
+    font_handle: ImageHandle,
+    vb: BufferHandle,
+    ib: BufferHandle,
 }
 
 impl EguiPass {
@@ -87,12 +96,12 @@ impl EguiPass {
         Self {
             renderer,
             primitives,
-            vb: BufferHandle::INVALID,
-            ib: BufferHandle::INVALID,
-            font_handle: ImageHandle::INVALID,
             width,
             height,
             backbuffer,
+            font_handle: ImageHandle::INVALID,
+            vb: BufferHandle::INVALID,
+            ib: BufferHandle::INVALID,
         }
     }
 }
@@ -247,7 +256,18 @@ impl RenderPass for EguiPass {
 
         for clipped_primitive in &self.primitives {
             if let egui::epaint::Primitive::Mesh(mesh) = &clipped_primitive.primitive {
-                // TODO: Scissor
+                // Apply scissoring
+                let clip_rect = clipped_primitive.clip_rect;
+                let scissor_x = clip_rect.min.x.max(0.0) as i32;
+                let scissor_y = clip_rect.min.y.max(0.0) as i32;
+                let scissor_w = clip_rect.width().max(0.0) as u32;
+                let scissor_h = clip_rect.height().max(0.0) as u32;
+                
+                // Clamp to window size to avoid validation errors
+                let max_w = self.width.saturating_sub(scissor_x as u32);
+                let max_h = self.height.saturating_sub(scissor_y as u32);
+                ctx.set_scissor(scissor_x, scissor_y, scissor_w.min(max_w), scissor_h.min(max_h));
+
                 ctx.draw_indexed(mesh.indices.len() as u32, ib_offset as u32, vb_offset as i32);
                 vb_offset += mesh.vertices.len();
                 ib_offset += mesh.indices.len();

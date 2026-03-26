@@ -157,7 +157,7 @@ impl DefaultRenderGraph {
             swizzle: Default::default(),
         });
         _backend
-            .upload_image(white_image, &[255, 255, 255, 255], 0, 0)
+            .upload_image(white_image, &[255, 255, 255, 255], 0, 0, 1, 1, 0, 0)
             .unwrap();
         bindless_manager.register_physical_texture(_backend, white_image);
 
