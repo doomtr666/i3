@@ -12,4 +12,5 @@ thiserror.workspace = true
 tracing.workspace = true
 memmap2.workspace = true
 uuid.workspace = true
+rayon.workspace = true
 bytemuck = { workspace = true, features = ["derive"] }

@@ -103,9 +103,9 @@ impl AssetLoader {
         let path = path.as_ref().to_path_buf();
         let vfs = self.vfs.clone();
         let handle_clone = handle.clone();
-
         let start_time = std::time::Instant::now();
-        std::thread::spawn(move || {
+
+        rayon::spawn(move || {
             {
                 let mut lock = handle_clone.inner.sync.lock().unwrap();
                 lock.0 = ASSET_STATE_LOADING;
@@ -129,7 +129,7 @@ impl AssetLoader {
         let uuid = *uuid;
         let start_time = std::time::Instant::now();
 
-        std::thread::spawn(move || {
+        rayon::spawn(move || {
             {
                 let mut lock = handle_clone.inner.sync.lock().unwrap();
                 lock.0 = ASSET_STATE_LOADING;
