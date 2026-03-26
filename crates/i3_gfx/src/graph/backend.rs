@@ -275,17 +275,13 @@ pub trait RenderBackend {
         _desc: &i3_io::pipeline_asset::BakeableGraphicsPipeline,
         _reflection: &[u8],
         _bytecode: &[u8],
-    ) -> BackendPipeline {
-        unimplemented!("Backend does not support baked pipelines yet")
-    }
+    ) -> BackendPipeline;
 
     fn create_compute_pipeline_from_baked(
         &mut self,
         _reflection: &[u8],
         _bytecode: &[u8],
-    ) -> BackendPipeline {
-        unimplemented!("Backend does not support baked pipelines yet")
-    }
+    ) -> BackendPipeline;
 
     fn destroy_image(&mut self, handle: BackendImage);
     fn destroy_buffer(&mut self, handle: BackendBuffer);

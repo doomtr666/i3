@@ -2,6 +2,7 @@ use i3_gfx::graph::backend::{
     BackendBuffer, BackendImage, PassContext, PassDescriptor, RenderBackend, RenderBackendInternal,
 };
 use i3_gfx::graph::pass::RenderPass;
+use i3_io;
 pub mod prelude;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -193,6 +194,27 @@ impl RenderBackend for NullBackend {
     }
 
     // --- Descriptor Management ---
+    fn create_graphics_pipeline_from_baked(
+        &mut self,
+        _desc: &i3_io::pipeline_asset::BakeableGraphicsPipeline,
+        _reflection: &[u8],
+        _bytecode: &[u8],
+    ) -> i3_gfx::graph::backend::BackendPipeline {
+        let h = self.next_handle();
+        self.allocated_pipelines.insert(h);
+        i3_gfx::graph::backend::BackendPipeline(h)
+    }
+
+    fn create_compute_pipeline_from_baked(
+        &mut self,
+        _reflection: &[u8],
+        _bytecode: &[u8],
+    ) -> i3_gfx::graph::backend::BackendPipeline {
+        let h = self.next_handle();
+        self.allocated_pipelines.insert(h);
+        i3_gfx::graph::backend::BackendPipeline(h)
+    }
+
     fn update_bindless_texture(
         &mut self,
         _texture: i3_gfx::graph::types::ImageHandle,

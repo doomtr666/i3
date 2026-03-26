@@ -40,22 +40,6 @@ impl TonemapPass {
         }
     }
 
-    pub fn init_from_baked(
-        &mut self,
-        backend: &mut dyn RenderBackend,
-        asset: &i3_io::pipeline_asset::PipelineAsset,
-    ) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        let state = asset.state.as_ref().expect("Tonemap asset missing state");
-        self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
-            state,
-            &asset.reflection_data,
-            &asset.bytecode,
-        ));
-    }
 }
 
 impl RenderPass for TonemapPass {
@@ -65,8 +49,13 @@ impl RenderPass for TonemapPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("tonemap").wait_loaded() {
-            self.init_from_baked(backend, &handle);
+        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("tonemap").wait_loaded() {
+            let state = asset.state.as_ref().expect("Tonemap asset missing state");
+            self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
+                state,
+                &asset.reflection_data,
+                &asset.bytecode,
+            ));
         }
     }
 

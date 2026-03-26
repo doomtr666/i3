@@ -40,20 +40,6 @@ impl ClusterBuildPass {
         }
     }
 
-    pub fn init_from_baked(
-        &mut self,
-        _backend: &mut dyn RenderBackend,
-        asset: &i3_io::pipeline_asset::PipelineAsset,
-    ) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        self.pipeline = Some(_backend.create_compute_pipeline_from_baked(
-            &asset.reflection_data,
-            &asset.bytecode,
-        ));
-    }
 }
 
 impl RenderPass for ClusterBuildPass {
@@ -63,9 +49,11 @@ impl RenderPass for ClusterBuildPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        match loader.load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build").wait_loaded() {
-            Ok(handle) => self.init_from_baked(backend, &handle),
-            Err(e) => tracing::error!("Failed to load 'cluster_build' asset: {:?}", e),
+        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build").wait_loaded() {
+            self.pipeline = Some(backend.create_compute_pipeline_from_baked(
+                &asset.reflection_data,
+                &asset.bytecode,
+            ));
         }
     }
 

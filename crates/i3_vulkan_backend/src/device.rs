@@ -49,9 +49,9 @@ impl VulkanDevice {
                 .handle
                 .get_physical_device_properties(physical_device)
         };
-        info!("Selected GPU: {:?} (maxDrawIndirectCount: {})", unsafe {
+        info!("Selected GPU: {:?}", unsafe {
             std::ffi::CStr::from_ptr(props.device_name.as_ptr())
-        }, props.limits.max_draw_indirect_count);
+        });
 
         // Find graphics queue family
         let queue_families = unsafe {

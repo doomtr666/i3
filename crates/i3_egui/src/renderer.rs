@@ -108,7 +108,7 @@ impl RenderPass for EguiPass {
             Ok(handle) => {
                 let mut renderer = self.renderer.lock().unwrap();
                 renderer.init_from_baked(backend, &handle);
-                tracing::info!("Egui renderer initialized successfully from baked asset");
+                tracing::debug!("Egui renderer initialized successfully from baked asset");
             }
             Err(e) => {
                 tracing::error!("Failed to load egui pipeline asset: {}", e);

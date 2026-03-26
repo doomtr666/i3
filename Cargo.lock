@@ -1080,6 +1080,7 @@ name = "i3_null_backend"
 version = "0.1.0"
 dependencies = [
  "i3_gfx",
+ "i3_io",
  "thiserror 1.0.69",
  "tracing",
 ]

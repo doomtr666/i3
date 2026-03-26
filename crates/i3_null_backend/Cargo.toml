@@ -9,5 +9,6 @@ workspace = true
 
 [dependencies]
 i3_gfx.workspace = true
+i3_io = { workspace = true }
 tracing.workspace = true
 thiserror.workspace = true

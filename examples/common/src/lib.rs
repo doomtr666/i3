@@ -63,12 +63,6 @@ impl FrameStats {
         self.accumulated_time += delta;
 
         if self.frame_count >= 1000 {
-            let avg = self.accumulated_time.as_secs_f32() / self.frame_count as f32;
-            info!(
-                "Frame Stats: Avg Frame Time: {:.2}ms ({:.1} FPS)",
-                avg * 1000.0,
-                1.0 / avg
-            );
             self.frame_count = 0;
             self.accumulated_time = Duration::ZERO;
         }

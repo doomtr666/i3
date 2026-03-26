@@ -222,7 +222,7 @@ impl DefaultRenderGraph {
             ) {
                 let _ = vfs.mount(Box::new(bundle));
                 tracing::info!(
-                    "System bundle cooperatively mounted from {:?}",
+                    "System bundle mounted from {:?}",
                     catalog_path.parent().unwrap()
                 );
             }

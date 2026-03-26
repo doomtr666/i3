@@ -56,22 +56,6 @@ impl DeferredResolvePass {
         }
     }
 
-    pub fn init_from_baked(
-        &mut self,
-        backend: &mut dyn RenderBackend,
-        asset: &i3_io::pipeline_asset::PipelineAsset,
-    ) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        let state = asset.state.as_ref().expect("DeferredResolve asset missing state");
-        self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
-            state,
-            &asset.reflection_data,
-            &asset.bytecode,
-        ));
-    }
 }
 
 impl RenderPass for DeferredResolvePass {
@@ -81,8 +65,13 @@ impl RenderPass for DeferredResolvePass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
-            self.init_from_baked(backend, &handle);
+        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
+            let state = asset.state.as_ref().expect("DeferredResolve asset missing state");
+            self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
+                state,
+                &asset.reflection_data,
+                &asset.bytecode,
+            ));
         }
     }
 

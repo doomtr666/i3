@@ -32,20 +32,6 @@ impl DrawCallGenPass {
         }
     }
 
-    pub fn init_from_baked(
-        &mut self,
-        backend: &mut dyn RenderBackend,
-        asset: &i3_io::pipeline_asset::PipelineAsset,
-    ) {
-        if self.pipeline.is_some() {
-            return;
-        }
-
-        self.pipeline = Some(backend.create_compute_pipeline_from_baked(
-            &asset.reflection_data,
-            &asset.bytecode,
-        ));
-    }
 }
 
 impl RenderPass for DrawCallGenPass {
@@ -55,8 +41,11 @@ impl RenderPass for DrawCallGenPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(handle) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("draw_call_gen").wait_loaded() {
-            self.init_from_baked(backend, &handle);
+        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("draw_call_gen").wait_loaded() {
+            self.pipeline = Some(backend.create_compute_pipeline_from_baked(
+                &asset.reflection_data,
+                &asset.bytecode,
+            ));
         }
     }
 

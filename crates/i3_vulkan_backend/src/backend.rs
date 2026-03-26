@@ -335,7 +335,6 @@ impl VulkanBackend {
                 .create_descriptor_set_layout(&layout_info, None)
                 .map_err(|e| format!("Failed to create bindless layout: {}", e))?;
 
-            info!("Created Global Bindless Set Layout: {:?}", layout);
             self.bindless_set_layout = layout;
             
             let layouts = [layout];
