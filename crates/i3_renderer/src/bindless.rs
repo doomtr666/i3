@@ -83,4 +83,9 @@ impl BindlessManager {
         // or we expect callers to manage resolving.
         self.texture_registry.get(&image.0.0).copied()
     }
+
+    pub fn clear(&mut self) {
+        self.texture_registry.clear();
+        self.next_index = 0;
+    }
 }

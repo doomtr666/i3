@@ -49,7 +49,8 @@ impl DeferredGltfApp {
             }
         };
 
-        // Reset scene
+        // Reset scene and render graph scene-specific state
+        self.render_graph.clear_scene(&mut self.backend);
         self.scene = BasicScene::new();
         self.current_scene = scene_name.to_string();
 

@@ -16,6 +16,18 @@ impl AccelStructSystem {
             tlas: None,
         }
     }
+
+    /// Destroys all cached acceleration structures and clears state.
+    pub fn reset(&mut self, backend: &mut dyn RenderBackend) {
+        for (_, &handle) in &self.blas_cache {
+            backend.destroy_blas(handle);
+        }
+        self.blas_cache.clear();
+
+        if let Some(handle) = self.tlas.take() {
+            backend.destroy_tlas(handle);
+        }
+    }
 }
 
 /// Pass responsible for building/updating BLAS for all meshes.

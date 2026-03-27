@@ -196,6 +196,16 @@ impl DefaultRenderGraph {
         }
     }
 
+    /// Resets scene-specific state in the render graph (e.g., for scene switching).
+    pub fn clear_scene(&mut self, backend: &mut dyn RenderBackend) {
+        let mut system = self.accel_struct_system.lock().unwrap();
+        system.reset(backend);
+        self.bindless_manager.clear();
+        self.scene_mesh_descriptors.clear();
+        self.pending_blas.clear();
+        self.tlas_instances.clear();
+    }
+
     /// Initializes the render graph: handles cooperative asset loading and pipeline binding.
     /// External services (AssetLoader, UiSystem) should be published to the graph's blackboard before calling this.
     pub fn init(&mut self, backend: &mut dyn RenderBackend) {

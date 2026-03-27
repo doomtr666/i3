@@ -702,7 +702,93 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn garbage_collect(&mut self) {
-        // Simple pooling for now, could clear pools here if too large
+        if self.device.is_none() {
+            return;
+        }
+        let safe_frame = self.frame_count.saturating_sub(4);
+        let device = self.get_device().clone();
+
+        // 1. Buffers
+        if !self.dead_buffers.is_empty() {
+            let allocator = device.allocator.lock().unwrap();
+            let mut i = 0;
+            while i < self.dead_buffers.len() {
+                if self.dead_buffers[i].0 <= safe_frame {
+                    let (_, buffer, mut alloc) = self.dead_buffers.remove(i);
+                    unsafe {
+                        allocator.destroy_buffer(buffer, &mut alloc);
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // 2. Images
+        if !self.dead_images.is_empty() {
+            let allocator = device.allocator.lock().unwrap();
+            let mut i = 0;
+            while i < self.dead_images.len() {
+                if self.dead_images[i].0 <= safe_frame {
+                    let (_, image, view, mut alloc) = self.dead_images.remove(i);
+                    unsafe {
+                        device.handle.destroy_image_view(view, None);
+                        allocator.destroy_image(image, &mut alloc);
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // 3. Acceleration Structures
+        if !self.dead_accel_structs.is_empty() {
+            if let Some(as_loader) = &self.accel_struct {
+                let allocator = device.allocator.lock().unwrap();
+                let mut i = 0;
+                while i < self.dead_accel_structs.len() {
+                    if self.dead_accel_structs[i].0 <= safe_frame {
+                        let (_, handle, buffer, mut alloc) = self.dead_accel_structs.remove(i);
+                        unsafe {
+                            as_loader.destroy_acceleration_structure(handle, None);
+                            allocator.destroy_buffer(buffer, &mut alloc);
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+        }
+
+        // 4. Samplers
+        if !self.dead_samplers.is_empty() {
+            let mut i = 0;
+            while i < self.dead_samplers.len() {
+                if self.dead_samplers[i].0 <= safe_frame {
+                    let (_, sampler) = self.dead_samplers.remove(i);
+                    unsafe {
+                        device.handle.destroy_sampler(sampler, None);
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // 5. Semaphores
+        if !self.dead_semaphores.is_empty() {
+            let mut i = 0;
+            while i < self.dead_semaphores.len() {
+                if self.dead_semaphores[i].0 <= safe_frame {
+                    let (_, _id, sem) = self.dead_semaphores.remove(i);
+                    unsafe {
+                        device.handle.destroy_semaphore(sem, None);
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
     }
 
     // --- Resource Resolution ---
@@ -1359,24 +1445,24 @@ impl Drop for VulkanBackend {
                 debug!("Destroying dead resources...");
                 {
                     let allocator = device.allocator.lock().unwrap();
-                    for (_, buffer, alloc) in &mut self.dead_buffers {
-                        allocator.destroy_buffer(*buffer, alloc);
+                    for (_, buffer, mut alloc) in self.dead_buffers.drain(..) {
+                        allocator.destroy_buffer(buffer, &mut alloc);
                     }
-                    for (_, image, view, alloc) in &mut self.dead_images {
-                        device.handle.destroy_image_view(*view, None);
-                        allocator.destroy_image(*image, alloc);
+                    for (_, image, view, mut alloc) in self.dead_images.drain(..) {
+                        device.handle.destroy_image_view(view, None);
+                        allocator.destroy_image(image, &mut alloc);
                     }
-                    for (_, handle, buffer, alloc) in &mut self.dead_accel_structs {
-                        if let Some(as_loader) = &self.accel_struct {
-                            as_loader.destroy_acceleration_structure(*handle, None);
+                    if let Some(as_loader) = &self.accel_struct {
+                        for (_, handle, buffer, mut alloc) in self.dead_accel_structs.drain(..) {
+                            as_loader.destroy_acceleration_structure(handle, None);
+                            allocator.destroy_buffer(buffer, &mut alloc);
                         }
-                        allocator.destroy_buffer(*buffer, alloc);
                     }
-                    for (_, sampler) in &mut self.dead_samplers {
-                        device.handle.destroy_sampler(*sampler, None);
+                    for (_, sampler) in self.dead_samplers.drain(..) {
+                        device.handle.destroy_sampler(sampler, None);
                     }
-                    for (_, _, sem_handle) in &self.dead_semaphores {
-                        device.handle.destroy_semaphore(*sem_handle, None);
+                    for (_, _, sem_handle) in self.dead_semaphores.drain(..) {
+                        device.handle.destroy_semaphore(sem_handle, None);
                     }
                 }
 
