@@ -106,6 +106,7 @@ pub struct Mesh {
     pub index_count: u32,
     pub index_type: IndexType,
     pub stride: u32,
+    pub vertex_count: u32,
 }
 
 /// Trait that the application (or ECS bridge) implements to feed

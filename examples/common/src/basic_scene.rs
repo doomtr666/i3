@@ -85,7 +85,7 @@ impl BasicScene {
     ) -> u32 {
         let vb = backend.create_buffer(&BufferDesc {
             size: vertices.len() as u64,
-            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::SHADER_DEVICE_ADDRESS | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::CpuToGpu,
         });
         backend
@@ -100,7 +100,7 @@ impl BasicScene {
         };
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
-            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::DEVICE_ADDRESS,
+            usage: BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::SHADER_DEVICE_ADDRESS | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::CpuToGpu,
         });
         backend
@@ -112,6 +112,7 @@ impl BasicScene {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
+            vertex_count,
             index_type: IndexType::Uint16,
             stride: 48, // Match GBufferVertex [f32; 12]
         });
@@ -186,8 +187,9 @@ impl BasicScene {
         let vb = backend.create_buffer(&BufferDesc {
             size: vb_bytes.len() as u64,
             usage: BufferUsageFlags::VERTEX_BUFFER
-                | BufferUsageFlags::DEVICE_ADDRESS
-                | BufferUsageFlags::TRANSFER_DST,
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(vb, vb_bytes, 0).unwrap();
@@ -196,8 +198,9 @@ impl BasicScene {
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
             usage: BufferUsageFlags::INDEX_BUFFER
-                | BufferUsageFlags::DEVICE_ADDRESS
-                | BufferUsageFlags::TRANSFER_DST,
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
@@ -208,6 +211,7 @@ impl BasicScene {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
+            vertex_count: vertices.len() as u32,
             index_type: IndexType::Uint32,
             stride: 48,
         });
@@ -234,8 +238,9 @@ impl BasicScene {
         let vb = backend.create_buffer(&BufferDesc {
             size: vb_bytes.len() as u64,
             usage: BufferUsageFlags::VERTEX_BUFFER
-                | BufferUsageFlags::DEVICE_ADDRESS
-                | BufferUsageFlags::TRANSFER_DST,
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(vb, vb_bytes, 0).unwrap();
@@ -244,8 +249,9 @@ impl BasicScene {
         let ib = backend.create_buffer(&BufferDesc {
             size: ib_bytes.len() as u64,
             usage: BufferUsageFlags::INDEX_BUFFER
-                | BufferUsageFlags::DEVICE_ADDRESS
-                | BufferUsageFlags::TRANSFER_DST,
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::GpuOnly,
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
@@ -256,6 +262,7 @@ impl BasicScene {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
+            vertex_count: vertices.len() as u32,
             index_type: IndexType::Uint32,
             stride: 48,
         });
@@ -300,8 +307,9 @@ impl BasicScene {
         let vb = backend.create_buffer(&BufferDesc {
             size: mesh_asset.vertex_data.len() as u64,
             usage: BufferUsageFlags::VERTEX_BUFFER
-                | BufferUsageFlags::DEVICE_ADDRESS
-                | BufferUsageFlags::TRANSFER_DST,
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::GpuOnly,
         });
         debug!(
@@ -316,8 +324,9 @@ impl BasicScene {
         let ib = backend.create_buffer(&BufferDesc {
             size: mesh_asset.index_data.len() as u64,
             usage: BufferUsageFlags::INDEX_BUFFER
-                | BufferUsageFlags::DEVICE_ADDRESS
-                | BufferUsageFlags::TRANSFER_DST,
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
             memory: MemoryType::GpuOnly,
         });
         backend
@@ -331,6 +340,7 @@ impl BasicScene {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: mesh_asset.header.index_count,
+            vertex_count: mesh_asset.header.vertex_count,
             index_type,
             stride: mesh_asset.header.vertex_stride,
         });
@@ -532,8 +542,8 @@ impl SceneProvider for BasicScene {
     ) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
         Box::new(self.meshes.iter().enumerate().map(|(i, m)| {
             let desc = GpuMeshDescriptor {
-                vertex_buffer_address: backend.get_buffer_device_address(m.vertex_buffer),
-                index_buffer_address: backend.get_buffer_device_address(m.index_buffer),
+                vertex_buffer_address: backend.get_buffer_address(m.vertex_buffer),
+                index_buffer_address: backend.get_buffer_address(m.index_buffer),
                 index_count: m.index_count,
                 vertex_stride: m.stride,
                 first_index: 0,

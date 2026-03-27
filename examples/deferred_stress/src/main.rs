@@ -23,7 +23,7 @@ struct DeferredStressApp {
 }
 
 impl ExampleApp for DeferredStressApp {
-    fn update(&mut self, delta: Duration) {
+    fn update(&mut self, delta: Duration, _smoothed_delta: Duration) {
         self.dt = delta.as_secs_f32();
         self.time += self.dt;
 

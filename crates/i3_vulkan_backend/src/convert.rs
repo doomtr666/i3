@@ -127,11 +127,24 @@ pub fn convert_buffer_usage_flags(usage_flags: BufferUsageFlags) -> vk::BufferUs
     if usage_flags.contains(BufferUsageFlags::INDIRECT_BUFFER) {
         vk_usage_flags |= vk::BufferUsageFlags::INDIRECT_BUFFER;
     }
-    if usage_flags.contains(BufferUsageFlags::DEVICE_ADDRESS) {
-        vk_usage_flags |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+    if usage_flags.contains(BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+        vk_usage_flags |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS_KHR;
+    }
+    if usage_flags.contains(BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT) {
+        vk_usage_flags |= vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
+    }
+    if usage_flags.contains(BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE) {
+        vk_usage_flags |= vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR;
     }
 
     vk_usage_flags
+}
+
+pub fn convert_index_type(index_type: IndexType) -> vk::IndexType {
+    match index_type {
+        IndexType::Uint16 => vk::IndexType::UINT16,
+        IndexType::Uint32 => vk::IndexType::UINT32,
+    }
 }
 
 pub fn convert_sample_count(sample_count: SampleCount) -> vk::SampleCountFlags {

@@ -60,6 +60,15 @@ impl<'a> PassBuilder<'a> {
         self.inner.write_image(handle, usage);
     }
 
+    pub fn write_acceleration_structure(
+        &mut self,
+        _handle: crate::graph::backend::BackendAccelerationStructure,
+        _usage: ResourceUsage,
+    ) {
+        // For now, AS dependencies are handled via sync passes or manual barriers in backend.
+        // This method allows the renderer to declare intent.
+    }
+
     pub fn read_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage) {
         self.inner.read_buffer(handle, usage);
     }

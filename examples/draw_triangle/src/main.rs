@@ -36,7 +36,7 @@ struct TriangleApp {
 }
 
 impl ExampleApp for TriangleApp {
-    fn update(&mut self, _delta: Duration) {
+    fn update(&mut self, _delta: Duration, _smoothed_delta: Duration) {
         // Update logic (animations, etc.) would go here
     }
 

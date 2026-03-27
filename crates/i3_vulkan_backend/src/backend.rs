@@ -49,6 +49,9 @@ pub struct VulkanBackend {
     pub dead_semaphores: Vec<(u64, u64, vk::Semaphore)>, // Frame, ID, Handle
     pub recycled_semaphores: Vec<vk::Semaphore>,
 
+    pub accel_structs: ResourceArena<crate::accel_struct::PhysicalAccelerationStructure>,
+    pub dead_accel_structs: Vec<(u64, vk::AccelerationStructureKHR, vk::Buffer, vk_mem::Allocation)>,
+
     // Transient Pools
     pub(crate) transient_image_pool: HashMap<ImageDesc, Vec<u64>>,
     pub(crate) transient_buffer_pool: HashMap<BufferDesc, Vec<u64>>,
@@ -67,6 +70,13 @@ pub struct VulkanBackend {
 
     // Loaders
     pub(crate) swapchain_loader: Option<ash::khr::swapchain::Device>,
+    pub dynamic_rendering: Option<ash::khr::dynamic_rendering::Device>,
+    pub sync2: Option<ash::khr::synchronization2::Device>,
+
+    pub accel_struct: Option<ash::khr::acceleration_structure::Device>,
+    pub rt_pipeline: Option<ash::khr::ray_tracing_pipeline::Device>,
+
+    pub rt_supported: bool,
 
     // Scratch Buffers for hot path
     pub(crate) target_id_scratch: Vec<u64>,
@@ -138,6 +148,11 @@ impl VulkanBackend {
             cpu_timeline: 0,
             frame_contexts: Vec::new(),
             swapchain_loader: None,
+            dynamic_rendering: None,
+            sync2: None,
+            accel_struct: None,
+            rt_pipeline: None,
+            rt_supported: false,
             target_id_scratch: Vec::with_capacity(32),
             image_barrier_scratch: Vec::with_capacity(32),
             buffer_barrier_scratch: Vec::with_capacity(32),
@@ -146,6 +161,8 @@ impl VulkanBackend {
             next_resource_id: 1,
             bindless_set_layout: vk::DescriptorSetLayout::null(),
             bindless_set_handle: 0,
+            accel_structs: ResourceArena::new(),
+            dead_accel_structs: Vec::new(),
         })
     }
 
@@ -357,6 +374,12 @@ impl VulkanBackend {
 }
 
 impl RenderBackend for VulkanBackend {
+    fn capabilities(&self) -> DeviceCapabilities {
+        DeviceCapabilities {
+            ray_tracing: self.get_device().rt_supported,
+        }
+    }
+
     fn enumerate_devices(&self) -> Vec<DeviceInfo> {
         let pdevices =
             unsafe { self.instance.handle.enumerate_physical_devices() }.unwrap_or_default();
@@ -466,6 +489,13 @@ impl RenderBackend for VulkanBackend {
         self.init_frame_contexts()?;
 
         // Initialize Loaders
+        let device_ptr = self.get_device().clone();
+        self.dynamic_rendering = Some(device_ptr.dynamic_rendering.clone());
+        self.sync2 = Some(device_ptr.sync2.clone());
+        self.accel_struct = device_ptr.accel_struct.clone();
+        self.rt_pipeline = device_ptr.rt_pipeline.clone();
+        self.rt_supported = device_ptr.rt_supported;
+
         self.swapchain_loader = Some(ash::khr::swapchain::Device::new(
             &self.instance.handle,
             &self.get_device().handle,
@@ -478,14 +508,6 @@ impl RenderBackend for VulkanBackend {
         Ok(())
     }
 
-    fn get_buffer_device_address(&self, handle: BackendBuffer) -> u64 {
-        if let Some(buf) = self.buffers.get(handle.0) {
-            let info = vk::BufferDeviceAddressInfo::default().buffer(buf.buffer);
-            unsafe { self.get_device().handle.get_buffer_device_address(&info) }
-        } else {
-            0
-        }
-    }
 
     fn create_window(&mut self, desc: WindowDesc) -> Result<WindowHandle, String> {
         crate::window_context::create_window(self, desc)
@@ -533,6 +555,22 @@ impl RenderBackend for VulkanBackend {
 
     fn destroy_sampler(&mut self, handle: SamplerHandle) {
         crate::resources::destroy_sampler(self, handle)
+    }
+
+    fn create_blas(&mut self, info: &BlasCreateInfo) -> BackendAccelerationStructure {
+        crate::accel_struct::create_blas(self, info)
+    }
+
+    fn destroy_blas(&mut self, handle: BackendAccelerationStructure) {
+        crate::accel_struct::destroy_blas(self, handle)
+    }
+
+    fn create_tlas(&mut self, info: &TlasCreateInfo) -> BackendAccelerationStructure {
+        crate::accel_struct::create_tlas(self, info)
+    }
+
+    fn destroy_tlas(&mut self, handle: BackendAccelerationStructure) {
+        crate::accel_struct::destroy_tlas(self, handle)
     }
 
     fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineCreateInfo) -> BackendPipeline {
@@ -724,6 +762,15 @@ impl RenderBackend for VulkanBackend {
     #[cfg(debug_assertions)]
     fn set_buffer_name(&mut self, buffer: BackendBuffer, name: &str) {
         crate::debug::set_buffer_name(self, buffer, name);
+    }
+
+    fn get_buffer_address(&self, handle: BackendBuffer) -> u64 {
+        if let Some(buf) = self.buffers.get(handle.0) {
+            let info = vk::BufferDeviceAddressInfo::default().buffer(buf.buffer);
+            unsafe { self.get_device().handle.get_buffer_device_address(&info) }
+        } else {
+            0
+        }
     }
 }
 
@@ -1237,6 +1284,7 @@ impl RenderBackendInternal for VulkanBackend {
     fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]) {
         crate::descriptors::update_descriptor_set(self, set, writes);
     }
+
 }
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
@@ -1318,11 +1366,26 @@ impl Drop for VulkanBackend {
                         device.handle.destroy_image_view(*view, None);
                         allocator.destroy_image(*image, alloc);
                     }
+                    for (_, handle, buffer, alloc) in &mut self.dead_accel_structs {
+                        if let Some(as_loader) = &self.accel_struct {
+                            as_loader.destroy_acceleration_structure(*handle, None);
+                        }
+                        allocator.destroy_buffer(*buffer, alloc);
+                    }
                     for (_, sampler) in &mut self.dead_samplers {
                         device.handle.destroy_sampler(*sampler, None);
                     }
                     for (_, _, sem_handle) in &self.dead_semaphores {
                         device.handle.destroy_semaphore(*sem_handle, None);
+                    }
+                }
+
+                debug!("Destroying acceleration structures...");
+                if let Some(as_loader) = &self.accel_struct {
+                    let allocator = device.allocator.lock().unwrap();
+                    for (_id, pas) in self.accel_structs.iter_mut() {
+                        as_loader.destroy_acceleration_structure(pas.handle, None);
+                        allocator.destroy_buffer(pas.buffer, &mut pas.allocation);
                     }
                 }
 

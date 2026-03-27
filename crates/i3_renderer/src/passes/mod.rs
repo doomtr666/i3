@@ -9,3 +9,4 @@ pub mod light_cull;
 pub mod sky;
 pub mod sync;
 pub mod tonemap;
+pub mod accel_struct;

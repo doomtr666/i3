@@ -1,7 +1,10 @@
 use i3_gfx::graph::backend::{
     BackendBuffer, BackendImage, PassContext, PassDescriptor, RenderBackend, RenderBackendInternal,
+    BackendAccelerationStructure, TlasInstanceDesc, DescriptorSetHandle, DescriptorWrite, SamplerHandle,
 };
 use i3_gfx::graph::pass::RenderPass;
+use i3_gfx::graph::types::{BufferDesc, BufferHandle, ImageDesc, ImageHandle, WindowHandle};
+use i3_gfx::graph::pipeline::IndexType;
 use i3_io;
 pub mod prelude;
 use std::collections::HashSet;
@@ -20,7 +23,7 @@ pub struct NullBackend {
     allocated_images: HashSet<u64>,
     allocated_buffers: HashSet<u64>,
     allocated_pipelines: HashSet<u64>,
-    image_map: std::collections::HashMap<i3_gfx::graph::types::ImageHandle, BackendImage>,
+    image_map: std::collections::HashMap<ImageHandle, BackendImage>,
     next_handle: u64,
 }
 
@@ -43,14 +46,20 @@ impl NullBackend {
 }
 
 impl RenderBackend for NullBackend {
-    fn create_image(&mut self, desc: &i3_gfx::graph::backend::ImageDesc) -> BackendImage {
+    fn capabilities(&self) -> i3_gfx::graph::backend::DeviceCapabilities {
+        i3_gfx::graph::backend::DeviceCapabilities {
+            ray_tracing: false,
+        }
+    }
+
+    fn create_image(&mut self, desc: &ImageDesc) -> BackendImage {
         let h = self.next_handle();
         self.allocated_images.insert(h);
         info!(handle = h, ?desc, "Created Image");
         BackendImage(h)
     }
 
-    fn create_buffer(&mut self, _desc: &i3_gfx::graph::backend::BufferDesc) -> BackendBuffer {
+    fn create_buffer(&mut self, _desc: &BufferDesc) -> BackendBuffer {
         let handle = self.next_handle();
         self.allocated_buffers.insert(handle);
         BackendBuffer(handle)
@@ -68,13 +77,13 @@ impl RenderBackend for NullBackend {
     fn create_sampler(
         &mut self,
         desc: &i3_gfx::graph::types::SamplerDesc,
-    ) -> i3_gfx::graph::backend::SamplerHandle {
+    ) -> SamplerHandle {
         let handle = self.next_handle();
         info!(handle, ?desc, "Created Sampler");
-        i3_gfx::graph::backend::SamplerHandle(handle)
+        SamplerHandle(handle)
     }
 
-    fn destroy_sampler(&mut self, handle: i3_gfx::graph::backend::SamplerHandle) {
+    fn destroy_sampler(&mut self, handle: SamplerHandle) {
         info!(handle = handle.0, "Destroyed Sampler");
     }
 
@@ -111,32 +120,54 @@ impl RenderBackend for NullBackend {
         Ok(())
     }
 
-    fn get_buffer_device_address(&self, _handle: BackendBuffer) -> u64 {
-        0
+    fn create_blas(
+        &mut self,
+        _info: &i3_gfx::graph::backend::BlasCreateInfo,
+    ) -> BackendAccelerationStructure {
+        let handle = self.next_handle();
+        info!(handle, "Created Null BLAS");
+        BackendAccelerationStructure(handle)
+    }
+
+    fn destroy_blas(&mut self, handle: BackendAccelerationStructure) {
+        info!(handle = handle.0, "Destroyed Null BLAS");
+    }
+
+    fn create_tlas(
+        &mut self,
+        _info: &i3_gfx::graph::backend::TlasCreateInfo,
+    ) -> BackendAccelerationStructure {
+        let handle = self.next_handle();
+        info!(handle, "Created Null TLAS");
+        BackendAccelerationStructure(handle)
+    }
+
+    fn destroy_tlas(&mut self, handle: BackendAccelerationStructure) {
+        info!(handle = handle.0, "Destroyed Null TLAS");
     }
 
     fn create_window(
         &mut self,
         desc: i3_gfx::graph::backend::WindowDesc,
-    ) -> Result<i3_gfx::graph::types::WindowHandle, String> {
+    ) -> Result<WindowHandle, String> {
         info!(?desc, "Created Null Window");
-        Ok(i3_gfx::graph::types::WindowHandle(1))
+        Ok(WindowHandle(1))
     }
 
-    fn destroy_window(&mut self, window: i3_gfx::graph::types::WindowHandle) {
+    fn destroy_window(&mut self, window: WindowHandle) {
         info!(?window, "Destroyed Null Window");
     }
 
     fn configure_window(
         &mut self,
-        window: i3_gfx::graph::types::WindowHandle,
+        window: WindowHandle,
         config: i3_gfx::graph::backend::SwapchainConfig,
     ) -> Result<(), String> {
         info!(?window, ?config, "Configured Null Window");
         Ok(())
     }
 
-    fn set_fullscreen(&mut self, window: i3_gfx::graph::types::WindowHandle, fullscreen: bool) {
+    fn set_fullscreen(&mut self, window: WindowHandle, fullscreen: bool) {
         info!(?window, fullscreen, "Set Fullscreen Null Window");
     }
 
@@ -174,20 +205,20 @@ impl RenderBackend for NullBackend {
     // --- Resource Resolution ---
     fn resolve_image(
         &self,
-        handle: i3_gfx::graph::types::ImageHandle,
-    ) -> i3_gfx::graph::backend::BackendImage {
+        handle: ImageHandle,
+    ) -> BackendImage {
         if let Some(phy) = self.image_map.get(&handle) {
             *phy
         } else {
-            i3_gfx::graph::backend::BackendImage(handle.0.0)
+            BackendImage(handle.0.0)
         }
     }
 
     fn resolve_buffer(
         &self,
-        handle: i3_gfx::graph::types::BufferHandle,
-    ) -> i3_gfx::graph::backend::BackendBuffer {
-        i3_gfx::graph::backend::BackendBuffer(handle.0.0)
+        handle: BufferHandle,
+    ) -> BackendBuffer {
+        BackendBuffer(handle.0.0)
     }
 
     fn resolve_pipeline(
@@ -221,8 +252,8 @@ impl RenderBackend for NullBackend {
 
     fn update_bindless_texture(
         &mut self,
-        _texture: i3_gfx::graph::types::ImageHandle,
-        _sampler: i3_gfx::graph::backend::SamplerHandle,
+        _texture: ImageHandle,
+        _sampler: SamplerHandle,
         index: u32,
         _set: u64,
         _binding: u32,
@@ -233,7 +264,7 @@ impl RenderBackend for NullBackend {
     fn update_bindless_texture_raw(
         &mut self,
         _texture: BackendImage,
-        _sampler: i3_gfx::graph::backend::SamplerHandle,
+        _sampler: SamplerHandle,
         index: u32,
         _set: u64,
         _binding: u32,
@@ -243,7 +274,7 @@ impl RenderBackend for NullBackend {
 
     fn update_bindless_sampler(
         &mut self,
-        _sampler: i3_gfx::graph::backend::SamplerHandle,
+        _sampler: SamplerHandle,
         _set: u64,
         _binding: u32,
     ) {
@@ -253,8 +284,8 @@ impl RenderBackend for NullBackend {
     // --- Handle Registration ---
     fn register_external_image(
         &mut self,
-        handle: i3_gfx::graph::types::ImageHandle,
-        physical: i3_gfx::graph::backend::BackendImage,
+        handle: ImageHandle,
+        physical: BackendImage,
     ) {
         info!(
             ?handle,
@@ -266,8 +297,8 @@ impl RenderBackend for NullBackend {
 
     fn register_external_buffer(
         &mut self,
-        _handle: i3_gfx::graph::types::BufferHandle,
-        _physical: i3_gfx::graph::backend::BackendBuffer,
+        _handle: BufferHandle,
+        _physical: BackendBuffer,
     ) {
         info!("Registered external buffer in NullBackend");
     }
@@ -278,13 +309,13 @@ impl RenderBackend for NullBackend {
     }
 
     // --- Transient Resource Management (Pooling) ---
-    fn create_transient_image(&mut self, desc: &i3_gfx::graph::backend::ImageDesc) -> BackendImage {
+    fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage {
         self.create_image(desc)
     }
 
     fn create_transient_buffer(
         &mut self,
-        desc: &i3_gfx::graph::backend::BufferDesc,
+        desc: &BufferDesc,
     ) -> BackendBuffer {
         self.create_buffer(desc)
     }
@@ -299,6 +330,10 @@ impl RenderBackend for NullBackend {
 
     fn garbage_collect(&mut self) {
         // No-op
+    }
+
+    fn get_buffer_address(&self, _handle: BackendBuffer) -> u64 {
+        0
     }
 }
 
@@ -316,7 +351,7 @@ impl RenderBackendInternal for NullBackend {
 
     fn acquire_swapchain_image(
         &mut self,
-        _window: i3_gfx::graph::types::WindowHandle,
+        _window: WindowHandle,
     ) -> Result<Option<(BackendImage, u64, u32)>, String> {
         let handle = 1000;
         self.allocated_images.insert(handle);
@@ -356,7 +391,7 @@ impl RenderBackendInternal for NullBackend {
     ) -> (
         Option<u64>,
         Option<i3_gfx::graph::backend::BackendCommandBuffer>,
-        Option<i3_gfx::graph::types::ImageHandle>,
+        Option<ImageHandle>,
     ) {
         info!(name = %prepared.name, "Recording null pass");
         let mut ctx = NullPassContext::new(
@@ -371,7 +406,7 @@ impl RenderBackendInternal for NullBackend {
         (Some(0), None, None)
     }
 
-    fn mark_image_as_presented(&mut self, _handle: i3_gfx::graph::types::ImageHandle) {
+    fn mark_image_as_presented(&mut self, _handle: ImageHandle) {
         // No-op
     }
 
@@ -379,16 +414,16 @@ impl RenderBackendInternal for NullBackend {
         &mut self,
         _pipeline: i3_gfx::graph::types::PipelineHandle,
         set_index: u32,
-    ) -> Result<i3_gfx::graph::backend::DescriptorSetHandle, String> {
+    ) -> Result<DescriptorSetHandle, String> {
         let h = self.next_handle();
         info!(set_index, handle = h, "Allocated Descriptor Set");
-        Ok(i3_gfx::graph::backend::DescriptorSetHandle(h))
+        Ok(DescriptorSetHandle(h))
     }
 
     fn update_descriptor_set(
         &mut self,
-        set: i3_gfx::graph::backend::DescriptorSetHandle,
-        writes: &[i3_gfx::graph::backend::DescriptorWrite],
+        set: DescriptorSetHandle,
+        writes: &[DescriptorWrite],
     ) {
         info!(?set, writes = writes.len(), "Updated Descriptor Set");
     }
@@ -400,7 +435,7 @@ pub struct NullPassContext<'a> {
     allocated_images: &'a HashSet<u64>,
     allocated_buffers: &'a HashSet<u64>,
     allocated_pipelines: &'a HashSet<u64>,
-    image_map: &'a std::collections::HashMap<i3_gfx::graph::types::ImageHandle, BackendImage>,
+    image_map: &'a std::collections::HashMap<ImageHandle, BackendImage>,
     next_handle: u64,
 }
 
@@ -414,7 +449,7 @@ impl<'a> NullPassContext<'a> {
         allocated_images: &'a HashSet<u64>,
         allocated_buffers: &'a HashSet<u64>,
         allocated_pipelines: &'a HashSet<u64>,
-        image_map: &'a std::collections::HashMap<i3_gfx::graph::types::ImageHandle, BackendImage>,
+        image_map: &'a std::collections::HashMap<ImageHandle, BackendImage>,
         next_handle: u64,
     ) -> Self {
         Self {
@@ -459,7 +494,7 @@ impl<'a> PassContext for NullPassContext<'a> {
         }
     }
 
-    fn bind_vertex_buffer(&mut self, binding: u32, handle: i3_gfx::graph::types::BufferHandle) {
+    fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
         info!(pass = %self.pass_name, binding, ?handle, "BIND_VERTEX_BUFFER");
         if !self.allocated_buffers.contains(&handle.0.0) {
             self.report_error(ValidationError::ResourceNotFound(handle.0.0));
@@ -468,8 +503,8 @@ impl<'a> PassContext for NullPassContext<'a> {
 
     fn bind_index_buffer(
         &mut self,
-        handle: i3_gfx::graph::types::BufferHandle,
-        index_type: i3_gfx::graph::pipeline::IndexType,
+        handle: BufferHandle,
+        index_type: IndexType,
     ) {
         info!(pass = %self.pass_name, ?handle, ?index_type, "BIND_INDEX_BUFFER");
         if !self.allocated_buffers.contains(&handle.0.0) {
@@ -480,7 +515,7 @@ impl<'a> PassContext for NullPassContext<'a> {
     fn bind_descriptor_set(
         &mut self,
         set_index: u32,
-        handle: i3_gfx::graph::backend::DescriptorSetHandle,
+        handle: DescriptorSetHandle,
     ) {
         info!(pass = %self.pass_name, set_index, ?handle, "BIND_DESCRIPTOR_SET");
     }
@@ -489,10 +524,10 @@ impl<'a> PassContext for NullPassContext<'a> {
         &mut self,
         _pipeline: i3_gfx::graph::backend::BackendPipeline,
         _set_index: u32,
-        _writes: &[i3_gfx::graph::backend::DescriptorWrite],
-    ) -> i3_gfx::graph::backend::DescriptorSetHandle {
+        _writes: &[DescriptorWrite],
+    ) -> DescriptorSetHandle {
         let h = self.next_handle();
-        i3_gfx::graph::backend::DescriptorSetHandle(h)
+        DescriptorSetHandle(h)
     }
 
     fn bind_descriptor_set_raw(&mut self, _set_index: u32, _handle: u64) {}
@@ -537,11 +572,24 @@ impl<'a> PassContext for NullPassContext<'a> {
         info!(pass = %self.pass_name, x, y, z, "DISPATCH");
     }
 
+    fn build_blas(&mut self, handle: BackendAccelerationStructure, update: bool) {
+        info!(pass = %self.pass_name, ?handle, update, "BUILD_BLAS");
+    }
+
+    fn build_tlas(
+        &mut self,
+        handle: BackendAccelerationStructure,
+        instances: &[TlasInstanceDesc],
+        update: bool,
+    ) {
+        info!(pass = %self.pass_name, ?handle, instance_count = instances.len(), update, "BUILD_TLAS");
+    }
+
     fn draw_indexed_indirect_count(
         &mut self,
-        _indirect_buffer: i3_gfx::graph::types::BufferHandle,
+        _indirect_buffer: BufferHandle,
         _indirect_offset: u64,
-        _count_buffer: i3_gfx::graph::types::BufferHandle,
+        _count_buffer: BufferHandle,
         _count_offset: u64,
         _max_draw_count: u32,
         _stride: u32,
@@ -554,9 +602,9 @@ impl<'a> PassContext for NullPassContext<'a> {
 
     fn draw_indirect_count(
         &mut self,
-        _indirect_buffer: i3_gfx::graph::types::BufferHandle,
+        _indirect_buffer: BufferHandle,
         _indirect_offset: u64,
-        _count_buffer: i3_gfx::graph::types::BufferHandle,
+        _count_buffer: BufferHandle,
         _count_offset: u64,
         _max_draw_count: u32,
         _stride: u32,
@@ -567,11 +615,11 @@ impl<'a> PassContext for NullPassContext<'a> {
         );
     }
 
-    fn clear_buffer(&mut self, _buffer: i3_gfx::graph::types::BufferHandle, _clear_value: u32) {
+    fn clear_buffer(&mut self, _buffer: BufferHandle, _clear_value: u32) {
         info!(pass = %self.pass_name, "CLEAR_BUFFER");
     }
 
-    fn present(&mut self, image: i3_gfx::graph::types::ImageHandle) {
+    fn present(&mut self, image: ImageHandle) {
         info!(pass = %self.pass_name, ?image, "PRESENT");
         let pid = if let Some(physical) = self.image_map.get(&image) {
             physical.0
@@ -586,8 +634,8 @@ impl<'a> PassContext for NullPassContext<'a> {
 
     fn copy_buffer(
         &mut self,
-        _src: i3_gfx::graph::types::BufferHandle,
-        _dst: i3_gfx::graph::types::BufferHandle,
+        _src: BufferHandle,
+        _dst: BufferHandle,
         _src_offset: u64,
         _dst_offset: u64,
         _size: u64,
@@ -595,12 +643,12 @@ impl<'a> PassContext for NullPassContext<'a> {
         info!(pass = %self.pass_name, ?_src, ?_dst, "COPY_BUFFER");
     }
 
-    fn map_buffer(&mut self, _handle: i3_gfx::graph::types::BufferHandle) -> *mut u8 {
+    fn map_buffer(&mut self, _handle: BufferHandle) -> *mut u8 {
         info!(pass = %self.pass_name, ?_handle, "MAP_BUFFER");
         std::ptr::null_mut()
     }
 
-    fn unmap_buffer(&mut self, _handle: i3_gfx::graph::types::BufferHandle) {
+    fn unmap_buffer(&mut self, _handle: BufferHandle) {
         info!(pass = %self.pass_name, ?_handle, "UNMAP_BUFFER");
     }
 }

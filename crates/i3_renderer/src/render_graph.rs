@@ -6,7 +6,7 @@ use crate::passes::gbuffer::GBufferPass;
 use crate::passes::sky::SkyPass;
 use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Shared data published to the FrameGraph blackboard.
 #[repr(C)]
@@ -90,8 +90,14 @@ pub struct DefaultRenderGraph {
     pub bindless_manager: crate::bindless::BindlessManager,
     pub ui: Option<Arc<i3_egui::UiSystem>>,
 
+    pub accel_struct_system: Arc<Mutex<crate::passes::accel_struct::AccelStructSystem>>,
+    pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
+    pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
+
     // Scene data cached during sync() for record()
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
+    pub pending_blas: Vec<BackendAccelerationStructure>,
+    pub tlas_instances: Vec<TlasInstanceDesc>,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -160,6 +166,10 @@ impl DefaultRenderGraph {
             .unwrap();
         bindless_manager.register_physical_texture(_backend, white_image);
 
+        let accel_struct_system = Arc::new(Mutex::new(crate::passes::accel_struct::AccelStructSystem::new()));
+        let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new(accel_struct_system.clone());
+        let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new(accel_struct_system.clone());
+
         Self {
             graph,
             gbuffer_pass,
@@ -177,7 +187,12 @@ impl DefaultRenderGraph {
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
             ui: None,
+            accel_struct_system,
+            blas_update_pass,
+            tlas_rebuild_pass,
             scene_mesh_descriptors: Vec::new(),
+            pending_blas: Vec::new(),
+            tlas_instances: Vec::new(),
         }
     }
 
@@ -236,13 +251,17 @@ impl DefaultRenderGraph {
         let deferred_resolve_pass = &mut self.deferred_resolve_pass;
         let post_process_group = &mut self.post_process_group;
         let debug_viz_pass = &mut self.debug_viz_pass;
+        let blas_update_pass = &mut self.blas_update_pass;
+        let tlas_rebuild_pass = &mut self.tlas_rebuild_pass;
 
         self.graph.setup(|builder| {
+            builder.add_pass(sync_group);
+            builder.add_pass(blas_update_pass);
             builder.add_pass(gbuffer_pass);
             builder.add_pass(draw_call_gen_pass);
             builder.add_pass(sky_pass);
-            builder.add_pass(sync_group);
             builder.add_pass(clustering_group);
+            builder.add_pass(tlas_rebuild_pass);
             builder.add_pass(deferred_resolve_pass);
             builder.add_pass(post_process_group);
             builder.add_pass(debug_viz_pass);
@@ -282,6 +301,68 @@ impl DefaultRenderGraph {
 
         // Prefetch mesh descriptors (they need RenderBackend to resolve BDA)
         self.scene_mesh_descriptors = scene.iter_mesh_descriptors(backend).collect();
+
+        // Ray Tracing Synchronization
+        if backend.capabilities().ray_tracing {
+            let mut system = self.accel_struct_system.lock().unwrap();
+            
+            // 1. Initialize TLAS if missing
+            if system.tlas.is_none() {
+                system.tlas = Some(backend.create_tlas(&TlasCreateInfo {
+                    max_instances: 262144, // Match GpuBuffers::max_instances
+                    flags: AccelStructBuildFlags::PREFER_FAST_TRACE,
+                }));
+            }
+
+            // 2. Manage BLAS lifecycle
+            let mut pending_blas = Vec::new();
+            for (id, _) in &self.scene_mesh_descriptors {
+                if !system.blas_cache.contains_key(id) {
+                    let mesh = scene.mesh(*id);
+                    let blas = backend.create_blas(&BlasCreateInfo {
+                        geometries: vec![BlasGeometryDesc {
+                            vertex_buffer: mesh.vertex_buffer,
+                            vertex_offset: 0,
+                            vertex_count: mesh.vertex_count,
+                            vertex_stride: mesh.stride,
+                            vertex_format: Format::R32G32B32_SFLOAT, // Standard for i3
+                            index_buffer: mesh.index_buffer,
+                            index_offset: 0,
+                            index_count: mesh.index_count,
+                            index_type: mesh.index_type,
+                        }],
+                        flags: AccelStructBuildFlags::PREFER_FAST_TRACE,
+                    });
+                    system.blas_cache.insert(*id, blas);
+                    pending_blas.push(blas);
+                }
+            }
+            self.pending_blas = pending_blas;
+
+            // 3. Build TLAS Instance list
+            let mut tlas_instances = Vec::new();
+            for inst in scene.iter_instances() {
+                if let Some(&blas) = system.blas_cache.get(&inst.mesh_idx) {
+                    // Extract 3x4 matrix from Mat4
+                    let mut transform = [0.0f32; 12];
+                    for i in 0..3 {
+                        for j in 0..4 {
+                            transform[i * 4 + j] = inst.world_transform[(i, j)]; // Correct row-major 3x4 layout
+                        }
+                    }
+
+                    tlas_instances.push(TlasInstanceDesc {
+                        transform,
+                        instance_id: tlas_instances.len() as u32,
+                        mask: 0xFF,
+                        sbt_offset: 0,
+                        flags: 0, // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR etc
+                        blas,
+                    });
+                }
+            }
+            self.tlas_instances = tlas_instances;
+        }
 
         let mut gpu_lights = Vec::with_capacity(1024);
         for (_, light) in scene.iter_lights() {
@@ -475,6 +556,8 @@ impl DefaultRenderGraph {
             builder.publish("SunIntensity", sun_int);
             builder.publish("SunColor", sun_col);
             builder.publish("TimeDelta", dt);
+            builder.publish("PendingBlasBuilds", self.pending_blas.clone());
+            builder.publish("TlasInstances", self.tlas_instances.clone());
 
             let backbuffer = builder.acquire_backbuffer(window);
             builder.publish("Backbuffer", backbuffer);
@@ -498,6 +581,7 @@ impl DefaultRenderGraph {
 
             // 0. Sync CPU scene delta to GPU
             builder.add_pass(&mut self.sync_group);
+            builder.add_pass(&mut self.blas_update_pass);
 
             // 1a. Clear draw count to 0 before GPU culling (InterlockedAdd accumulates across frames)
             builder.add_owned_pass(ClearBufferPass {
@@ -507,6 +591,9 @@ impl DefaultRenderGraph {
 
             // 1b. Draw Call Generation & Culling
             builder.add_pass(&mut self.draw_call_gen_pass);
+
+            // 1c. TLAS Rebuild
+            builder.add_pass(&mut self.tlas_rebuild_pass);
 
             // 1. Clustering & Culling
             let (grid_x, grid_y, grid_z) = self.record_clustering(builder);

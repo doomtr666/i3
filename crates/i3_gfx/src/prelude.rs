@@ -9,10 +9,12 @@
 
 pub use crate::graph::{
     backend::{
-        BackendBuffer, BackendImage, BackendPipeline, DescriptorBufferInfo, DescriptorImageInfo,
-        DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, DeviceInfo, DeviceType, Event,
-        KeyCode, PassContext, PassContextExt, RenderBackend, RenderBackendExt,
-        RenderBackendInternal, SamplerHandle, SwapchainConfig, WindowDesc,
+        BackendAccelerationStructure, BackendBuffer, BackendImage, BackendPipeline,
+        BlasCreateInfo, BlasGeometryDesc, DescriptorBufferInfo, DescriptorImageInfo,
+        DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, DeviceCapabilities,
+        DeviceInfo, DeviceType, Event, KeyCode, PassContext, PassContextExt, RenderBackend,
+        RenderBackendExt, RenderBackendInternal, SamplerHandle, SwapchainConfig,
+        TlasCreateInfo, TlasInstanceDesc, WindowDesc, AccelStructBuildFlags,
     },
     compiler::{CompiledGraph, FrameGraph},
     pass::{PassBuilder, RenderPass},

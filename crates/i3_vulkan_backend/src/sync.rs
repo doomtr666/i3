@@ -303,6 +303,12 @@ pub fn get_buffer_state(
     } else if usage.intersects(ResourceUsage::INDIRECT_READ) {
         access = vk::AccessFlags2::INDIRECT_COMMAND_READ;
         stage = vk::PipelineStageFlags2::DRAW_INDIRECT;
+    } else if usage.intersects(ResourceUsage::ACCEL_STRUCT_WRITE) {
+        access = vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR;
+        stage = vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR;
+    } else if usage.intersects(ResourceUsage::ACCEL_STRUCT_READ) {
+        access = vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR;
+        stage = vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR;
     }
 
     (access, stage)

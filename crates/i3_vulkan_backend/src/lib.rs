@@ -1,3 +1,4 @@
+pub mod accel_struct;
 pub mod backend;
 pub mod commands;
 pub mod convert;

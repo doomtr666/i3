@@ -451,6 +451,19 @@ impl PassContext for VulkanPassContext {
         self.present_request = Some(ImageHandle(SymbolId(physical_id)));
     }
 
+    fn build_blas(&mut self, handle: BackendAccelerationStructure, update: bool) {
+        crate::accel_struct::build_blas(self, handle, update);
+    }
+
+    fn build_tlas(
+        &mut self,
+        handle: BackendAccelerationStructure,
+        instances: &[TlasInstanceDesc],
+        update: bool,
+    ) {
+        crate::accel_struct::build_tlas(self, handle, instances, update);
+    }
+
     fn copy_buffer(
         &mut self,
         src: BufferHandle,

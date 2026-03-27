@@ -172,7 +172,7 @@ impl MandelbrotApp {
 }
 
 impl ExampleApp for MandelbrotApp {
-    fn update(&mut self, _delta: Duration) {}
+    fn update(&mut self, _delta: Duration, _smoothed_delta: Duration) {}
 
     fn render(&mut self) {
         // Update pass state before recording

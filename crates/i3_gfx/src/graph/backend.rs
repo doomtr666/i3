@@ -14,7 +14,7 @@ pub struct BackendPipeline(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendCommandBuffer(pub u64);
 
-pub use crate::graph::types::{BufferDesc, ImageDesc, ResourceUsage};
+pub use crate::graph::types::{BufferDesc, BufferUsageFlags, ImageDesc, MemoryType, ResourceUsage};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowDesc {
@@ -75,6 +75,62 @@ pub struct SwapchainConfig {
     pub vsync: bool,
     pub srgb: bool,
     pub min_image: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BackendAccelerationStructure(pub u64);
+
+use bitflags::bitflags;
+use crate::prelude::Format;
+use crate::graph::pipeline::IndexType;
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct AccelStructBuildFlags: u32 {
+        const PREFER_FAST_TRACE = 0x1;
+        const PREFER_FAST_BUILD = 0x2;
+        const ALLOW_UPDATE      = 0x4;
+        const ALLOW_COMPACTION  = 0x8;
+    }
+}
+
+/// Geometry for bottom-level acceleration structure.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlasGeometryDesc {
+    pub vertex_buffer: BackendBuffer,
+    pub vertex_offset: u64,
+    pub vertex_count: u32,
+    pub vertex_stride: u32,
+    pub vertex_format: Format, // Position format (R32G32B32_SFLOAT)
+    pub index_buffer: BackendBuffer,
+    pub index_offset: u64,
+    pub index_count: u32,
+    pub index_type: IndexType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlasCreateInfo {
+    pub geometries: Vec<BlasGeometryDesc>,
+    pub flags: AccelStructBuildFlags,
+}
+
+/// Single instance in a top-level acceleration structure.
+/// Layout matches VkAccelerationStructureInstanceKHR.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TlasInstanceDesc {
+    pub transform: [f32; 12], // 3x4 row-major
+    pub instance_id: u32,     // 24-bit
+    pub mask: u8,
+    pub sbt_offset: u32, // 24-bit
+    pub flags: u8,
+    pub blas: BackendAccelerationStructure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TlasCreateInfo {
+    pub max_instances: u32,
+    pub flags: AccelStructBuildFlags,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -139,6 +195,21 @@ pub trait PassContext {
         data: &[u8],
     );
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
+
+    // --- Acceleration Structures ---
+
+    /// Build or rebuild a BLAS. If `update` is true, performs an in-place update
+    /// (requires ALLOW_UPDATE flag at creation).
+    fn build_blas(&mut self, handle: BackendAccelerationStructure, update: bool);
+
+    /// Build or rebuild a TLAS from the given instance list.
+    fn build_tlas(
+        &mut self,
+        handle: BackendAccelerationStructure,
+        instances: &[TlasInstanceDesc],
+        update: bool,
+    );
+
     fn draw_indexed_indirect_count(
         &mut self,
         indirect_buffer: BufferHandle,
@@ -218,11 +289,21 @@ pub struct DrawIndirectCommand {
     pub first_instance: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeviceCapabilities {
+    pub ray_tracing: bool,
+}
+
 /// The main interface for hardware backends (Vulkan, DX12, Null).
 /// This trait exposes only user-facing operations: lifecycle, windowing, resource creation,
 /// pipeline management, and data upload.
 pub trait RenderBackend {
     // --- Lifecycle & Device Management ---
+
+    /// Returns the hardware capabilities of the initialized device.
+    fn capabilities(&self) -> DeviceCapabilities {
+        DeviceCapabilities::default()
+    }
 
     /// Enumerate all compatible hardware devices on the system.
     fn enumerate_devices(&self) -> Vec<DeviceInfo>;
@@ -231,8 +312,7 @@ pub trait RenderBackend {
     /// Should be called before any other operation.
     fn initialize(&mut self, device_id: u32) -> Result<(), String>;
 
-    /// Returns the GPU device address for a buffer (requires BDA feature).
-    fn get_buffer_device_address(&self, handle: BackendBuffer) -> u64;
+
 
     // --- Windowing & Events (Managed by Backend) ---
 
@@ -287,6 +367,13 @@ pub trait RenderBackend {
     fn destroy_buffer(&mut self, handle: BackendBuffer);
     fn destroy_sampler(&mut self, handle: SamplerHandle);
 
+    // --- Acceleration Structures ---
+
+    fn create_blas(&mut self, info: &BlasCreateInfo) -> BackendAccelerationStructure;
+    fn destroy_blas(&mut self, handle: BackendAccelerationStructure);
+    fn create_tlas(&mut self, info: &TlasCreateInfo) -> BackendAccelerationStructure;
+    fn destroy_tlas(&mut self, handle: BackendAccelerationStructure);
+
     /// Upload raw bytes to a buffer.
     fn upload_buffer(
         &mut self,
@@ -310,6 +397,7 @@ pub trait RenderBackend {
 
     /// Returns the handle ID of the global bindless descriptor set.
     fn get_bindless_set_handle(&self) -> u64;
+
 
     // --- Resource Resolution ---
     fn resolve_image(&self, handle: crate::graph::types::ImageHandle) -> BackendImage;
@@ -371,6 +459,9 @@ pub trait RenderBackend {
     fn set_image_name(&mut self, _image: BackendImage, _name: &str) {}
     /// Nests a name for a buffer (no-op in release).
     fn set_buffer_name(&mut self, _buffer: BackendBuffer, _name: &str) {}
+
+    /// Returns the GPU device address for a buffer (requires BDA feature).
+    fn get_buffer_address(&self, handle: BackendBuffer) -> u64;
 }
 
 /// Extension trait for [RenderBackend] to provide typed helpers.

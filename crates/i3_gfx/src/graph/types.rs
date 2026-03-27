@@ -55,6 +55,10 @@ pub struct SwapChainImageHandle(pub ImageHandle);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PipelineHandle(pub SymbolId);
 
+/// Handle for a virtual acceleration structure, backed by a Symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AccelerationStructureHandle(pub SymbolId);
+
 impl std::ops::Deref for SwapChainImageHandle {
     type Target = ImageHandle;
     fn deref(&self) -> &Self::Target {
@@ -67,6 +71,7 @@ impl std::ops::Deref for SwapChainImageHandle {
 pub enum SymbolType {
     Image(ImageDesc),
     Buffer(BufferDesc),
+    AccelStruct(AccelerationStructureDesc),
     CpuData(TypeId),
 }
 
@@ -230,7 +235,9 @@ bitflags! {
         const INDEX_BUFFER = 0x40;
         const VERTEX_BUFFER = 0x80;
         const INDIRECT_BUFFER = 0x100;
-        const DEVICE_ADDRESS = 0x200;
+        const SHADER_DEVICE_ADDRESS = 0x200;
+        const ACCELERATION_STRUCTURE_BUILD_INPUT = 0x400;
+        const ACCELERATION_STRUCTURE_STORAGE = 0x800;
     }
 }
 
@@ -279,6 +286,11 @@ pub struct BufferDesc {
     pub memory: MemoryType,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AccelerationStructureDesc {
+    pub size: u64,
+}
+
 impl ImageHandle {
     pub const INVALID: Self = Self(SymbolId::INVALID);
 }
@@ -288,6 +300,10 @@ impl BufferHandle {
 }
 
 impl PipelineHandle {
+    pub const INVALID: Self = Self(SymbolId::INVALID);
+}
+
+impl AccelerationStructureHandle {
     pub const INVALID: Self = Self(SymbolId::INVALID);
 }
 
@@ -318,6 +334,9 @@ bitflags! {
         const PRESENT = 1 << 8;
 
         const INDIRECT_READ = 1 << 10;
+
+        const ACCEL_STRUCT_READ = 1 << 11;
+        const ACCEL_STRUCT_WRITE = 1 << 12;
     }
 }
 

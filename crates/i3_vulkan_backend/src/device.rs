@@ -17,6 +17,10 @@ pub struct VulkanDevice {
     pub dynamic_rendering: ash::khr::dynamic_rendering::Device,
     pub sync2: ash::khr::synchronization2::Device,
 
+    pub accel_struct: Option<ash::khr::acceleration_structure::Device>,
+    pub rt_pipeline: Option<ash::khr::ray_tracing_pipeline::Device>,
+    pub rt_supported: bool,
+
     #[cfg(debug_assertions)]
     pub debug_utils: ash::ext::debug_utils::Device,
 }
@@ -105,11 +109,48 @@ impl VulkanDevice {
             .queue_family_index(graphics_family)
             .queue_priorities(&queue_priorities);
 
-        let device_extensions = [
+        let mut device_extensions = vec![
             ash::khr::swapchain::NAME.as_ptr(),
             ash::khr::dynamic_rendering::NAME.as_ptr(),
             ash::khr::synchronization2::NAME.as_ptr(),
         ];
+
+        // Probe for RT extensions
+        let available_extensions = unsafe {
+            instance
+                .handle
+                .enumerate_device_extension_properties(physical_device)
+        }
+        .unwrap_or_default();
+
+        let has_extension = |name: &std::ffi::CStr| {
+            available_extensions.iter().any(|ext| {
+                let s = unsafe { std::ffi::CStr::from_ptr(ext.extension_name.as_ptr()) };
+                s == name
+            })
+        };
+
+        let has_as = has_extension(ash::khr::acceleration_structure::NAME);
+        let has_deferred = has_extension(ash::khr::deferred_host_operations::NAME);
+        let has_rt_pipeline = has_extension(ash::khr::ray_tracing_pipeline::NAME);
+
+        let rt_supported = has_as && has_deferred;
+        let mut as_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+            .acceleration_structure(true);
+        let mut rt_pipeline_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default()
+            .ray_tracing_pipeline(true);
+
+        if rt_supported {
+            info!("Ray Tracing extensions detected and enabled");
+            device_extensions.push(ash::khr::acceleration_structure::NAME.as_ptr());
+            device_extensions.push(ash::khr::deferred_host_operations::NAME.as_ptr());
+            features2 = features2.push_next(&mut as_features);
+
+            if has_rt_pipeline {
+                device_extensions.push(ash::khr::ray_tracing_pipeline::NAME.as_ptr());
+                features2 = features2.push_next(&mut rt_pipeline_features);
+            }
+        }
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_create_info))
@@ -128,6 +169,18 @@ impl VulkanDevice {
         // Load extensions
         let dynamic_rendering = ash::khr::dynamic_rendering::Device::new(&instance.handle, &handle);
         let sync2 = ash::khr::synchronization2::Device::new(&instance.handle, &handle);
+
+        let accel_struct = if rt_supported {
+            Some(ash::khr::acceleration_structure::Device::new(&instance.handle, &handle))
+        } else {
+            None
+        };
+
+        let rt_pipeline = if rt_supported && has_rt_pipeline {
+            Some(ash::khr::ray_tracing_pipeline::Device::new(&instance.handle, &handle))
+        } else {
+            None
+        };
 
         #[cfg(debug_assertions)]
         let debug_utils = ash::ext::debug_utils::Device::new(&instance.handle, &handle);
@@ -149,6 +202,9 @@ impl VulkanDevice {
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
             dynamic_rendering,
             sync2,
+            accel_struct,
+            rt_pipeline,
+            rt_supported,
             #[cfg(debug_assertions)]
             debug_utils,
         })
