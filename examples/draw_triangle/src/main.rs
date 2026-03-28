@@ -50,7 +50,7 @@ impl ExampleApp for TriangleApp {
             builder.add_pass(&mut self.pass);
         });
 
-        let compiler = graph.compile();
+        let compiler = graph.compile(&self.backend.capabilities());
         match compiler.execute(&mut self.backend, None) {
             Ok(_) => {}
             Err(e) if e == GraphError::WindowMinimized => {

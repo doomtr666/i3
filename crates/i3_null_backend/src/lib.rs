@@ -49,6 +49,8 @@ impl RenderBackend for NullBackend {
     fn capabilities(&self) -> i3_gfx::graph::backend::DeviceCapabilities {
         i3_gfx::graph::backend::DeviceCapabilities {
             ray_tracing: false,
+            async_compute: false,
+            async_transfer: false,
         }
     }
 
@@ -361,8 +363,6 @@ impl RenderBackendInternal for NullBackend {
     fn submit(
         &mut self,
         _batch: i3_gfx::graph::backend::CommandBatch,
-        _wait_sems: &[u64],
-        _signal_sems: &[u64],
     ) -> Result<u64, String> {
         Ok(0)
     }

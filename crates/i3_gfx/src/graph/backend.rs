@@ -135,7 +135,11 @@ pub struct TlasCreateInfo {
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandBatch {
-    pub command_buffers: Vec<BackendCommandBuffer>,
+    pub graphics_commands: Vec<BackendCommandBuffer>,
+    pub compute_commands: Vec<BackendCommandBuffer>,
+    pub transfer_commands: Vec<BackendCommandBuffer>,
+    pub waits: Vec<(crate::graph::types::QueueType, crate::graph::types::QueueType, u64)>, // (Target, On, Value)
+    pub signals: Vec<(crate::graph::types::QueueType, u64)>,                              // (Queue, Value)
 }
 
 use crate::graph::types::{BufferHandle, ImageHandle, PipelineHandle};
@@ -149,6 +153,7 @@ pub struct PassDescriptor<'a> {
     pub buffer_reads: &'a [(BufferHandle, ResourceUsage)],
     pub buffer_writes: &'a [(BufferHandle, ResourceUsage)],
     pub descriptor_sets: &'a [(u32, Vec<DescriptorWrite>)],
+    pub queue: crate::graph::types::QueueType,
 }
 
 /// Hardware-specific context used to record commands during a pass.
@@ -292,6 +297,8 @@ pub struct DrawIndirectCommand {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DeviceCapabilities {
     pub ray_tracing: bool,
+    pub async_compute: bool,
+    pub async_transfer: bool,
 }
 
 /// The main interface for hardware backends (Vulkan, DX12, Null).
@@ -515,8 +522,6 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     fn submit(
         &mut self,
         batch: CommandBatch,
-        wait_sems: &[u64],
-        signal_sems: &[u64],
     ) -> Result<u64, String>;
 
     type PreparedPass: Send + Sync;

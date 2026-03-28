@@ -189,7 +189,7 @@ impl ExampleApp for MandelbrotApp {
             builder.add_pass(&mut self.pass);
         });
 
-        let compiled = graph.compile();
+        let compiled = graph.compile(&self.backend.capabilities());
         if let Err(e) = compiled.execute(&mut self.backend, None) {
             if e == GraphError::WindowMinimized {
                 std::thread::sleep(Duration::from_millis(100));

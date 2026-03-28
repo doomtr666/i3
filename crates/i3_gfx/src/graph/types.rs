@@ -316,6 +316,13 @@ pub enum PassDomain {
     Cpu,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum QueueType {
+    Graphics,
+    AsyncCompute,
+    Transfer,
+}
+
 bitflags! {
     /// Bitfield representing how a resource is used within a pass.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

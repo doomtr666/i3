@@ -1,6 +1,6 @@
 use crate::graph::backend::{
-    BackendBuffer, BackendImage, CommandBatch, DescriptorWrite, PassDescriptor,
-    RenderBackend, RenderBackendInternal,
+    BackendBuffer, BackendImage, CommandBatch, DescriptorWrite, DeviceCapabilities,
+    PassDescriptor, RenderBackend, RenderBackendInternal,
 };
 use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::types::*;
@@ -101,6 +101,7 @@ pub struct NodeStorage {
     pub external_buffers: Vec<(BufferHandle, BackendBuffer)>,
     pub swapchain_requests: Vec<(ImageHandle, WindowHandle)>,
     pub descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
+    pub prefer_async: bool,
 }
 
 impl std::fmt::Debug for NodeStorage {
@@ -340,6 +341,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
     fn add_node_erased(&mut self, node: Box<dyn RenderPass>) {
         tracing::trace!(name = node.name(), "Adding sub-node");
 
+        let prefer_async = node.prefer_async();
         let mut child_storage = NodeStorage {
             node_id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             name: node.name().to_string(),
@@ -358,6 +360,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             external_buffers: Vec::new(),
             swapchain_requests: Vec::new(),
             descriptor_sets: Vec::new(),
+            prefer_async,
         };
 
         // Put it back but we need to record first
@@ -418,6 +421,7 @@ impl FrameGraph {
                 external_buffers: Vec::new(),
                 swapchain_requests: Vec::new(),
                 descriptor_sets: Vec::new(),
+                prefer_async: false,
             },
         }
     }
@@ -514,23 +518,29 @@ impl FrameGraph {
         }
     }
 
-    pub fn compile(self) -> CompiledGraph {
+    pub fn compile(self, capabilities: &DeviceCapabilities) -> CompiledGraph {
         tracing::debug!("Compiling hierarchical frame graph");
 
         // 1. Flatten the tree into a linear pass list
         let mut flat_passes = Vec::new();
         Self::flatten_recursive(&self.root, &mut flat_passes);
 
-        // 2. Build dependency DAG from resource read/write overlaps
+        // 2. Assign Queues
+        Self::assign_queues(&mut flat_passes, capabilities);
+
+        // 3. Build dependency DAG from resource read/write overlaps
         let adj = Self::build_dependency_dag(&flat_passes);
 
-        // 3. Topological sort with level assignment (Kahn's algorithm)
+        // 4. Topological sort with level assignment (Kahn's algorithm)
         let (order, levels) = Self::topological_sort_levels(&flat_passes, &adj);
 
         let max_level = levels.iter().copied().max().unwrap_or(0);
 
-        // 4. Group passes by level into ExecutionSteps
+        // 5. Group passes by level into ExecutionSteps
         let mut steps = Vec::new();
+        let mut last_signaled_value = HashMap::new(); // Queue -> Value
+        let mut next_sync_value = HashMap::new(); // Queue -> Value
+
         for level in 0..=max_level {
             let passes_in_level: Vec<usize> = order
                 .iter()
@@ -538,16 +548,69 @@ impl FrameGraph {
                 .filter(|&idx| levels[idx] == level)
                 .collect();
 
+            if passes_in_level.is_empty() {
+                continue;
+            }
+
+            // At the beginning of each level, insert necessary waits
+            let mut pending_waits = Vec::new();
+            for &pass_idx in &passes_in_level {
+                let pass = &flat_passes[pass_idx];
+                // For each predecessor i of pass_idx
+                for i in 0..pass_idx {
+                    if Self::has_dependency(&flat_passes[i], pass) {
+                        let src_queue = flat_passes[i].queue;
+                        let dst_queue = pass.queue;
+                        if src_queue != dst_queue {
+                            let value = *next_sync_value.get(&src_queue).unwrap_or(&0);
+                            if value > *last_signaled_value.get(&(src_queue, dst_queue)).unwrap_or(&0) {
+                                pending_waits.push(ExecutionStep::Wait {
+                                    queue: dst_queue,
+                                    on: src_queue,
+                                    value,
+                                });
+                                last_signaled_value.insert((src_queue, dst_queue), value);
+                            }
+                        }
+                    }
+                }
+            }
+            // Dedup waits
+            pending_waits.sort_by_key(|w| match w {
+                ExecutionStep::Wait { queue, on, value } => (*queue, *on, *value),
+                _ => unreachable!(),
+            });
+            pending_waits.dedup_by(|a, b| match (a, b) {
+                (ExecutionStep::Wait { queue: q1, on: o1, value: v1 }, ExecutionStep::Wait { queue: q2, on: o2, value: v2 }) => q1 == q2 && o1 == o2 && v1 == v2,
+                _ => false,
+            });
+            steps.extend(pending_waits);
+
+            // Execute passes in this level
             match passes_in_level.len() {
-                0 => {}
                 1 => {
                     steps.push(ExecutionStep::Barriers(vec![passes_in_level[0]]));
                     steps.push(ExecutionStep::Execute(passes_in_level[0]));
                 }
                 _ => {
                     steps.push(ExecutionStep::Barriers(passes_in_level.clone()));
-                    steps.push(ExecutionStep::ExecuteParallel(passes_in_level));
+                    steps.push(ExecutionStep::ExecuteParallel(passes_in_level.clone()));
                 }
+            }
+
+            // At the end of each level, if a queue executed something that others might depend on, signal it
+            let mut queues_in_level = std::collections::HashSet::new();
+            for &pass_idx in &passes_in_level {
+                queues_in_level.insert(flat_passes[pass_idx].queue);
+            }
+
+            for queue in queues_in_level {
+                let value = next_sync_value.entry(queue).or_insert(0);
+                *value += 1;
+                steps.push(ExecutionStep::Signal {
+                    queue,
+                    value: *value,
+                });
             }
         }
 
@@ -565,6 +628,29 @@ impl FrameGraph {
             _root: self.root,
             flat_passes,
             steps,
+        }
+    }
+
+    fn assign_queues(passes: &mut [FlatPass], capabilities: &DeviceCapabilities) {
+        for pass in passes {
+            pass.queue = match pass.domain {
+                PassDomain::Graphics => QueueType::Graphics,
+                PassDomain::Compute => {
+                    if pass.prefer_async && capabilities.async_compute {
+                        QueueType::AsyncCompute
+                    } else {
+                        QueueType::Graphics
+                    }
+                }
+                PassDomain::Transfer => {
+                    if pass.prefer_async && capabilities.async_transfer {
+                        QueueType::Transfer
+                    } else {
+                        QueueType::Graphics
+                    }
+                }
+                PassDomain::Cpu => QueueType::Graphics,
+            };
         }
     }
 
@@ -595,6 +681,8 @@ impl FrameGraph {
                 buffer_writes: node.buffer_writes.clone(),
                 data_reads: node.data_reads.clone(),
                 data_writes: node.data_writes.clone(),
+                prefer_async: node.prefer_async,
+                queue: QueueType::Graphics, // Assigned during compilation
             });
         }
 
@@ -748,6 +836,8 @@ struct FlatPass {
     buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
     data_reads: Vec<String>,
     data_writes: Vec<String>,
+    prefer_async: bool,
+    queue: QueueType,
 }
 
 impl FlatPass {
@@ -807,6 +897,14 @@ enum ExecutionStep {
     Execute(usize),
     /// Execute multiple independent passes (parallel-ready, sequential for now).
     ExecuteParallel(Vec<usize>),
+    /// Signal a timeline value on a queue.
+    Signal { queue: QueueType, value: u64 },
+    /// Wait for a timeline value from another queue.
+    Wait {
+        queue: QueueType,
+        on: QueueType,
+        value: u64,
+    },
 }
 
 pub struct CompiledGraph {
@@ -878,6 +976,7 @@ impl CompiledGraph {
                     buffer_reads: &node.buffer_reads,
                     buffer_writes: &node.buffer_writes,
                     descriptor_sets: &node.descriptor_sets,
+                    queue: flat.queue,
                 };
                 prepared_passes.push(Some(backend.prepare_pass(desc)));
             } else {
@@ -891,10 +990,16 @@ impl CompiledGraph {
         }
 
         // 5. Execute steps
-        let mut all_command_buffers = Vec::new();
+        let mut batch = CommandBatch::default();
 
         for step in &self.steps {
             match step {
+                ExecutionStep::Signal { queue, value } => {
+                    batch.signals.push((*queue, *value));
+                }
+                ExecutionStep::Wait { queue, on, value } => {
+                    batch.waits.push((*queue, *on, *value));
+                }
                 ExecutionStep::Barriers(pass_indices) => {
                     let mut batch_refs = Vec::with_capacity(pass_indices.len());
                     for &idx in pass_indices {
@@ -904,7 +1009,9 @@ impl CompiledGraph {
                     }
                     if !batch_refs.is_empty() {
                         if let Some(cb) = backend.record_barriers(&batch_refs) {
-                            all_command_buffers.push(cb);
+                            // Barriers currently recorded on Graphics queue for simplicity, 
+                            // but should ideally match the first pass in the level.
+                            batch.graphics_commands.push(cb);
                         }
                     }
                 }
@@ -913,11 +1020,15 @@ impl CompiledGraph {
                         let flat = &self.flat_passes[*pass_idx];
                         if let Some(node_ptr) = node_map.get(&flat.node_id) {
                             let node = unsafe { &mut *node_ptr.0 };
-                            tracing::debug!(pass = %flat.name, domain = ?flat.domain, "Executing pass");
+                            tracing::debug!(pass = %flat.name, domain = ?flat.domain, queue = ?flat.queue, "Executing pass");
                             let (_sem, cb, present_req) =
                                 backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
                             if let Some(c) = cb {
-                                all_command_buffers.push(c);
+                                match flat.queue {
+                                    QueueType::Graphics => batch.graphics_commands.push(c),
+                                    QueueType::AsyncCompute => batch.compute_commands.push(c),
+                                    QueueType::Transfer => batch.transfer_commands.push(c),
+                                }
                             }
                             if let Some(h) = present_req {
                                 backend.mark_image_as_presented(h);
@@ -926,6 +1037,8 @@ impl CompiledGraph {
                     }
                 }
                 ExecutionStep::ExecuteParallel(pass_indices) => {
+                    // Note: Parallel execution on multiple queues is tricky if they share state.
+                    // For now, we assume passes in the same level are truly independent.
                     let parallel_results: Vec<_> = pass_indices
                         .par_iter()
                         .filter_map(|&pass_idx| {
@@ -935,16 +1048,20 @@ impl CompiledGraph {
                                     let node = unsafe { &mut *node_ptr.0 };
                                     let (_sem, cb, present_req) = backend
                                         .record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
-                                    return Some((cb, present_req));
+                                    return Some((cb, present_req, flat.queue));
                                 }
                             }
                             None
                         })
                         .collect();
 
-                    for (cb, present_req) in parallel_results {
+                    for (cb, present_req, queue) in parallel_results {
                         if let Some(c) = cb {
-                            all_command_buffers.push(c);
+                            match queue {
+                                QueueType::Graphics => batch.graphics_commands.push(c),
+                                QueueType::AsyncCompute => batch.compute_commands.push(c),
+                                QueueType::Transfer => batch.transfer_commands.push(c),
+                            }
                         }
                         if let Some(h) = present_req {
                             backend.mark_image_as_presented(h);
@@ -955,11 +1072,8 @@ impl CompiledGraph {
         }
 
         // 6. Final submission
-        let batch = CommandBatch {
-            command_buffers: all_command_buffers,
-        };
         let submit_res = backend
-            .submit(batch, &[], &[])
+            .submit(batch)
             .map_err(|e| GraphError::BackendError(e))?;
 
         backend.end_frame();

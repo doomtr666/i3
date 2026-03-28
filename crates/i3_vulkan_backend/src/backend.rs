@@ -15,6 +15,16 @@ use crate::window_context::WindowContext;
 
 pub(crate) use crate::commands::{ThreadCommandPool, VulkanFrameContext, PreparedDomain, VulkanPreparedPass};
 
+/// Per-queue context for managing execution, synchronization and command pools.
+pub struct QueueContext {
+    pub(crate) queue: vk::Queue,
+    #[allow(dead_code)]
+    pub(crate) family: u32,
+    pub(crate) timeline_sem: vk::Semaphore,
+    pub(crate) cpu_timeline: u64,
+    pub(crate) frame_contexts: Vec<VulkanFrameContext>,
+}
+
 /// Main Vulkan backend struct.
 ///
 /// This struct contains all the state needed for rendering, including:
@@ -60,9 +70,12 @@ pub struct VulkanBackend {
     pub samplers: ResourceArena<vk::Sampler>,
     pub dead_samplers: Vec<(u64, vk::Sampler)>, // Frame, Handle
     pub semaphores: ResourceArena<vk::Semaphore>,
-    pub timeline_sem: vk::Semaphore, // Global timeline for graphics queue
-    pub cpu_timeline: u64,           // Current CPU submission value
     pub next_semaphore_id: u64,
+
+    pub(crate) graphics: Option<QueueContext>,
+    pub(crate) compute: Option<QueueContext>,
+    pub(crate) transfer: Option<QueueContext>,
+
     pub static_descriptor_pool: vk::DescriptorPool,
     pub descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
     pub descriptor_sets: std::sync::Mutex<ResourceArena<vk::DescriptorSet>>,
@@ -84,7 +97,6 @@ pub struct VulkanBackend {
     pub(crate) buffer_barrier_scratch: Vec<vk::BufferMemoryBarrier2<'static>>,
 
     // Global Frame Contexts
-    pub(crate) frame_contexts: Vec<VulkanFrameContext>,
     pub(crate) frame_started: bool,
     pub(crate) global_frame_index: usize,
     pub next_resource_id: u64,
@@ -144,9 +156,9 @@ impl VulkanBackend {
             descriptor_set_layouts: Vec::new(),
             descriptor_sets: std::sync::Mutex::new(ResourceArena::new()),
             descriptor_pool_max_sets: 1000,
-            timeline_sem: vk::Semaphore::null(), // Will be initialized below
-            cpu_timeline: 0,
-            frame_contexts: Vec::new(),
+            graphics: None,
+            compute: None,
+            transfer: None,
             swapchain_loader: None,
             dynamic_rendering: None,
             sync2: None,
@@ -221,7 +233,7 @@ impl VulkanBackend {
         crate::window_context::window_size(self, window)
     }
 
-    fn init_frame_contexts(&mut self) -> Result<(), String> {
+    fn init_frame_contexts_for_family(&self, family_index: u32) -> Result<Vec<VulkanFrameContext>, String> {
         let mut frame_contexts = Vec::new();
         let device = self.get_device().clone();
 
@@ -266,7 +278,7 @@ impl VulkanBackend {
                     .handle
                     .create_command_pool(
                         &vk::CommandPoolCreateInfo::default()
-                            .queue_family_index(device.graphics_family)
+                            .queue_family_index(family_index)
                             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
                         None,
                     )
@@ -283,7 +295,7 @@ impl VulkanBackend {
                         .handle
                         .create_command_pool(
                             &vk::CommandPoolCreateInfo::default()
-                                .queue_family_index(device.graphics_family)
+                                .queue_family_index(family_index)
                                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
                             None,
                         )
@@ -313,8 +325,35 @@ impl VulkanBackend {
                 });
             }
         }
-        self.frame_contexts = frame_contexts;
-        Ok(())
+        Ok(frame_contexts)
+    }
+
+    fn create_queue_context(
+        &self,
+        queue: vk::Queue,
+        family: u32,
+    ) -> Result<QueueContext, String> {
+        let device = self.get_device();
+        
+        let mut type_info =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+        
+        let timeline_sem = unsafe {
+            device.handle
+                .create_semaphore(&create_info, None)
+                .map_err(|e| format!("Failed to create timeline semaphore: {}", e))?
+        };
+
+        let frame_contexts = self.init_frame_contexts_for_family(family)?;
+
+        Ok(QueueContext {
+            queue,
+            family,
+            timeline_sem,
+            cpu_timeline: 0,
+            frame_contexts,
+        })
     }
 
     fn init_bindless(&mut self) -> Result<(), String> {
@@ -375,8 +414,11 @@ impl VulkanBackend {
 
 impl RenderBackend for VulkanBackend {
     fn capabilities(&self) -> DeviceCapabilities {
+        let device = self.get_device();
         DeviceCapabilities {
-            ray_tracing: self.get_device().rt_supported,
+            ray_tracing: device.rt_supported,
+            async_compute: device.compute_queue.is_some(),
+            async_transfer: device.transfer_queue.is_some(),
         }
     }
 
@@ -436,57 +478,16 @@ impl RenderBackend for VulkanBackend {
         self.device = Some(Arc::new(device));
         self.event_pump = Some(self.sdl.event_pump()?);
 
-        // Create Timeline Semaphore
-        let mut type_info =
-            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
-        let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-        self.timeline_sem = unsafe {
-            self.get_device()
-                .handle
-                .create_semaphore(&create_info, None)
-                .map_err(|e| format!("Failed to create timeline semaphore: {}", e))?
-        };
-
-        // Create Descriptor Pool
-        let pool_sizes = [
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: 1000,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: 4096,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 4096,
-            },
-        ];
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
-            .pool_sizes(&pool_sizes)
-            .max_sets(4096);
-        self.static_descriptor_pool = unsafe {
-            self.get_device()
-                .handle
-                .create_descriptor_pool(&pool_info, None)
-                .map_err(|e| format!("Failed to create static descriptor pool: {}", e))?
-        };
-
-        // Create Global Frame Contexts
-        self.init_frame_contexts()?;
+        // Create Queue Contexts
+        let device_ptr = self.device.as_ref().unwrap();
+        self.graphics = Some(self.create_queue_context(device_ptr.graphics_queue, device_ptr.graphics_family)?);
+        
+        if let (Some(q), Some(f)) = (device_ptr.compute_queue, device_ptr.compute_family) {
+            self.compute = Some(self.create_queue_context(q, f)?);
+        }
+        if let (Some(q), Some(f)) = (device_ptr.transfer_queue, device_ptr.transfer_family) {
+            self.transfer = Some(self.create_queue_context(q, f)?);
+        }
 
         // Initialize Loaders
         let device_ptr = self.get_device().clone();
@@ -500,6 +501,28 @@ impl RenderBackend for VulkanBackend {
             &self.instance.handle,
             &self.get_device().handle,
         ));
+
+        // Create static descriptor pool for bindless
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_count: 4096,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLER,
+                descriptor_count: 4096,
+            },
+        ];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+            .pool_sizes(&pool_sizes)
+            .max_sets(100);
+
+        self.static_descriptor_pool = unsafe {
+            self.get_device().handle
+                .create_descriptor_pool(&pool_info, None)
+                .map_err(|e| format!("Failed to create static descriptor pool: {}", e))?
+        };
 
         // Initialize Bindless Descriptor Set
         self.init_bindless()?;
@@ -647,7 +670,8 @@ impl RenderBackend for VulkanBackend {
 
     /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
     fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String> {
-        let semaphores = [self.timeline_sem];
+        let graphics = self.graphics.as_ref().unwrap();
+        let semaphores = [graphics.timeline_sem];
         let values = [value];
         let wait_info = vk::SemaphoreWaitInfo::default()
             .semaphores(&semaphores)
@@ -879,10 +903,8 @@ impl RenderBackendInternal for VulkanBackend {
     fn submit(
         &mut self,
         batch: CommandBatch,
-        wait_sems: &[u64],
-        signal_sems: &[u64],
     ) -> Result<u64, String> {
-        crate::submission::submit(self, batch, wait_sems, signal_sems)
+        crate::submission::submit(self, batch)
     }
 
     type PreparedPass = VulkanPreparedPass;
@@ -1105,7 +1127,8 @@ impl RenderBackendInternal for VulkanBackend {
 
         let device = self.get_device().clone();
         let thread_idx = rayon::current_thread_index().unwrap_or(0);
-        let frame_ctx = &self.frame_contexts[self.global_frame_index];
+        let graphics = self.graphics.as_ref().unwrap();
+        let frame_ctx = &graphics.frame_contexts[self.global_frame_index];
         let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
         // Allocate Command Buffer from Thread Pool
@@ -1189,7 +1212,8 @@ impl RenderBackendInternal for VulkanBackend {
         let device = self.get_device().clone();
 
         let thread_idx = rayon::current_thread_index().unwrap_or(0);
-        let frame_ctx = &self.frame_contexts[self.global_frame_index];
+        let graphics = self.graphics.as_ref().expect("Graphics queue not initialized");
+        let frame_ctx = &graphics.frame_contexts[self.global_frame_index];
         let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
         // Allocate Command Buffer from Thread Pool
@@ -1347,7 +1371,7 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         (
-            Some(self.cpu_timeline),
+            Some(graphics.cpu_timeline),
             Some(BackendCommandBuffer(unsafe {
                 std::mem::transmute::<vk::CommandBuffer, u64>(cmd)
             })),
@@ -1389,18 +1413,21 @@ impl Drop for VulkanBackend {
                 self.windows.clear();
 
                 debug!("Destroying frame contexts...");
-                for ctx in &self.frame_contexts {
-                    device.handle.destroy_command_pool(ctx.command_pool, None);
-                    device
-                        .handle
-                        .destroy_descriptor_pool(ctx.descriptor_pool, None);
+                let mut contexts_to_clean = Vec::new();
+                if let Some(ctx) = self.graphics.take() { contexts_to_clean.push(ctx); }
+                if let Some(ctx) = self.compute.take() { contexts_to_clean.push(ctx); }
+                if let Some(ctx) = self.transfer.take() { contexts_to_clean.push(ctx); }
 
-                    for tp_mutex in &ctx.per_thread_pools {
-                        let tp = tp_mutex.lock().unwrap();
-                        device.handle.destroy_command_pool(tp.pool, None);
-                        device
-                            .handle
-                            .destroy_descriptor_pool(tp.descriptor_pool, None);
+                for q_ctx in contexts_to_clean {
+                    device.handle.destroy_semaphore(q_ctx.timeline_sem, None);
+                    for ctx in q_ctx.frame_contexts {
+                        device.handle.destroy_command_pool(ctx.command_pool, None);
+                        device.handle.destroy_descriptor_pool(ctx.descriptor_pool, None);
+                        for tp_mutex in ctx.per_thread_pools {
+                            let tp = tp_mutex.into_inner().unwrap();
+                            device.handle.destroy_command_pool(tp.pool, None);
+                            device.handle.destroy_descriptor_pool(tp.descriptor_pool, None);
+                        }
                     }
                 }
 
@@ -1484,10 +1511,6 @@ impl Drop for VulkanBackend {
                 for &sem in &self.recycled_semaphores {
                     device.handle.destroy_semaphore(sem, None);
                 }
-                if self.timeline_sem != vk::Semaphore::null() {
-                    device.handle.destroy_semaphore(self.timeline_sem, None);
-                }
-
                 debug!("Destroying samplers...");
                 for (_, sampler) in self.samplers.iter() {
                     device.handle.destroy_sampler(*sampler, None);
@@ -1527,9 +1550,7 @@ impl VulkanBackend {
 
     pub fn destroy_semaphore_internal(&mut self, handle: u64) {
         if let Some(sem) = self.semaphores.remove(handle) {
-            unsafe {
-                self.get_device().handle.destroy_semaphore(sem, None);
-            }
+            self.recycled_semaphores.push(sem);
         }
     }
 

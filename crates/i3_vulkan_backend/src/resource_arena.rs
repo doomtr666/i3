@@ -69,6 +69,8 @@ pub struct PhysicalImage {
     pub last_stage: vk::PipelineStageFlags2,
     /// Frame count at last write (for load op)
     pub last_write_frame: u64,
+    /// Last queue family that owned this image (for ownership transfers)
+    pub last_queue_family: u32,
 }
 
 /// Physical representation of a Vulkan buffer.

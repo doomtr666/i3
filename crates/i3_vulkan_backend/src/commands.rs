@@ -806,7 +806,8 @@ pub fn record_barriers(
 
     let device = backend.get_device().clone();
     let thread_idx = rayon::current_thread_index().unwrap_or(0);
-    let frame_ctx = &backend.frame_contexts[backend.global_frame_index];
+    let graphics = backend.graphics.as_ref().unwrap();
+    let frame_ctx = &graphics.frame_contexts[backend.global_frame_index];
     let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
     // Allocate Command Buffer from Thread Pool
@@ -925,7 +926,8 @@ pub fn record_pass(
     let device = backend.get_device().clone();
 
     let thread_idx = rayon::current_thread_index().unwrap_or(0);
-    let frame_ctx = &backend.frame_contexts[backend.global_frame_index];
+    let graphics = backend.graphics.as_ref().unwrap();
+    let frame_ctx = &graphics.frame_contexts[backend.global_frame_index];
     let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
     // Allocate Command Buffer from Thread Pool
@@ -1049,7 +1051,7 @@ pub fn record_pass(
     }
 
     (
-        Some(backend.cpu_timeline),
+        Some(backend.graphics.as_ref().unwrap().cpu_timeline),
         Some(BackendCommandBuffer(unsafe {
             std::mem::transmute::<vk::CommandBuffer, u64>(cmd)
         })),

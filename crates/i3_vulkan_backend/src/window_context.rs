@@ -13,9 +13,8 @@ pub(crate) struct WindowContext {
     // Semaphores for acquire (per frame in flight)
     pub(crate) acquire_semaphores: Vec<vk::Semaphore>,
     pub(crate) acquire_semaphore_ids: Vec<u64>,
-    // Semaphores for present (per frame in flight)
+    // Semaphores for present (per swapchain image)
     pub(crate) present_semaphores: Vec<vk::Semaphore>,
-    #[allow(dead_code)]
     pub(crate) present_semaphore_ids: Vec<u64>,
     // Track the current frame's acquire semaphore to pair it with the image
     pub(crate) current_acquire_sem_id: Option<u64>,
@@ -46,22 +45,15 @@ pub fn create_window(
 
     let mut acquire_sems = Vec::new();
     let mut acquire_sem_ids = Vec::new();
-    let mut present_sems = Vec::new();
-    let mut present_sem_ids = Vec::new();
     let _device_handle = backend.get_device().handle.clone();
 
+    // Acquire semaphores are per-frame-in-flight (usually 3)
     for _ in 0..3 {
         let a_id = backend.create_semaphore();
-        let p_id = backend.create_semaphore();
-
         let a_sem = backend.semaphores.get(a_id).cloned().unwrap();
-        let p_sem = backend.semaphores.get(p_id).cloned().unwrap();
 
         acquire_sems.push(a_sem);
         acquire_sem_ids.push(a_id);
-
-        present_sems.push(p_sem);
-        present_sem_ids.push(p_id);
     }
 
     let context = WindowContext {
@@ -74,8 +66,8 @@ pub fn create_window(
         }, // Default
         acquire_semaphores: acquire_sems,
         acquire_semaphore_ids: acquire_sem_ids,
-        present_semaphores: present_sems,
-        present_semaphore_ids: present_sem_ids,
+        present_semaphores: Vec::new(),
+        present_semaphore_ids: Vec::new(),
         current_acquire_sem_id: None,
         current_image_index: None,
     };

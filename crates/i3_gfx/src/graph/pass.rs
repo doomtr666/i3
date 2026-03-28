@@ -191,6 +191,12 @@ pub trait RenderPass: Any + Send + Sync {
     /// Name of the pass (used for debugging/profiling).
     fn name(&self) -> &str;
 
+    /// Hint: request execution on a dedicated async queue.
+    /// Only meaningful for Compute/Transfer domains. Default: false.
+    fn prefer_async(&self) -> bool {
+        false
+    }
+
     /// Called once during graph global initialization, for creating pipelines/resources.
     /// Can consume services from the global scope.
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}

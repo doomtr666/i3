@@ -12,6 +12,10 @@ pub struct VulkanDevice {
     pub handle: ash::Device,
     pub graphics_queue: vk::Queue,
     pub graphics_family: u32,
+    pub compute_queue: Option<vk::Queue>,
+    pub compute_family: Option<u32>,
+    pub transfer_queue: Option<vk::Queue>,
+    pub transfer_family: Option<u32>,
     pub allocator: ManuallyDrop<Mutex<Allocator>>,
 
     pub dynamic_rendering: ash::khr::dynamic_rendering::Device,
@@ -70,6 +74,28 @@ impl VulkanDevice {
             .map(|(i, _)| i as u32)
             .ok_or_else(|| "No graphics queue family found".to_string())?;
 
+        let compute_family = queue_families
+            .iter()
+            .enumerate()
+            .find(|(i, prop)| {
+                prop.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    && !prop.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                    && *i as u32 != graphics_family
+            })
+            .map(|(i, _)| i as u32);
+
+        let transfer_family = queue_families
+            .iter()
+            .enumerate()
+            .find(|(i, prop)| {
+                prop.queue_flags.contains(vk::QueueFlags::TRANSFER)
+                    && !prop.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                    && !prop.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    && *i as u32 != graphics_family
+                    && compute_family.map_or(true, |cf| *i as u32 != cf)
+            })
+            .map(|(i, _)| i as u32);
+
         // Enable Vulkan 1.3/1.2/1.0 features
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
@@ -99,15 +125,33 @@ impl VulkanDevice {
             .shader_int16(true);
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
-            .features(features10)
-            .push_next(&mut features13)
-            .push_next(&mut features12)
-            .push_next(&mut features11);
+            .features(features10);
+
+        // Build the feature-chain manually to ensure nothing is overwritten
+        features2.p_next = &mut features13 as *mut _ as *mut _;
+        features13.p_next = &mut features12 as *mut _ as *mut _;
+        features12.p_next = &mut features11 as *mut _ as *mut _;
+        // Keep tracking the end of the chain for RT features later
+        let mut last_feature: *mut vk::BaseOutStructure = &mut features11 as *mut _ as *mut _;
+
+        let mut unique_families = std::collections::HashSet::new();
+        unique_families.insert(graphics_family);
+        if let Some(f) = compute_family {
+            unique_families.insert(f);
+        }
+        if let Some(f) = transfer_family {
+            unique_families.insert(f);
+        }
 
         let queue_priorities = [1.0f32];
-        let queue_create_info = vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(graphics_family)
-            .queue_priorities(&queue_priorities);
+        let mut queue_create_infos = Vec::new();
+        for &family in &unique_families {
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(family)
+                    .queue_priorities(&queue_priorities),
+            );
+        }
 
         let mut device_extensions = vec![
             ash::khr::swapchain::NAME.as_ptr(),
@@ -144,16 +188,22 @@ impl VulkanDevice {
             info!("Ray Tracing extensions detected and enabled");
             device_extensions.push(ash::khr::acceleration_structure::NAME.as_ptr());
             device_extensions.push(ash::khr::deferred_host_operations::NAME.as_ptr());
-            features2 = features2.push_next(&mut as_features);
+            
+            unsafe {
+                (*last_feature).p_next = &mut as_features as *mut _ as *mut _;
+                last_feature = &mut as_features as *mut _ as *mut _;
+            }
 
             if has_rt_pipeline {
                 device_extensions.push(ash::khr::ray_tracing_pipeline::NAME.as_ptr());
-                features2 = features2.push_next(&mut rt_pipeline_features);
+                unsafe {
+                    (*last_feature).p_next = &mut rt_pipeline_features as *mut _ as *mut _;
+                }
             }
         }
 
         let device_create_info = vk::DeviceCreateInfo::default()
-            .queue_create_infos(std::slice::from_ref(&queue_create_info))
+            .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions)
             .push_next(&mut features2);
 
@@ -165,6 +215,10 @@ impl VulkanDevice {
         .map_err(|e| format!("Failed to create logical device: {}", e))?;
 
         let graphics_queue = unsafe { handle.get_device_queue(graphics_family, 0) };
+        let compute_queue =
+            compute_family.map(|f| unsafe { handle.get_device_queue(f, 0) });
+        let transfer_queue =
+            transfer_family.map(|f| unsafe { handle.get_device_queue(f, 0) });
 
         // Load extensions
         let dynamic_rendering = ash::khr::dynamic_rendering::Device::new(&instance.handle, &handle);
@@ -199,6 +253,10 @@ impl VulkanDevice {
             handle,
             graphics_queue,
             graphics_family,
+            compute_queue,
+            compute_family,
+            transfer_queue,
+            transfer_family,
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
             dynamic_rendering,
             sync2,

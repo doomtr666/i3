@@ -73,7 +73,7 @@ impl ExampleApp for DeferredStressApp {
             self.dt,
         );
 
-        let compiler = graph.compile();
+        let compiler = graph.compile(&self.backend.capabilities());
         if let Err(e) = compiler.execute(
             &mut self.backend,
             Some(&mut self.render_graph.temporal_registry),

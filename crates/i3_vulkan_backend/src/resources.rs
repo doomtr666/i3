@@ -29,6 +29,24 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
     if actual_extent.width == 0 { actual_extent.width = 1; }
     if actual_extent.height == 0 { actual_extent.height = 1; }
 
+    let mut families = vec![device.graphics_family];
+    if let Some(f) = device.compute_family {
+        if !families.contains(&f) {
+            families.push(f);
+        }
+    }
+    if let Some(f) = device.transfer_family {
+        if !families.contains(&f) {
+            families.push(f);
+        }
+    }
+
+    let sharing_mode = if families.len() > 1 {
+        vk::SharingMode::CONCURRENT
+    } else {
+        vk::SharingMode::EXCLUSIVE
+    };
+
     let create_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .format(format)
@@ -38,7 +56,8 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         .samples(vk::SampleCountFlags::TYPE_1)
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .sharing_mode(sharing_mode)
+        .queue_family_indices(&families)
         .initial_layout(vk::ImageLayout::UNDEFINED);
 
     let allocation_info = vk_mem::AllocationCreateInfo {
@@ -85,6 +104,7 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         last_access: vk::AccessFlags2::empty(),
         last_stage: vk::PipelineStageFlags2::NONE,
         last_write_frame: 0,
+        last_queue_family: device.graphics_family,
     };
 
     let id = backend.images.insert(physical);
@@ -156,10 +176,29 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
         usage |= vk::BufferUsageFlags::TRANSFER_DST;
     }
 
+    let mut families = vec![device.graphics_family];
+    if let Some(f) = device.compute_family {
+        if !families.contains(&f) {
+            families.push(f);
+        }
+    }
+    if let Some(f) = device.transfer_family {
+        if !families.contains(&f) {
+            families.push(f);
+        }
+    }
+
+    let sharing_mode = if families.len() > 1 {
+        vk::SharingMode::CONCURRENT
+    } else {
+        vk::SharingMode::EXCLUSIVE
+    };
+
     let create_info = vk::BufferCreateInfo::default()
         .size(actual_size)
         .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        .sharing_mode(sharing_mode)
+        .queue_family_indices(&families);
 
     let (mem_usage, alloc_flags) = match desc.memory {
         MemoryType::GpuOnly => (
@@ -639,7 +678,8 @@ pub fn wait_for_timeline(
     value: u64,
     timeout_ns: u64,
 ) -> Result<(), String> {
-    let semaphores = [backend.timeline_sem];
+    let graphics = backend.graphics.as_ref().unwrap();
+    let semaphores = [graphics.timeline_sem];
     let values = [value];
     let wait_info = vk::SemaphoreWaitInfo::default()
         .semaphores(&semaphores)
