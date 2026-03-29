@@ -41,11 +41,7 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         }
     }
 
-    let sharing_mode = if families.len() > 1 {
-        vk::SharingMode::CONCURRENT
-    } else {
-        vk::SharingMode::EXCLUSIVE
-    };
+    let sharing_mode = vk::SharingMode::EXCLUSIVE;
 
     let create_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
@@ -104,7 +100,9 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         last_access: vk::AccessFlags2::empty(),
         last_stage: vk::PipelineStageFlags2::NONE,
         last_write_frame: 0,
-        last_queue_family: device.graphics_family,
+        last_queue_family: backend.graphics_family,
+        is_swapchain: false,
+        concurrent: false,
     };
 
     let id = backend.images.insert(physical);
@@ -235,7 +233,9 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
         allocation: Some(allocation),
         desc: desc.clone(),
         last_access: vk::AccessFlags2::empty(),
-        last_stage: vk::PipelineStageFlags2::NONE,
+        last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+        last_queue_family: backend.graphics.as_ref().unwrap().family,
+        concurrent: sharing_mode == vk::SharingMode::CONCURRENT,
     };
 
     let id = backend.buffers.insert(physical);

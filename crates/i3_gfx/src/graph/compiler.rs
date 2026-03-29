@@ -1,6 +1,6 @@
 use crate::graph::backend::{
-    BackendBuffer, BackendImage, CommandBatch, DescriptorWrite, DeviceCapabilities,
-    PassDescriptor, RenderBackend, RenderBackendInternal,
+    BackendBuffer, BackendCommandBuffer, BackendImage, BatchStep, CommandBatch, DescriptorWrite,
+    DeviceCapabilities, PassDescriptor, RenderBackend, RenderBackendInternal,
 };
 use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::types::*;
@@ -531,6 +531,9 @@ impl FrameGraph {
         // 3. Build dependency DAG from resource read/write overlaps
         let adj = Self::build_dependency_dag(&flat_passes);
 
+        // 3.1. Detect and annotate cross-queue ownership transfers
+        Self::detect_cross_queue_transfers(&mut flat_passes, &adj);
+
         // 4. Topological sort with level assignment (Kahn's algorithm)
         let (order, levels) = Self::topological_sort_levels(&flat_passes, &adj);
 
@@ -632,6 +635,11 @@ impl FrameGraph {
     }
 
     fn assign_queues(passes: &mut [FlatPass], capabilities: &DeviceCapabilities) {
+        tracing::debug!(
+            async_compute = capabilities.async_compute,
+            async_transfer = capabilities.async_transfer,
+            "Assigning queues"
+        );
         for pass in passes {
             pass.queue = match pass.domain {
                 PassDomain::Graphics => QueueType::Graphics,
@@ -651,6 +659,13 @@ impl FrameGraph {
                 }
                 PassDomain::Cpu => QueueType::Graphics,
             };
+            tracing::debug!(
+                pass = %pass.name,
+                domain = ?pass.domain,
+                prefer_async = pass.prefer_async,
+                queue = ?pass.queue,
+                "Pass assigned"
+            );
         }
     }
 
@@ -683,6 +698,8 @@ impl FrameGraph {
                 data_writes: node.data_writes.clone(),
                 prefer_async: node.prefer_async,
                 queue: QueueType::Graphics, // Assigned during compilation
+                releases: Vec::new(),
+                acquires: Vec::new(),
             });
         }
 
@@ -708,6 +725,63 @@ impl FrameGraph {
         }
 
         adj
+    }
+
+    /// Detect resources that cross queue boundaries and annotate the passes with Release/Acquire transfers.
+    fn detect_cross_queue_transfers(passes: &mut [FlatPass], adj: &[Vec<usize>]) {
+        let n = passes.len();
+        for i in 0..n {
+            for j_idx in 0..adj[i].len() {
+                let j = adj[i][j_idx];
+                let src_queue = passes[i].queue;
+                let dst_queue = passes[j].queue;
+
+                if src_queue != dst_queue {
+                    // Collect all images causing a dependency between i and j
+                    let mut shared_images = Vec::new();
+
+                    // RAW: j reads what i writes
+                    for (h, usage_i) in &passes[i].image_writes {
+                        if let Some((_, usage_j)) = passes[j].image_reads.iter().find(|(rh, _)| rh.0 == h.0) {
+                            shared_images.push((*h, *usage_i, *usage_j));
+                        }
+                    }
+                    // WAW: j writes what i writes
+                    for (h, usage_i) in &passes[i].image_writes {
+                        if let Some((_, usage_j)) = passes[j].image_writes.iter().find(|(wh, _)| wh.0 == h.0) {
+                            shared_images.push((*h, *usage_i, *usage_j));
+                        }
+                    }
+                    // WAR: j writes what i reads
+                    for (h, usage_i) in &passes[i].image_reads {
+                        if let Some((_, usage_j)) = passes[j].image_writes.iter().find(|(wh, _)| wh.0 == h.0) {
+                            shared_images.push((*h, *usage_i, *usage_j));
+                        }
+                    }
+
+                    for (h, ui, uj) in shared_images {
+                        let transfer = CrossQueueTransfer {
+                            image: Some(h),
+                            buffer: None,
+                            src_queue,
+                            dst_queue,
+                            src_usage: ui,
+                            dst_usage: uj,
+                        };
+
+                        // Add to source pass if not already there
+                        if !passes[i].releases.iter().any(|r| r.image == Some(h) && r.dst_queue == dst_queue) {
+                            passes[i].releases.push(transfer);
+                        }
+                        // Add to destination pass if not already there
+                        if !passes[j].acquires.iter().any(|r| r.image == Some(h) && r.src_queue == src_queue) {
+                            passes[j].acquires.push(transfer);
+                        }
+                    }
+
+                }
+            }
+        }
     }
 
     /// Check if pass `b` depends on pass `a` (a must execute before b).
@@ -838,6 +912,8 @@ struct FlatPass {
     data_writes: Vec<String>,
     prefer_async: bool,
     queue: QueueType,
+    releases: Vec<CrossQueueTransfer>,
+    acquires: Vec<CrossQueueTransfer>,
 }
 
 impl FlatPass {
@@ -846,8 +922,12 @@ impl FlatPass {
         let has_raster = node.image_writes.iter().any(|(_, u)| {
             u.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL)
         });
+        let has_present = node
+            .image_reads
+            .iter()
+            .any(|(_, u)| u.intersects(ResourceUsage::PRESENT));
 
-        if has_raster {
+        if has_raster || has_present {
             return PassDomain::Graphics;
         }
 
@@ -977,6 +1057,8 @@ impl CompiledGraph {
                     buffer_writes: &node.buffer_writes,
                     descriptor_sets: &node.descriptor_sets,
                     queue: flat.queue,
+                    releases: &flat.releases,
+                    acquires: &flat.acquires,
                 };
                 prepared_passes.push(Some(backend.prepare_pass(desc)));
             } else {
@@ -989,29 +1071,50 @@ impl CompiledGraph {
             }
         }
 
-        // 5. Execute steps
+        // 5. Execute steps — build an ORDERED batch so submit() can split
+        //    submissions at Signal/Wait boundaries, preventing multi-queue deadlocks.
         let mut batch = CommandBatch::default();
+
+        let push_cb = |batch: &mut CommandBatch, queue: QueueType, cb: BackendCommandBuffer| {
+            batch.steps.push(BatchStep::Command { queue, cb });
+        };
 
         for step in &self.steps {
             match step {
                 ExecutionStep::Signal { queue, value } => {
-                    batch.signals.push((*queue, *value));
+                    batch.steps.push(BatchStep::Signal { queue: *queue, value: *value });
                 }
                 ExecutionStep::Wait { queue, on, value } => {
-                    batch.waits.push((*queue, *on, *value));
+                    batch.steps.push(BatchStep::Wait { queue: *queue, on: *on, value: *value });
                 }
                 ExecutionStep::Barriers(pass_indices) => {
-                    let mut batch_refs = Vec::with_capacity(pass_indices.len());
+                    let mut graphics_refs = Vec::new();
+                    let mut compute_refs = Vec::new();
+                    let mut transfer_refs = Vec::new();
+
                     for &idx in pass_indices {
                         if let Some(prepared) = &prepared_passes[idx] {
-                            batch_refs.push(prepared);
+                            match backend.get_prepared_pass_queue(prepared) {
+                                QueueType::Graphics => graphics_refs.push(prepared),
+                                QueueType::AsyncCompute => compute_refs.push(prepared),
+                                QueueType::Transfer => transfer_refs.push(prepared),
+                            }
                         }
                     }
-                    if !batch_refs.is_empty() {
-                        if let Some(cb) = backend.record_barriers(&batch_refs) {
-                            // Barriers currently recorded on Graphics queue for simplicity, 
-                            // but should ideally match the first pass in the level.
-                            batch.graphics_commands.push(cb);
+
+                    if !graphics_refs.is_empty() {
+                        if let Some(cb) = backend.record_barriers(&graphics_refs) {
+                            push_cb(&mut batch, QueueType::Graphics, cb);
+                        }
+                    }
+                    if !compute_refs.is_empty() {
+                        if let Some(cb) = backend.record_barriers(&compute_refs) {
+                            push_cb(&mut batch, QueueType::AsyncCompute, cb);
+                        }
+                    }
+                    if !transfer_refs.is_empty() {
+                        if let Some(cb) = backend.record_barriers(&transfer_refs) {
+                            push_cb(&mut batch, QueueType::Transfer, cb);
                         }
                     }
                 }
@@ -1024,11 +1127,7 @@ impl CompiledGraph {
                             let (_sem, cb, present_req) =
                                 backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
                             if let Some(c) = cb {
-                                match flat.queue {
-                                    QueueType::Graphics => batch.graphics_commands.push(c),
-                                    QueueType::AsyncCompute => batch.compute_commands.push(c),
-                                    QueueType::Transfer => batch.transfer_commands.push(c),
-                                }
+                                push_cb(&mut batch, flat.queue, c);
                             }
                             if let Some(h) = present_req {
                                 backend.mark_image_as_presented(h);
@@ -1037,8 +1136,6 @@ impl CompiledGraph {
                     }
                 }
                 ExecutionStep::ExecuteParallel(pass_indices) => {
-                    // Note: Parallel execution on multiple queues is tricky if they share state.
-                    // For now, we assume passes in the same level are truly independent.
                     let parallel_results: Vec<_> = pass_indices
                         .par_iter()
                         .filter_map(|&pass_idx| {
@@ -1057,11 +1154,7 @@ impl CompiledGraph {
 
                     for (cb, present_req, queue) in parallel_results {
                         if let Some(c) = cb {
-                            match queue {
-                                QueueType::Graphics => batch.graphics_commands.push(c),
-                                QueueType::AsyncCompute => batch.compute_commands.push(c),
-                                QueueType::Transfer => batch.transfer_commands.push(c),
-                            }
+                            push_cb(&mut batch, queue, c);
                         }
                         if let Some(h) = present_req {
                             backend.mark_image_as_presented(h);

@@ -29,7 +29,7 @@
 
 use ash::vk;
 use ash::vk::Handle;
-use i3_gfx::graph::backend::*;
+use i3_gfx::graph::backend::{BatchStep, CommandBatch, *};
 use i3_gfx::graph::types::*;
 use tracing::debug;
 
@@ -152,6 +152,83 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
 
     ctx.cursor = 0;
     ctx.submitted_cursor = 0;
+
+    // Wait for compute/transfer frame slots before resetting their pools.
+    // Graphics wait (above) only covers the graphics queue; compute and transfer
+    // are independent queues that may still be processing frame N work.
+    let frame_index = backend.global_frame_index;
+    let compute_wait = backend.compute.as_ref()
+        .map(|c| (c.timeline_sem, c.frame_contexts[frame_index].last_completion_value));
+    let transfer_wait = backend.transfer.as_ref()
+        .map(|t| (t.timeline_sem, t.frame_contexts[frame_index].last_completion_value));
+
+    if let Some((sem, value)) = compute_wait {
+        if value > 0 {
+            let semaphores = [sem];
+            let values = [value];
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&semaphores)
+                .values(&values);
+            unsafe {
+                device.handle.wait_semaphores(&wait_info, u64::MAX)
+                    .expect("Failed to wait for compute frame timeline");
+            }
+        }
+    }
+    if let Some((sem, value)) = transfer_wait {
+        if value > 0 {
+            let semaphores = [sem];
+            let values = [value];
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&semaphores)
+                .values(&values);
+            unsafe {
+                device.handle.wait_semaphores(&wait_info, u64::MAX)
+                    .expect("Failed to wait for transfer frame timeline");
+            }
+        }
+    }
+
+    if let Some(compute) = backend.compute.as_mut() {
+        let extra_ctx = &mut compute.frame_contexts[frame_index];
+        unsafe {
+            device.handle.reset_command_pool(extra_ctx.command_pool, vk::CommandPoolResetFlags::empty())
+                .expect("Failed to reset compute command pool");
+            device.handle.reset_descriptor_pool(extra_ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .expect("Failed to reset compute descriptor pool");
+            for tp_mutex in &extra_ctx.per_thread_pools {
+                let mut tp = tp_mutex.lock().unwrap();
+                device.handle.reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
+                    .expect("Failed to reset compute thread command pool");
+                device.handle.reset_descriptor_pool(tp.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                    .expect("Failed to reset compute thread descriptor pool");
+                tp.cursor = 0;
+            }
+        }
+        extra_ctx.cursor = 0;
+        extra_ctx.submitted_cursor = 0;
+    }
+
+    if let Some(transfer) = backend.transfer.as_mut() {
+        let extra_ctx = &mut transfer.frame_contexts[frame_index];
+        unsafe {
+            device.handle.reset_command_pool(extra_ctx.command_pool, vk::CommandPoolResetFlags::empty())
+                .expect("Failed to reset transfer command pool");
+            device.handle.reset_descriptor_pool(extra_ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .expect("Failed to reset transfer descriptor pool");
+            for tp_mutex in &extra_ctx.per_thread_pools {
+                let mut tp = tp_mutex.lock().unwrap();
+                device.handle.reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
+                    .expect("Failed to reset transfer thread command pool");
+                device.handle.reset_descriptor_pool(tp.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                    .expect("Failed to reset transfer thread descriptor pool");
+                tp.cursor = 0;
+            }
+        }
+        extra_ctx.cursor = 0;
+        extra_ctx.submitted_cursor = 0;
+    }
+
     backend.frame_started = true;
 }
 
@@ -232,9 +309,9 @@ pub fn acquire_swapchain_image(
                         let mut new_ids = Vec::with_capacity(num_images);
                         let mut new_sems = Vec::with_capacity(num_images);
                         for _ in 0..num_images {
-                            let p_id = backend.create_semaphore();
-                            let p_sem = backend.semaphores.get(p_id).cloned().unwrap();
-                            new_ids.push(p_id);
+                            let sem_id = backend.create_semaphore(false);
+                            let p_sem = backend.semaphores.get(sem_id).cloned().unwrap();
+                            new_ids.push(sem_id);
                             new_sems.push(p_sem);
                         }
 
@@ -285,7 +362,7 @@ pub fn acquire_swapchain_image(
 
                     // Destroy old signaled semaphore and create a replacement
                     backend.destroy_semaphore_internal(old_id);
-                    let new_id = backend.create_semaphore();
+                    let new_id = backend.create_semaphore(false);
                     let new_sem = backend.semaphores.get(new_id).cloned().unwrap();
 
                     if let Some(ctx) = backend.windows.get_mut(&window.0) {
@@ -328,7 +405,9 @@ pub fn acquire_swapchain_image(
                         last_access: vk::AccessFlags2::empty(),
                         last_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                         last_write_frame: 0,
-                        last_queue_family: backend.graphics.as_ref().unwrap().family,
+                        last_queue_family: backend.graphics_family,
+                        is_swapchain: true,
+                        concurrent: false, // swapchain images are always EXCLUSIVE
                     });
                     backend.external_to_physical.insert(image_id, new_id);
                     new_id
@@ -359,226 +438,207 @@ pub fn acquire_swapchain_image(
     }
 }
 
+/// A single pending sub-batch for one queue, accumulating commands/waits/signals
+/// before the next vkQueueSubmit call.
+struct SubBatch {
+    commands: Vec<vk::CommandBuffer>,
+    wait_sems: Vec<vk::Semaphore>,
+    wait_values: Vec<u64>,
+    wait_stages: Vec<vk::PipelineStageFlags>,
+    signal_sems: Vec<vk::Semaphore>,
+    signal_values: Vec<u64>,
+}
+
+impl SubBatch {
+    fn new() -> Self {
+        Self {
+            commands: Vec::new(),
+            wait_sems: Vec::new(),
+            wait_values: Vec::new(),
+            wait_stages: Vec::new(),
+            signal_sems: Vec::new(),
+            signal_values: Vec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+            && self.wait_sems.is_empty()
+            && self.signal_sems.is_empty()
+    }
+}
+
 /// Submit a command batch to the GPU.
 ///
-/// This function submits recorded command buffers to the graphics queue and
-/// presents the rendered images to the screen.
-///
-/// # Submission Flow
-///
-/// 1. **Advance timeline**: Increment the CPU timeline value
-/// 2. **Collect semaphores**: Gather binary semaphores from windows that acquired images
-/// 3. **Submit to queue**: Submit command buffers with timeline and binary semaphore synchronization
-/// 4. **Present**: Present rendered images to all active windows
-///
-/// # Synchronization
-///
-/// The submission uses a combination of:
-/// - **Timeline semaphore**: For CPU-GPU synchronization (wait for previous frame)
-/// - **Binary semaphores**: For GPU-GPU synchronization (acquire → render → present)
-///
-/// # Arguments
-///
-/// * `backend` - Mutable reference to the backend
-/// * `batch` - Command batch containing command buffers to submit
-/// * `_wait_sems` - Unused (reserved for future use)
-/// * `_signal_sems` - Unused (reserved for future use)
-///
-/// # Returns
-///
-/// The timeline value that will be signaled when this submission completes
+/// Processes the ordered BatchSteps to emit separate vkQueueSubmit calls at each
+/// Signal boundary. This prevents cross-queue deadlocks when Graphics → Compute
+/// → Graphics dependency chains exist — each "phase" of a queue gets its own
+/// submission with only the waits that apply to that phase.
 pub fn submit(
     backend: &mut VulkanBackend,
     batch: CommandBatch,
 ) -> Result<u64, String> {
     let device = backend.get_device().clone();
 
-    // 1. Capture base timeline values for mapping relative compiler syncs to absolute timeline values
+    // 1. Snapshot base timeline values (before any signals this frame)
     let graphics_base = backend.graphics.as_ref().map(|q| q.cpu_timeline).unwrap_or(0);
-    let compute_base = backend.compute.as_ref().map(|q| q.cpu_timeline).unwrap_or(0);
+    let compute_base  = backend.compute.as_ref().map(|q| q.cpu_timeline).unwrap_or(0);
     let transfer_base = backend.transfer.as_ref().map(|q| q.cpu_timeline).unwrap_or(0);
 
-    let get_base = |q: QueueType| match q {
-        QueueType::Graphics => graphics_base,
+    let (graphics_timeline, graphics_family) = backend.graphics.as_ref()
+        .map(|q| (q.timeline_sem, q.family)).unwrap_or((vk::Semaphore::null(), 0));
+    let (compute_timeline,  compute_family)  = backend.compute.as_ref()
+        .map(|q| (q.timeline_sem, q.family)).unwrap_or((vk::Semaphore::null(), 0));
+    let (transfer_timeline, transfer_family) = backend.transfer.as_ref()
+        .map(|q| (q.timeline_sem, q.family)).unwrap_or((vk::Semaphore::null(), 0));
+
+    let base_for = |q: QueueType| match q {
+        QueueType::Graphics    => graphics_base,
         QueueType::AsyncCompute => compute_base,
-        QueueType::Transfer => transfer_base,
+        QueueType::Transfer    => transfer_base,
+    };
+    let timeline_sem_for = |q: QueueType| match q {
+        QueueType::Graphics    => graphics_timeline,
+        QueueType::AsyncCompute => compute_timeline,
+        QueueType::Transfer    => transfer_timeline,
+    };
+    let family_for = |q: QueueType| match q {
+        QueueType::Graphics    => graphics_family,
+        QueueType::AsyncCompute => compute_family,
+        QueueType::Transfer    => transfer_family,
+    };
+    let queue_handle_for = |backend: &VulkanBackend, q: QueueType| match q {
+        QueueType::Graphics    => backend.graphics.as_ref().unwrap().queue,
+        QueueType::AsyncCompute => backend.compute.as_ref().unwrap().queue,
+        QueueType::Transfer    => backend.transfer.as_ref().unwrap().queue,
     };
 
-    // 2. Collect all binary semaphores from windows that acquired images
+    // 2. Collect swapchain binary semaphores
     let mut active_windows = Vec::with_capacity(2);
     for ctx in backend.windows.values_mut() {
-        if let (Some(a_id), Some(i)) = (
-            ctx.current_acquire_sem_id.take(),
-            ctx.current_image_index.take(),
-        ) {
+        if let (Some(a_id), Some(i)) = (ctx.current_acquire_sem_id.take(), ctx.current_image_index.take()) {
             let release_sem = ctx.present_semaphores[i as usize];
             let acquire_sem = backend.semaphores.get(a_id).cloned().unwrap();
-            active_windows.push((
-                ctx.swapchain.as_ref().unwrap().handle,
-                i,
-                acquire_sem,
-                release_sem,
-            ));
+            active_windows.push((ctx.swapchain.as_ref().unwrap().handle, i, acquire_sem, release_sem));
         }
     }
 
-    let mut present_info = Vec::with_capacity(active_windows.len());
-    let mut graphics_wait_binary = Vec::with_capacity(active_windows.len());
-    let mut graphics_signal_binary = Vec::with_capacity(active_windows.len());
-    for (sc_handle, image_index, acquire_sem, release_sem) in active_windows {
-        graphics_wait_binary.push(acquire_sem);
-        graphics_signal_binary.push(release_sem);
-        present_info.push((sc_handle, image_index, release_sem));
+    let mut present_info_list = Vec::with_capacity(active_windows.len());
+
+    // Find which family last touched the swapchain image for present signal assignment
+    let mut swapchain_last_family = graphics_family;
+    for (_, img) in backend.images.iter() {
+        if img.is_swapchain && img.last_layout != vk::ImageLayout::UNDEFINED {
+            swapchain_last_family = img.last_queue_family;
+            break;
+        }
     }
 
-    // 3. Perform submissions for each queue
-    // We do them in order: Transfer, Compute, then Graphics (which handles presentation and acquires)
-
-    // Extract sync metadata from batch
-    let mut q_waits = HashMap::new();
-    for (target, on, val) in &batch.waits {
-        q_waits.entry(*target).or_insert_with(Vec::new).push((*on, *val));
+    for (sc_handle, image_index, _acquire_sem, release_sem) in &active_windows {
+        present_info_list.push((*sc_handle, *image_index, *release_sem));
     }
 
-    let mut q_signals = HashMap::new();
-    for (queue, val) in &batch.signals {
-        q_signals.entry(*queue).or_insert_with(Vec::new).push(*val);
-    }
+    // 3. Process ordered steps → build ordered list of (queue, SubBatch)
+    // Per-queue open sub-batch (not yet submitted)
+    let mut open: HashMap<QueueType, SubBatch> = HashMap::new();
+    // Finalized sub-batches in submission order
+    let mut finalized: Vec<(QueueType, SubBatch)> = Vec::new();
 
-    for queue_type in [
-        QueueType::Transfer,
-        QueueType::AsyncCompute,
-        QueueType::Graphics,
-    ] {
-        let cmds = match queue_type {
-            QueueType::Graphics => &batch.graphics_commands,
-            QueueType::AsyncCompute => &batch.compute_commands,
-            QueueType::Transfer => &batch.transfer_commands,
-        };
+    // Track the highest absolute signal value per queue (for cpu_timeline update)
+    let mut max_signal: HashMap<QueueType, u64> = HashMap::new();
 
-        let relative_waits = q_waits.get(&queue_type).map(|v| v.as_slice()).unwrap_or(&[]);
-        let relative_signals = q_signals.get(&queue_type).map(|v| v.as_slice()).unwrap_or(&[]);
-        let wait_binary: &[vk::Semaphore] = if queue_type == QueueType::Graphics {
-            &graphics_wait_binary
-        } else {
-            &[]
-        };
-        let signal_binary: &[vk::Semaphore] = if queue_type == QueueType::Graphics {
-            &graphics_signal_binary
-        } else {
-            &[]
-        };
+    let global_frame_index = backend.global_frame_index;
 
-        let q_ctx_exists = match queue_type {
-            QueueType::Graphics => backend.graphics.is_some(),
-            QueueType::AsyncCompute => backend.compute.is_some(),
-            QueueType::Transfer => backend.transfer.is_some(),
-        };
-
-        if !q_ctx_exists {
-            if !cmds.is_empty() {
-                return Err(format!("Queue {:?} not available for commands", queue_type));
+    for step in &batch.steps {
+        match step {
+            BatchStep::Command { queue, cb } => {
+                let sub = open.entry(*queue).or_insert_with(SubBatch::new);
+                sub.commands.push(unsafe { std::mem::transmute::<u64, vk::CommandBuffer>(cb.0) });
             }
-            continue;
+            BatchStep::Wait { queue, on, value } => {
+                let sub = open.entry(*queue).or_insert_with(SubBatch::new);
+                let abs = base_for(*on) + value;
+                sub.wait_sems.push(timeline_sem_for(*on));
+                sub.wait_values.push(abs);
+                sub.wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+            }
+            BatchStep::Signal { queue, value } => {
+                let abs = (base_for(*queue) + value).max(1);
+                let sub = open.entry(*queue).or_insert_with(SubBatch::new);
+                sub.signal_sems.push(timeline_sem_for(*queue));
+                sub.signal_values.push(abs);
+                *max_signal.entry(*queue).or_insert(0) = (*max_signal.get(queue).unwrap_or(&0)).max(abs);
+
+                // Close this sub-batch and start fresh for the next phase
+                let closed = open.remove(queue).unwrap();
+                finalized.push((*queue, closed));
+            }
         }
+    }
 
-        let mut vk_cmds: Vec<vk::CommandBuffer> = cmds
-            .iter()
-            .map(|cb| unsafe { std::mem::transmute::<u64, vk::CommandBuffer>(cb.0) })
-            .collect();
-
-        // If this is the graphics queue, also include legacy main pool recordings
-        if queue_type == QueueType::Graphics {
-            let q_ctx = backend.graphics.as_mut().unwrap();
-            let frame_ctx = &mut q_ctx.frame_contexts[backend.global_frame_index];
-            let legacy_cmds =
-                &frame_ctx.allocated_command_buffers[frame_ctx.submitted_cursor..frame_ctx.cursor];
-            vk_cmds.extend_from_slice(legacy_cmds);
-            frame_ctx.submitted_cursor = frame_ctx.cursor;
-        }
-
-        if vk_cmds.is_empty()
-            && relative_waits.is_empty()
-            && relative_signals.is_empty()
-            && wait_binary.is_empty()
-            && signal_binary.is_empty()
-        {
-            continue;
-        }
-
-        let mut wait_sems = Vec::new();
-        let mut wait_values = Vec::new();
-        let mut wait_stages = Vec::new();
-
-        // Add timeline waits
-        for (on_queue, rel_value) in relative_waits {
-            let (on_sem, on_base) = match on_queue {
-                QueueType::Graphics => {
-                    let ctx = backend.graphics.as_ref().unwrap();
-                    (ctx.timeline_sem, graphics_base)
-                }
-                QueueType::AsyncCompute => {
-                    let ctx = backend.compute.as_ref().unwrap();
-                    (ctx.timeline_sem, compute_base)
-                }
-                QueueType::Transfer => {
-                    let ctx = backend.transfer.as_ref().unwrap();
-                    (ctx.timeline_sem, transfer_base)
-                }
-            };
-            wait_sems.push(on_sem);
-            wait_values.push(on_base + rel_value);
-            wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
-        }
-
-        // Add binary waits (typically only for graphics queue)
-        for &sem in wait_binary {
-            wait_sems.push(sem);
-            wait_values.push(0);
-            wait_stages.push(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
-        }
-
-        let mut signal_sems = Vec::new();
-        let mut signal_values = Vec::new();
-
-        let (q_handle, q_timeline_sem, q_base, mut q_cpu_timeline) = {
-            let q_ctx = match queue_type {
-                QueueType::Graphics => backend.graphics.as_mut().unwrap(),
-                QueueType::AsyncCompute => backend.compute.as_mut().unwrap(),
-                QueueType::Transfer => backend.transfer.as_mut().unwrap(),
-            };
-            (
-                q_ctx.queue,
-                q_ctx.timeline_sem,
-                get_base(queue_type),
-                q_ctx.cpu_timeline,
-            )
+    // Flush any remaining open sub-batches (passes with no trailing Signal)
+    // Append legacy graphics commands (allocated outside the graph) to the last Graphics sub
+    {
+        let legacy: Vec<vk::CommandBuffer> = if let Some(gfx) = backend.graphics.as_mut() {
+            let ctx = &mut gfx.frame_contexts[global_frame_index];
+            let cmds = ctx.allocated_command_buffers[ctx.submitted_cursor..ctx.cursor].to_vec();
+            ctx.submitted_cursor = ctx.cursor;
+            cmds
+        } else {
+            Vec::new()
         };
 
-        // Add timeline signals
-        for rel_value in relative_signals {
-            signal_sems.push(q_timeline_sem);
-            let abs_value = q_base + rel_value;
-            signal_values.push(abs_value);
-            q_cpu_timeline = q_cpu_timeline.max(abs_value);
+        // Find or create the last Graphics open sub-batch and append legacy commands
+        if !legacy.is_empty() {
+            let sub = open.entry(QueueType::Graphics).or_insert_with(SubBatch::new);
+            sub.commands.extend(legacy);
+        }
+    }
+
+    for (q, sub) in open {
+        if !sub.is_empty() {
+            finalized.push((q, sub));
+        }
+    }
+
+    // 4. Attach binary semaphores (swapchain acquire/present) to the correct sub-batches.
+    // Acquire binary → first Graphics sub-batch (or the only one).
+    // Present binary → last sub-batch that belongs to the queue family that last touched the swapchain.
+    let first_graphics_idx = finalized.iter().position(|(q, _)| *q == QueueType::Graphics);
+    let last_swapchain_idx = finalized.iter().rposition(|(q, _)| family_for(*q) == swapchain_last_family);
+
+    if let Some(idx) = first_graphics_idx {
+        for (_, _, acquire_sem, _) in &active_windows {
+            finalized[idx].1.wait_sems.push(*acquire_sem);
+            finalized[idx].1.wait_values.push(0);
+            finalized[idx].1.wait_stages.push(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
+        }
+    }
+    if let Some(idx) = last_swapchain_idx {
+        for (_, _, _, release_sem) in &active_windows {
+            finalized[idx].1.signal_sems.push(*release_sem);
+            finalized[idx].1.signal_values.push(0);
+        }
+    }
+
+    // 5. Submit in order (finalization order = correct CPU submission order)
+    for (queue_type, sub) in finalized {
+        if sub.is_empty() {
+            continue;
         }
 
-        // Add binary signals
-        for &sem in signal_binary {
-            signal_sems.push(sem);
-            signal_values.push(0);
-        }
+        let q_handle = queue_handle_for(backend, queue_type);
 
         let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(&wait_values)
-            .signal_semaphore_values(&signal_values);
+            .wait_semaphore_values(&sub.wait_values)
+            .signal_semaphore_values(&sub.signal_values);
 
         let submit_info = vk::SubmitInfo::default()
             .push_next(&mut timeline_info)
-            .wait_semaphores(&wait_sems)
-            .wait_dst_stage_mask(&wait_stages)
-            .command_buffers(&vk_cmds)
-            .signal_semaphores(&signal_sems);
+            .wait_semaphores(&sub.wait_sems)
+            .wait_dst_stage_mask(&sub.wait_stages)
+            .command_buffers(&sub.commands)
+            .signal_semaphores(&sub.signal_sems);
 
         unsafe {
             device
@@ -586,43 +646,48 @@ pub fn submit(
                 .queue_submit(q_handle, &[submit_info], vk::Fence::null())
                 .map_err(|e| e.to_string())?;
         }
+    }
 
-        // Update cpu_timeline in backend
-        {
-            let q_ctx = match queue_type {
-                QueueType::Graphics => backend.graphics.as_mut().unwrap(),
-                QueueType::AsyncCompute => backend.compute.as_mut().unwrap(),
-                QueueType::Transfer => backend.transfer.as_mut().unwrap(),
-            };
-            q_ctx.cpu_timeline = q_cpu_timeline;
+    // 6. Update cpu_timeline for all queues
+    let graphics_signal = {
+        if let Some(gfx) = backend.graphics.as_mut() {
+            if let Some(&v) = max_signal.get(&QueueType::Graphics) {
+                gfx.cpu_timeline = gfx.cpu_timeline.max(v);
+            }
+            gfx.cpu_timeline
+        } else { 0 }
+    };
+    if let Some(compute) = backend.compute.as_mut() {
+        if let Some(&v) = max_signal.get(&QueueType::AsyncCompute) {
+            compute.cpu_timeline = compute.cpu_timeline.max(v);
+            compute.frame_contexts[global_frame_index].last_completion_value = v;
+        }
+    }
+    if let Some(transfer) = backend.transfer.as_mut() {
+        if let Some(&v) = max_signal.get(&QueueType::Transfer) {
+            transfer.cpu_timeline = transfer.cpu_timeline.max(v);
+            transfer.frame_contexts[global_frame_index].last_completion_value = v;
         }
     }
 
-    // 4. Present all windows
+    // 7. Present all windows
     let fp = backend.swapchain_loader.as_ref().unwrap();
     let graphics_queue = backend.graphics.as_ref().unwrap().queue;
-
-    for (swapchain, index, wait_sem) in present_info {
+    for (swapchain, index, wait_sem) in present_info_list {
         let scs = [swapchain];
         let idxs = [index];
         let sems = [wait_sem];
-        let present_info = vk::PresentInfoKHR::default()
+        let pi = vk::PresentInfoKHR::default()
             .wait_semaphores(&sems)
             .swapchains(&scs)
             .image_indices(&idxs);
-
-        unsafe {
-            fp.queue_present(graphics_queue, &present_info).ok(); // Presentation errors handled on next acquire
-        }
+        unsafe { fp.queue_present(graphics_queue, &pi).ok(); }
     }
 
-    // Final result is the graphics timeline value
-    let graphics_signal = backend.graphics.as_ref().unwrap().cpu_timeline;
-
-    // Update frame slot state
+    // 8. Update frame completion value for next-frame wait
     {
         let graphics = backend.graphics.as_mut().unwrap();
-        let frame_ctx = &mut graphics.frame_contexts[backend.global_frame_index];
+        let frame_ctx = &mut graphics.frame_contexts[global_frame_index];
         frame_ctx.last_completion_value = graphics_signal;
     }
 

@@ -54,8 +54,11 @@ graph TD
 | GFX-03 | i3_gfx | High | `compiler.rs` is too large (~1000 LOC). Split into symbol_table, node_storage, etc. |
 | GFX-04 | i3_gfx | Medium | `consume_erased` panics on missing symbol; should return Result. |
 | GFX-06 | i3_gfx | Medium | Memory aliasing (AliasingPlan) described in design but not implemented. |
-| GFX-07 | i3_gfx | Low | Multi-queue support (async compute/transfer) not implemented. |
+| GFX-07 | i3_gfx | **DONE** | ~~Multi-queue support (async compute/transfer) not implemented.~~ Implemented: `QueueType`, `prefer_async`, `BatchStep`-based sub-batch splitting, timeline semaphore cross-queue sync, queue family ownership transfers. Working with 3 queues visible in Nsight, no validation errors. |
 | GFX-08 | i3_gfx | Low | Dead node elimination not implemented. |
+| GFX-MQ-01 | i3_vulkan_backend | High | `begin_frame` waits only on the **graphics** timeline semaphore before resetting all frame contexts. Compute and transfer pools are reset without waiting for those queues to finish — command buffers in flight can be invalidated. Fix: add `last_completion_value` per `QueueContext` and wait on each queue's timeline in `begin_frame`. (`submission.rs:114-196`) |
+| GFX-MQ-02 | i3_vulkan_backend | Medium | `get_queue_family()` calls `.unwrap()` on `backend.compute` / `backend.transfer` unconditionally. Safe today only because `assign_queues` never routes to AsyncCompute when `capabilities.async_compute=false` — a fragile implicit invariant. Fix: return `Option<u32>` or fall back to `graphics_family`. (`sync.rs:34-40`) |
+| GFX-MQ-03 | i3_vulkan_backend | Medium | `sanitize_stages` silently converts unsupported graphics stages (e.g. `FRAGMENT_SHADER`) to `TOP_OF_PIPE` on compute/transfer queues without logging. Weakens synchronization invisibly. Fix: add `tracing::warn!` when the fallback fires. (`sync.rs:327-342`) |
 | IO-01 | i3_io | High | `AssetHandle::get()`/`wait_loaded()` return refs that may outlive the lock (potential UB). Use Arc<T>. |
 | IO-03 | i3_io | Medium | Manual unsafe pointer cast in `texture.rs` load. Use match `bytemuck` patterns. |
 | VK-03 | i3_vulkan_backend | Low | Format conversion audit needed for recent Vulkan additions. |
@@ -75,7 +78,7 @@ graph TD
 ### 2.3 Tools (i3_baker, i3_bundle, i3_egui)
 
 | ID | Component | Severity | Description |
-|---|---|---|---|
+|---|---|---|
 | BK-01 | i3_baker | Medium | Dead `PipelineNode` abstraction review. |
 | BK-05 | i3_baker | Low | No tangent recalculation when Assimp metadata is missing. |
 | BN-01 | i3_bundle | Medium | Show fragmentation info in bundle inspector (gaps, padding, overhead). |
@@ -89,6 +92,10 @@ graph TD
 ## 3. Action Plan: Upcoming Phases
 
 ### Phase 1: Safety & Foundation
+- **[DONE]** Multi-queue async compute + transfer (GFX-07).
+- **[TODO]** Fix GFX-MQ-01: per-queue `last_completion_value` and wait in `begin_frame`.
+- **[TODO]** Fix GFX-MQ-02: safe `get_queue_family()` with fallback.
+- **[TODO]** Fix GFX-MQ-03: log warn in `sanitize_stages` on fallback.
 - Refactor `AssetHandle` accessors to return `Arc<T>` (Fix IO-01/IO-02).
 - Clean up unsafe casts in `texture.rs`.
 - Split large files (`compiler.rs`).
@@ -116,3 +123,22 @@ graph TD
 - Annotate all design documents with current implementation status.
 - Reconcile testing conventions between documentation and code.
 - Implement VFS unit tests and renderer-level NullBackend integration tests.
+
+---
+
+## 5. Documentation Gaps (frame_graph_design.md vs Code)
+
+`doc/frame_graph_design.md` was written before the implementation and is partially outdated.
+The following table summarizes the delta — a doc update pass is needed.
+
+| Topic | Doc says | Code reality |
+|---|---|---|
+| `RenderPass::domain()` | Required method returning `PassDomain` | Removed — domain is auto-inferred by compiler from resource declarations |
+| `RenderPass::declare()` | Method name | Renamed to `record()` in code |
+| `RenderPass::prefer_async()` | Not mentioned | Present in trait; default = `true`; controls async queue routing |
+| `CommandBatch` / `BatchStep` | Not mentioned | Core submission primitive; `BatchStep::{Command,Wait,Signal}` drives sub-batch splitting |
+| Multi-queue sync | Timeline semaphores described abstractly | Concrete: ordered `BatchStep` steps, sub-batch splitting at `Signal` boundaries, per-queue `cpu_timeline` |
+| Memory aliasing | Described as "from day one" | **Not yet implemented** (see GFX-06) |
+| `PassContext` | Enum with `Gpu`/`Cpu` variants | Implemented as a trait |
+| `PassBuilder::add_node()` | FnOnce closure API | Actual API: `add_pass(&mut dyn RenderPass)` / `add_owned_pass<P: RenderPass>` |
+| GFX-07 status | "Multi-queue not implemented" | Fully implemented and working |

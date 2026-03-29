@@ -35,10 +35,15 @@ impl<'a> PassBuilder<'a> {
 
     /// Resolve a typed symbol from the current or parent scope. Returns None if not found.
     pub fn try_consume<T: 'static + Send + Sync>(&mut self, name: &str) -> Option<&T> {
-        self.inner.try_consume_erased(TypeId::of::<T>(), name)
+        self.inner
+            .try_consume_erased(TypeId::of::<T>(), name)
             .map(|any| {
-                any.downcast_ref::<T>()
-                    .unwrap_or_else(|| panic!("Type mismatch in symbol table for optional symbol: {}", name))
+                any.downcast_ref::<T>().unwrap_or_else(|| {
+                    panic!(
+                        "Type mismatch in symbol table for optional symbol: {}",
+                        name
+                    )
+                })
             })
     }
 
@@ -147,10 +152,11 @@ impl<'a> PassBuilder<'a> {
     /// Adds a structural node (Pass or Group) to the frame graph by reference.
     pub fn add_pass(&mut self, pass: &mut dyn RenderPass) {
         let trait_ptr: *mut dyn RenderPass = pass;
-        // Cast to 'static to satisfy Box requirements. 
+        // Cast to 'static to satisfy Box requirements.
         // Safety: The pass must outlive the FrameGraph execution for this frame.
         let static_ptr: *mut (dyn RenderPass + 'static) = unsafe { std::mem::transmute(trait_ptr) };
-        self.inner.add_node_erased(Box::new(BoxedRef { inner: static_ptr }));
+        self.inner
+            .add_node_erased(Box::new(BoxedRef { inner: static_ptr }));
     }
 
     /// Adds an owned structural node to the frame graph.
@@ -194,7 +200,7 @@ pub trait RenderPass: Any + Send + Sync {
     /// Hint: request execution on a dedicated async queue.
     /// Only meaningful for Compute/Transfer domains. Default: false.
     fn prefer_async(&self) -> bool {
-        false
+        true
     }
 
     /// Called once during graph global initialization, for creating pipelines/resources.
@@ -207,7 +213,6 @@ pub trait RenderPass: Any + Send + Sync {
     /// Record GPU commands (optional for purely grouping nodes).
     fn execute(&self, _ctx: &mut dyn PassContext) {}
 }
-
 
 /// Internal trait to hide implementation details from the public PassBuilder API.
 pub(crate) trait InternalPassBuilder {

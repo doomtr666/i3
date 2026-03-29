@@ -72,14 +72,24 @@ pub enum PreparedDomain {
     Cpu,
 }
 
+/// Unified barrier type for images and buffers.
+#[derive(Clone)]
+pub enum SyncBarrier {
+    Image(vk::ImageMemoryBarrier2<'static>),
+    Buffer(vk::BufferMemoryBarrier2<'static>),
+}
+
 /// Prepared pass ready for recording.
 pub struct VulkanPreparedPass {
     pub name: String,
     pub domain: PreparedDomain,
+    pub queue: i3_gfx::graph::types::QueueType,
     pub pipeline: Option<i3_gfx::graph::types::PipelineHandle>,
     pub viewport_extent: vk::Extent2D,
     pub image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
     pub buffer_barriers: Vec<vk::BufferMemoryBarrier2<'static>>,
+    pub release_barriers: Vec<SyncBarrier>,
+    pub acquire_barriers: Vec<SyncBarrier>,
     pub descriptor_sets: Vec<(u32, Vec<i3_gfx::graph::backend::DescriptorWrite>)>,
 }
 
@@ -357,7 +367,7 @@ impl PassContext for VulkanPassContext {
             device.handle.cmd_dispatch(self.cmd, x, y, z);
         }
     }
-    
+
     fn draw_indexed_indirect_count(
         &mut self,
         indirect_buffer: BufferHandle,
@@ -369,10 +379,10 @@ impl PassContext for VulkanPassContext {
     ) {
         let indirect_buf = self.backend().resolve_buffer(indirect_buffer);
         let count_buf = self.backend().resolve_buffer(count_buffer);
-        
+
         let indirect_vk = self.backend().buffers.get(indirect_buf.0).unwrap().buffer;
         let count_vk = self.backend().buffers.get(count_buf.0).unwrap().buffer;
-        
+
         unsafe {
             self.device.handle.cmd_draw_indexed_indirect_count(
                 self.cmd,
@@ -397,10 +407,10 @@ impl PassContext for VulkanPassContext {
     ) {
         let indirect_buf = self.backend().resolve_buffer(indirect_buffer);
         let count_buf = self.backend().resolve_buffer(count_buffer);
-        
+
         let indirect_vk = self.backend().buffers.get(indirect_buf.0).unwrap().buffer;
         let count_vk = self.backend().buffers.get(count_buf.0).unwrap().buffer;
-        
+
         unsafe {
             self.device.handle.cmd_draw_indirect_count(
                 self.cmd,
@@ -588,6 +598,102 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
     backend.image_barrier_scratch.clear();
     backend.buffer_barrier_scratch.clear();
 
+    // Generate Release Barriers
+    let mut release_barriers = Vec::new();
+    for transfer in desc.releases {
+        let pid = if let Some(h) = transfer.image {
+            let handle = h.0.0;
+            if let Some(&p) = backend.external_to_physical.get(&handle) { p } else { handle }
+        } else if let Some(h) = transfer.buffer {
+            let handle = h.0.0;
+            if let Some(&p) = backend.external_buffer_to_physical.get(&handle) { p } else { handle }
+        } else {
+            0
+        };
+
+        let src_family = crate::sync::get_queue_family(backend, transfer.src_queue);
+        let dst_family = crate::sync::get_queue_family(backend, transfer.dst_queue);
+
+        if transfer.image.is_some() {
+            let (old_layout, _, _) =
+                backend.get_image_state(transfer.src_usage, true, vk::PipelineBindPoint::GRAPHICS);
+            let (new_layout, _, _) =
+                backend.get_image_state(transfer.dst_usage, false, vk::PipelineBindPoint::GRAPHICS);
+
+            let barrier = crate::sync::get_image_ownership_barrier(
+                backend,
+                pid,
+                src_family,
+                dst_family,
+                old_layout,
+                new_layout,
+                transfer.src_usage,
+                transfer.dst_usage,
+                true,
+            );
+            release_barriers.push(SyncBarrier::Image(barrier));
+        } else {
+            let barrier = crate::sync::get_buffer_ownership_barrier(
+                backend,
+                pid,
+                src_family,
+                dst_family,
+                transfer.src_usage,
+                transfer.dst_usage,
+                true,
+            );
+            release_barriers.push(SyncBarrier::Buffer(barrier));
+        }
+    }
+
+    // Generate Acquire Barriers
+    let mut acquire_barriers = Vec::new();
+    for transfer in desc.acquires {
+        let pid = if let Some(h) = transfer.image {
+            let handle = h.0.0;
+            if let Some(&p) = backend.external_to_physical.get(&handle) { p } else { handle }
+        } else if let Some(h) = transfer.buffer {
+            let handle = h.0.0;
+            if let Some(&p) = backend.external_buffer_to_physical.get(&handle) { p } else { handle }
+        } else {
+            0
+        };
+
+        let src_family = crate::sync::get_queue_family(backend, transfer.src_queue);
+        let dst_family = crate::sync::get_queue_family(backend, transfer.dst_queue);
+
+        if transfer.image.is_some() {
+            let (old_layout, _, _) =
+                backend.get_image_state(transfer.src_usage, true, vk::PipelineBindPoint::GRAPHICS);
+            let (new_layout, _, _) =
+                backend.get_image_state(transfer.dst_usage, false, vk::PipelineBindPoint::GRAPHICS);
+
+            let barrier = crate::sync::get_image_ownership_barrier(
+                backend,
+                pid,
+                src_family,
+                dst_family,
+                old_layout,
+                new_layout,
+                transfer.src_usage,
+                transfer.dst_usage,
+                false,
+            );
+            acquire_barriers.push(SyncBarrier::Image(barrier));
+        } else {
+            let barrier = crate::sync::get_buffer_ownership_barrier(
+                backend,
+                pid,
+                src_family,
+                dst_family,
+                transfer.src_usage,
+                transfer.dst_usage,
+                false,
+            );
+            acquire_barriers.push(SyncBarrier::Buffer(barrier));
+        }
+    }
+
     // Resolve target physical IDs from writes (Using scratch)
     backend.target_id_scratch.clear();
     for (handle, _) in desc.image_writes {
@@ -627,7 +733,7 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
     }
 
     // Infer domain from pipeline bind point (no user-declared domain)
-    let is_compute = if let Some(h) = desc.pipeline {
+    let is_compute_pipeline = if let Some(h) = desc.pipeline {
         backend
             .pipeline_resources
             .get(h.0.0)
@@ -637,11 +743,20 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
         false
     };
 
+    // Queue type is authoritative: AsyncCompute/Transfer always use the compute bind point
+    // so that get_image_state / get_buffer_state produce correct pipeline stages in barriers.
+    // Graphics queue falls back to detecting the pipeline type (compute dispatch on gfx queue).
+    let is_compute = matches!(desc.queue, QueueType::AsyncCompute | QueueType::Transfer)
+        || is_compute_pipeline;
+
     let current_bind_point = if is_compute {
         vk::PipelineBindPoint::COMPUTE
     } else {
         vk::PipelineBindPoint::GRAPHICS
     };
+
+    let current_family = crate::sync::get_queue_family(backend, desc.queue);
+
 
     // Prepare attachments
     // --- Unified Resource Synchronization & Attachment Discovery ---
@@ -677,7 +792,7 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
             backend.get_image_state(usage, is_write, current_bind_point);
 
         if let Some(barrier) =
-            backend.get_image_barrier(pid, target_layout, target_access, target_stage)
+            backend.get_image_barrier(pid, target_layout, target_access, target_stage, current_family)
         {
             backend.image_barrier_scratch.push(barrier);
         }
@@ -762,7 +877,7 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
         let usage = pass_buffers_map[&handle];
         let pid = backend.resolve_buffer(handle).0;
         let (target_access, target_stage) = backend.get_buffer_state(usage, current_bind_point);
-        if let Some(barrier) = backend.get_buffer_barrier(pid, target_access, target_stage) {
+        if let Some(barrier) = backend.get_buffer_barrier(pid, target_access, target_stage, current_family) {
             backend.buffer_barrier_scratch.push(barrier);
         }
     }
@@ -780,10 +895,13 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
     VulkanPreparedPass {
         name: desc.name.to_string(),
         domain,
+        queue: desc.queue,
         pipeline: desc.pipeline,
         viewport_extent,
         image_barriers: backend.image_barrier_scratch.clone(),
         buffer_barriers: backend.buffer_barrier_scratch.clone(),
+        release_barriers,
+        acquire_barriers,
         descriptor_sets: desc.descriptor_sets.to_vec(),
     }
 }
@@ -793,10 +911,14 @@ pub fn record_barriers(
     backend: &VulkanBackend,
     passes: &[&VulkanPreparedPass],
 ) -> Option<BackendCommandBuffer> {
+    if passes.is_empty() {
+        return None;
+    }
+
     let mut total_image_barriers = 0;
     let mut total_buffer_barriers = 0;
     for p in passes {
-        total_image_barriers += p.image_barriers.len();
+        total_image_barriers += p.image_barriers.len() + p.release_barriers.len() + p.acquire_barriers.len();
         total_buffer_barriers += p.buffer_barriers.len();
     }
 
@@ -806,8 +928,15 @@ pub fn record_barriers(
 
     let device = backend.get_device().clone();
     let thread_idx = rayon::current_thread_index().unwrap_or(0);
-    let graphics = backend.graphics.as_ref().unwrap();
-    let frame_ctx = &graphics.frame_contexts[backend.global_frame_index];
+    
+    // Select Queue Context based on Pass Queue Type
+    let queue_ctx = match passes[0].queue {
+        QueueType::Graphics => backend.graphics.as_ref().unwrap(),
+        QueueType::AsyncCompute => backend.compute.as_ref().unwrap(),
+        QueueType::Transfer => backend.transfer.as_ref().unwrap(),
+    };
+    
+    let frame_ctx = &queue_ctx.frame_contexts[backend.global_frame_index];
     let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
     // Allocate Command Buffer from Thread Pool
@@ -838,8 +967,22 @@ pub fn record_barriers(
 
     let mut all_image_barriers = Vec::with_capacity(total_image_barriers);
     let mut all_buffer_barriers = Vec::with_capacity(total_buffer_barriers);
+
     for p in passes {
+        // Order: Acquire -> Normal -> Release
+        for b in &p.acquire_barriers {
+            match b {
+                SyncBarrier::Image(i) => all_image_barriers.push(i.clone()),
+                SyncBarrier::Buffer(b) => all_buffer_barriers.push(b.clone()),
+            }
+        }
         all_image_barriers.extend_from_slice(&p.image_barriers);
+        for b in &p.release_barriers {
+            match b {
+                SyncBarrier::Image(i) => all_image_barriers.push(i.clone()),
+                SyncBarrier::Buffer(b) => all_buffer_barriers.push(b.clone()),
+            }
+        }
         all_buffer_barriers.extend_from_slice(&p.buffer_barriers);
     }
 
@@ -926,8 +1069,14 @@ pub fn record_pass(
     let device = backend.get_device().clone();
 
     let thread_idx = rayon::current_thread_index().unwrap_or(0);
-    let graphics = backend.graphics.as_ref().unwrap();
-    let frame_ctx = &graphics.frame_contexts[backend.global_frame_index];
+    let queue_ctx = match prepared.queue {
+        QueueType::Graphics => backend.graphics.as_ref().unwrap(),
+        QueueType::AsyncCompute => backend.compute.as_ref()
+            .unwrap_or_else(|| backend.graphics.as_ref().unwrap()),
+        QueueType::Transfer => backend.transfer.as_ref()
+            .unwrap_or_else(|| backend.graphics.as_ref().unwrap()),
+    };
+    let frame_ctx = &queue_ctx.frame_contexts[backend.global_frame_index];
     let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
 
     // Allocate Command Buffer from Thread Pool
@@ -964,6 +1113,11 @@ pub fn record_pass(
         [1.0, 1.0, 1.0, 1.0],
     );
 
+    let default_bind_point = match prepared.queue {
+        QueueType::Graphics => vk::PipelineBindPoint::GRAPHICS,
+        QueueType::AsyncCompute | QueueType::Transfer => vk::PipelineBindPoint::COMPUTE,
+    };
+
     let mut ctx = VulkanPassContext {
         cmd,
         device: backend.get_device().clone(),
@@ -972,7 +1126,7 @@ pub fn record_pass(
         pipeline: None,
         descriptor_pool: frame_ctx.descriptor_pool,
         current_pipeline_layout: vk::PipelineLayout::null(),
-        current_bind_point: vk::PipelineBindPoint::GRAPHICS,
+        current_bind_point: default_bind_point,
         pending_descriptor_sets: prepared.descriptor_sets.clone(),
     };
 

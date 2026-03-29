@@ -14,7 +14,29 @@ pub struct BackendPipeline(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendCommandBuffer(pub u64);
 
-pub use crate::graph::types::{BufferDesc, BufferUsageFlags, ImageDesc, MemoryType, ResourceUsage};
+/// A single ordered step in a command batch.
+/// Steps are processed in sequence so that Signal boundaries generate
+/// separate vkQueueSubmit calls, preventing cross-queue deadlocks.
+#[derive(Debug, Clone)]
+pub enum BatchStep {
+    Command { queue: crate::graph::types::QueueType, cb: BackendCommandBuffer },
+    /// Target queue waits for `on` queue to reach `value` before executing.
+    Wait { queue: crate::graph::types::QueueType, on: crate::graph::types::QueueType, value: u64 },
+    /// Queue signals its timeline — closes the current sub-batch for that queue.
+    Signal { queue: crate::graph::types::QueueType, value: u64 },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CommandBatch {
+    /// Ordered sequence of commands, waits and signals.
+    /// submit() splits into separate vkQueueSubmit calls at Signal boundaries.
+    pub steps: Vec<BatchStep>,
+}
+
+pub use crate::graph::types::{
+    BufferDesc, BufferUsageFlags, CrossQueueTransfer, ImageDesc, MemoryType, QueueType,
+    ResourceUsage,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowDesc {
@@ -133,15 +155,6 @@ pub struct TlasCreateInfo {
     pub flags: AccelStructBuildFlags,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct CommandBatch {
-    pub graphics_commands: Vec<BackendCommandBuffer>,
-    pub compute_commands: Vec<BackendCommandBuffer>,
-    pub transfer_commands: Vec<BackendCommandBuffer>,
-    pub waits: Vec<(crate::graph::types::QueueType, crate::graph::types::QueueType, u64)>, // (Target, On, Value)
-    pub signals: Vec<(crate::graph::types::QueueType, u64)>,                              // (Queue, Value)
-}
-
 use crate::graph::types::{BufferHandle, ImageHandle, PipelineHandle};
 
 #[derive(Debug, Clone)]
@@ -154,6 +167,8 @@ pub struct PassDescriptor<'a> {
     pub buffer_writes: &'a [(BufferHandle, ResourceUsage)],
     pub descriptor_sets: &'a [(u32, Vec<DescriptorWrite>)],
     pub queue: crate::graph::types::QueueType,
+    pub releases: &'a [CrossQueueTransfer],
+    pub acquires: &'a [CrossQueueTransfer],
 }
 
 /// Hardware-specific context used to record commands during a pass.
@@ -527,8 +542,11 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     type PreparedPass: Send + Sync;
     fn prepare_pass(&mut self, desc: PassDescriptor) -> Self::PreparedPass;
 
+    /// Get the queue assigned to a prepared pass.
+    fn get_prepared_pass_queue(&self, prepared: &Self::PreparedPass) -> crate::graph::types::QueueType;
+
     /// Record barriers for a batch of prepared passes into a command buffer.
-    fn record_barriers(&self, passes: &[&Self::PreparedPass]) -> Option<BackendCommandBuffer>;
+    fn record_barriers(&mut self, passes: &[&Self::PreparedPass]) -> Option<BackendCommandBuffer>;
 
     /// Record a pass into a command buffer.
     fn record_pass(

@@ -1,10 +1,11 @@
 use i3_gfx::graph::backend::{
-    BackendBuffer, BackendImage, PassContext, PassDescriptor, RenderBackend, RenderBackendInternal,
-    BackendAccelerationStructure, TlasInstanceDesc, DescriptorSetHandle, DescriptorWrite, SamplerHandle,
+    BackendAccelerationStructure, BackendBuffer, BackendImage, DescriptorSetHandle,
+    DescriptorWrite, PassContext, PassDescriptor, RenderBackend, RenderBackendInternal,
+    SamplerHandle, TlasInstanceDesc,
 };
 use i3_gfx::graph::pass::RenderPass;
-use i3_gfx::graph::types::{BufferDesc, BufferHandle, ImageDesc, ImageHandle, WindowHandle};
 use i3_gfx::graph::pipeline::IndexType;
+use i3_gfx::graph::types::{BufferDesc, BufferHandle, ImageDesc, ImageHandle, WindowHandle};
 use i3_io;
 pub mod prelude;
 use std::collections::HashSet;
@@ -76,10 +77,7 @@ impl RenderBackend for NullBackend {
         // No-op for null backend
     }
 
-    fn create_sampler(
-        &mut self,
-        desc: &i3_gfx::graph::types::SamplerDesc,
-    ) -> SamplerHandle {
+    fn create_sampler(&mut self, desc: &i3_gfx::graph::types::SamplerDesc) -> SamplerHandle {
         let handle = self.next_handle();
         info!(handle, ?desc, "Created Sampler");
         SamplerHandle(handle)
@@ -205,10 +203,7 @@ impl RenderBackend for NullBackend {
     }
 
     // --- Resource Resolution ---
-    fn resolve_image(
-        &self,
-        handle: ImageHandle,
-    ) -> BackendImage {
+    fn resolve_image(&self, handle: ImageHandle) -> BackendImage {
         if let Some(phy) = self.image_map.get(&handle) {
             *phy
         } else {
@@ -216,10 +211,7 @@ impl RenderBackend for NullBackend {
         }
     }
 
-    fn resolve_buffer(
-        &self,
-        handle: BufferHandle,
-    ) -> BackendBuffer {
+    fn resolve_buffer(&self, handle: BufferHandle) -> BackendBuffer {
         BackendBuffer(handle.0.0)
     }
 
@@ -274,21 +266,12 @@ impl RenderBackend for NullBackend {
         info!("Updated Bindless Texture (raw) index {}", index);
     }
 
-    fn update_bindless_sampler(
-        &mut self,
-        _sampler: SamplerHandle,
-        _set: u64,
-        _binding: u32,
-    ) {
+    fn update_bindless_sampler(&mut self, _sampler: SamplerHandle, _set: u64, _binding: u32) {
         info!("Updated Bindless Sampler");
     }
 
     // --- Handle Registration ---
-    fn register_external_image(
-        &mut self,
-        handle: ImageHandle,
-        physical: BackendImage,
-    ) {
+    fn register_external_image(&mut self, handle: ImageHandle, physical: BackendImage) {
         info!(
             ?handle,
             ?physical,
@@ -297,11 +280,7 @@ impl RenderBackend for NullBackend {
         self.image_map.insert(handle, physical);
     }
 
-    fn register_external_buffer(
-        &mut self,
-        _handle: BufferHandle,
-        _physical: BackendBuffer,
-    ) {
+    fn register_external_buffer(&mut self, _handle: BufferHandle, _physical: BackendBuffer) {
         info!("Registered external buffer in NullBackend");
     }
 
@@ -315,10 +294,7 @@ impl RenderBackend for NullBackend {
         self.create_image(desc)
     }
 
-    fn create_transient_buffer(
-        &mut self,
-        desc: &BufferDesc,
-    ) -> BackendBuffer {
+    fn create_transient_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer {
         self.create_buffer(desc)
     }
 
@@ -360,10 +336,7 @@ impl RenderBackendInternal for NullBackend {
         Ok(Some((BackendImage(handle), 1, 0)))
     }
 
-    fn submit(
-        &mut self,
-        _batch: i3_gfx::graph::backend::CommandBatch,
-    ) -> Result<u64, String> {
+    fn submit(&mut self, _batch: i3_gfx::graph::backend::CommandBatch) -> Result<u64, String> {
         Ok(0)
     }
 
@@ -373,11 +346,19 @@ impl RenderBackendInternal for NullBackend {
         info!(name = %desc.name, "Preparing null pass");
         NullPreparedPass {
             name: desc.name.to_string(),
+            queue: desc.queue,
         }
     }
 
-    fn record_barriers(
+    fn get_prepared_pass_queue(
         &self,
+        prepared: &Self::PreparedPass,
+    ) -> i3_gfx::graph::types::QueueType {
+        prepared.queue
+    }
+
+    fn record_barriers(
+        &mut self,
         _passes: &[&Self::PreparedPass],
     ) -> Option<i3_gfx::graph::backend::BackendCommandBuffer> {
         // Null backend does not need to submit barriers
@@ -420,11 +401,7 @@ impl RenderBackendInternal for NullBackend {
         Ok(DescriptorSetHandle(h))
     }
 
-    fn update_descriptor_set(
-        &mut self,
-        set: DescriptorSetHandle,
-        writes: &[DescriptorWrite],
-    ) {
+    fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]) {
         info!(?set, writes = writes.len(), "Updated Descriptor Set");
     }
 }
@@ -441,6 +418,7 @@ pub struct NullPassContext<'a> {
 
 pub struct NullPreparedPass {
     pub name: String,
+    pub queue: i3_gfx::graph::types::QueueType,
 }
 
 impl<'a> NullPassContext<'a> {
@@ -501,22 +479,14 @@ impl<'a> PassContext for NullPassContext<'a> {
         }
     }
 
-    fn bind_index_buffer(
-        &mut self,
-        handle: BufferHandle,
-        index_type: IndexType,
-    ) {
+    fn bind_index_buffer(&mut self, handle: BufferHandle, index_type: IndexType) {
         info!(pass = %self.pass_name, ?handle, ?index_type, "BIND_INDEX_BUFFER");
         if !self.allocated_buffers.contains(&handle.0.0) {
             self.report_error(ValidationError::ResourceNotFound(handle.0.0));
         }
     }
 
-    fn bind_descriptor_set(
-        &mut self,
-        set_index: u32,
-        handle: DescriptorSetHandle,
-    ) {
+    fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle) {
         info!(pass = %self.pass_name, set_index, ?handle, "BIND_DESCRIPTOR_SET");
     }
 

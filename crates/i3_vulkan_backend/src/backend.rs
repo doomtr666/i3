@@ -13,7 +13,9 @@ use tracing::{debug, info};
 use crate::resource_arena::{PhysicalBuffer, PhysicalImage, PhysicalPipeline, ResourceArena};
 use crate::window_context::WindowContext;
 
-pub(crate) use crate::commands::{ThreadCommandPool, VulkanFrameContext, PreparedDomain, VulkanPreparedPass};
+pub(crate) use crate::commands::{
+    PreparedDomain, ThreadCommandPool, VulkanFrameContext, VulkanPreparedPass,
+};
 
 /// Per-queue context for managing execution, synchronization and command pools.
 pub struct QueueContext {
@@ -60,7 +62,12 @@ pub struct VulkanBackend {
     pub recycled_semaphores: Vec<vk::Semaphore>,
 
     pub accel_structs: ResourceArena<crate::accel_struct::PhysicalAccelerationStructure>,
-    pub dead_accel_structs: Vec<(u64, vk::AccelerationStructureKHR, vk::Buffer, vk_mem::Allocation)>,
+    pub dead_accel_structs: Vec<(
+        u64,
+        vk::AccelerationStructureKHR,
+        vk::Buffer,
+        vk_mem::Allocation,
+    )>,
 
     // Transient Pools
     pub(crate) transient_image_pool: HashMap<ImageDesc, Vec<u64>>,
@@ -102,6 +109,11 @@ pub struct VulkanBackend {
     pub next_resource_id: u64,
     pub bindless_set_layout: vk::DescriptorSetLayout,
     pub bindless_set_handle: u64,
+
+    pub graphics_family: u32,
+    pub compute_family: u32,
+    pub transfer_family: u32,
+
     // Dependencies (Dropped Last)
     pub device: Option<Arc<crate::device::VulkanDevice>>,
     pub instance: Arc<crate::instance::VulkanInstance>,
@@ -150,6 +162,9 @@ impl VulkanBackend {
             dead_semaphores: Vec::new(),
             dead_samplers: Vec::new(),
             recycled_semaphores: Vec::new(),
+            graphics_family: 0,
+            compute_family: 0,
+            transfer_family: 0,
             transient_image_pool: HashMap::new(),
             transient_buffer_pool: HashMap::new(),
             static_descriptor_pool: vk::DescriptorPool::null(),
@@ -188,8 +203,16 @@ impl VulkanBackend {
         new_layout: vk::ImageLayout,
         dst_access: vk::AccessFlags2,
         dst_stage: vk::PipelineStageFlags2,
+        current_queue_family: u32,
     ) -> Option<vk::ImageMemoryBarrier2<'static>> {
-        crate::sync::get_image_barrier(self, physical_id, new_layout, dst_access, dst_stage)
+        crate::sync::get_image_barrier(
+            self,
+            physical_id,
+            new_layout,
+            dst_access,
+            dst_stage,
+            current_queue_family,
+        )
     }
 
     pub fn get_buffer_barrier(
@@ -197,8 +220,15 @@ impl VulkanBackend {
         physical_id: u64,
         dst_access: vk::AccessFlags2,
         dst_stage: vk::PipelineStageFlags2,
+        current_queue_family: u32,
     ) -> Option<vk::BufferMemoryBarrier2<'static>> {
-        crate::sync::get_buffer_barrier(self, physical_id, dst_access, dst_stage)
+        crate::sync::get_buffer_barrier(
+            self,
+            physical_id,
+            dst_access,
+            dst_stage,
+            current_queue_family,
+        )
     }
 
     pub fn get_image_state(
@@ -219,8 +249,8 @@ impl VulkanBackend {
     }
 
     #[allow(dead_code)]
-    pub fn create_semaphore(&mut self) -> u64 {
-        crate::sync::create_semaphore(self)
+    pub fn create_semaphore(&mut self, is_timeline: bool) -> u64 {
+        crate::sync::create_semaphore(self, is_timeline)
     }
 
     pub fn next_id(&mut self) -> u64 {
@@ -233,7 +263,10 @@ impl VulkanBackend {
         crate::window_context::window_size(self, window)
     }
 
-    fn init_frame_contexts_for_family(&self, family_index: u32) -> Result<Vec<VulkanFrameContext>, String> {
+    fn init_frame_contexts_for_family(
+        &self,
+        family_index: u32,
+    ) -> Result<Vec<VulkanFrameContext>, String> {
         let mut frame_contexts = Vec::new();
         let device = self.get_device().clone();
 
@@ -328,19 +361,16 @@ impl VulkanBackend {
         Ok(frame_contexts)
     }
 
-    fn create_queue_context(
-        &self,
-        queue: vk::Queue,
-        family: u32,
-    ) -> Result<QueueContext, String> {
+    fn create_queue_context(&self, queue: vk::Queue, family: u32) -> Result<QueueContext, String> {
         let device = self.get_device();
-        
+
         let mut type_info =
             vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
         let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-        
+
         let timeline_sem = unsafe {
-            device.handle
+            device
+                .handle
                 .create_semaphore(&create_info, None)
                 .map_err(|e| format!("Failed to create timeline semaphore: {}", e))?
         };
@@ -392,7 +422,7 @@ impl VulkanBackend {
                 .map_err(|e| format!("Failed to create bindless layout: {}", e))?;
 
             self.bindless_set_layout = layout;
-            
+
             let layouts = [layout];
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(self.static_descriptor_pool)
@@ -471,17 +501,21 @@ impl RenderBackend for VulkanBackend {
             pdevices[0]
         };
 
-        let device = crate::device::VulkanDevice::new_with_physical(
-            self.instance.clone(),
-            physical_device,
-        )?;
+        let device =
+            crate::device::VulkanDevice::new_with_physical(self.instance.clone(), physical_device)?;
         self.device = Some(Arc::new(device));
+        let d = self.device.as_ref().unwrap();
+        self.graphics_family = d.graphics_family;
+        self.compute_family = d.compute_family.unwrap_or(d.graphics_family);
+        self.transfer_family = d.transfer_family.unwrap_or(d.graphics_family);
+
         self.event_pump = Some(self.sdl.event_pump()?);
 
         // Create Queue Contexts
         let device_ptr = self.device.as_ref().unwrap();
-        self.graphics = Some(self.create_queue_context(device_ptr.graphics_queue, device_ptr.graphics_family)?);
-        
+        self.graphics =
+            Some(self.create_queue_context(device_ptr.graphics_queue, device_ptr.graphics_family)?);
+
         if let (Some(q), Some(f)) = (device_ptr.compute_queue, device_ptr.compute_family) {
             self.compute = Some(self.create_queue_context(q, f)?);
         }
@@ -519,7 +553,8 @@ impl RenderBackend for VulkanBackend {
             .max_sets(100);
 
         self.static_descriptor_pool = unsafe {
-            self.get_device().handle
+            self.get_device()
+                .handle
                 .create_descriptor_pool(&pool_info, None)
                 .map_err(|e| format!("Failed to create static descriptor pool: {}", e))?
         };
@@ -530,7 +565,6 @@ impl RenderBackend for VulkanBackend {
         info!("Vulkan Backend Initialized");
         Ok(())
     }
-
 
     fn create_window(&mut self, desc: WindowDesc) -> Result<WindowHandle, String> {
         crate::window_context::create_window(self, desc)
@@ -610,7 +644,9 @@ impl RenderBackend for VulkanBackend {
         reflection: &[u8],
         bytecode: &[u8],
     ) -> BackendPipeline {
-        crate::pipeline_cache::create_graphics_pipeline_from_baked(self, baked, reflection, bytecode)
+        crate::pipeline_cache::create_graphics_pipeline_from_baked(
+            self, baked, reflection, bytecode,
+        )
     }
 
     fn create_compute_pipeline_from_baked(
@@ -900,282 +936,22 @@ impl RenderBackendInternal for VulkanBackend {
         crate::submission::acquire_swapchain_image(self, window)
     }
 
-    fn submit(
-        &mut self,
-        batch: CommandBatch,
-    ) -> Result<u64, String> {
+    fn submit(&mut self, batch: CommandBatch) -> Result<u64, String> {
         crate::submission::submit(self, batch)
     }
 
     type PreparedPass = VulkanPreparedPass;
 
-    fn prepare_pass(&mut self, desc: PassDescriptor<'_>) -> Self::PreparedPass {
-        // Clear scratch vectors for this pass
-        self.image_barrier_scratch.clear();
-        self.buffer_barrier_scratch.clear();
-
-        // Resolve target physical IDs from writes (Using scratch)
-        self.target_id_scratch.clear();
-        for (handle, _) in desc.image_writes {
-            let pid = if let Some(&p) = self.external_to_physical.get(&handle.0.0) {
-                p
-            } else {
-                handle.0.0
-            };
-            self.target_id_scratch.push(pid);
-        }
-
-        // Identify Target Window & Extent (for Viewport/Pool)
-        let mut viewport_extent = vk::Extent2D {
-            width: 800,
-            height: 600,
-        }; // Fallback
-
-        if let Some(&first_pid) = self.target_id_scratch.first() {
-            if let Some(img) = self.images.get(first_pid) {
-                viewport_extent = vk::Extent2D {
-                    width: img.desc.width,
-                    height: img.desc.height,
-                };
-            }
-            // Fast window lookup (Match Arena ID)
-            for ctx_win in self.windows.values() {
-                if let (Some(sc), Some(idx)) = (&ctx_win.swapchain, ctx_win.current_image_index) {
-                    let sc_handle = sc.images[idx as usize].as_raw();
-                    if let Some(&sc_arena_id) = self.external_to_physical.get(&sc_handle) {
-                        if sc_arena_id == first_pid {
-                            viewport_extent = sc.extent;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Infer domain from pipeline bind point (no user-declared domain)
-        let is_compute = if let Some(h) = desc.pipeline {
-            self.pipeline_resources
-                .get(h.0.0)
-                .map(|p| p.bind_point == vk::PipelineBindPoint::COMPUTE)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        let current_bind_point = if is_compute {
-            vk::PipelineBindPoint::COMPUTE
-        } else {
-            vk::PipelineBindPoint::GRAPHICS
-        };
-
-        // Prepare attachments
-        // --- Unified Resource Synchronization & Attachment Discovery ---
-        let mut color_attachments = [vk::RenderingAttachmentInfo::default(); 8];
-        let mut color_count = 0;
-        let mut depth_attachment_info = None;
-
-        // Dedup and merge usages for all images while preserving order
-        let mut pass_images_order = Vec::new();
-        let mut pass_images_map: HashMap<ImageHandle, (ResourceUsage, bool)> = HashMap::new();
-
-        for (handle, usage) in desc.image_writes {
-            if !pass_images_map.contains_key(handle) {
-                pass_images_order.push(*handle);
-            }
-            pass_images_map.insert(*handle, (*usage, true));
-        }
-        for (handle, usage) in desc.image_reads {
-            if !pass_images_map.contains_key(handle) {
-                pass_images_order.push(*handle);
-                pass_images_map.insert(*handle, (*usage, false));
-            } else {
-                let entry = pass_images_map.get_mut(handle).unwrap();
-                entry.0 |= *usage;
-            }
-        }
-
-        // Synchronize and collect attachments in deterministic order
-        for handle in pass_images_order {
-            let (usage, is_write) = pass_images_map[&handle];
-            let pid = self.resolve_image(handle).0;
-            let (target_layout, target_access, target_stage) =
-                self.get_image_state(usage, is_write, current_bind_point);
-
-            if let Some(barrier) =
-                self.get_image_barrier(pid, target_layout, target_access, target_stage)
-            {
-                self.image_barrier_scratch.push(barrier);
-            }
-
-            if usage.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL) {
-                let img_info = if let Some(img) = self.images.get(pid) {
-                    (img.format, img.view)
-                } else {
-                    continue;
-                };
-
-                let load_op = if is_write {
-                    if let Some(img) = self.images.get_mut(pid) {
-                        if img.last_write_frame < self.frame_count {
-                            img.last_write_frame = self.frame_count;
-                            vk::AttachmentLoadOp::CLEAR
-                        } else {
-                            vk::AttachmentLoadOp::LOAD
-                        }
-                    } else {
-                        vk::AttachmentLoadOp::LOAD
-                    }
-                } else {
-                    vk::AttachmentLoadOp::LOAD
-                };
-
-                let clear_value = if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
-                    vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 1.0,
-                            stencil: 0,
-                        },
-                    }
-                } else {
-                    vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                    }
-                };
-
-                let attachment = vk::RenderingAttachmentInfo::default()
-                    .image_view(img_info.1)
-                    .image_layout(target_layout)
-                    .load_op(load_op)
-                    .store_op(if is_write {
-                        vk::AttachmentStoreOp::STORE
-                    } else {
-                        vk::AttachmentStoreOp::NONE
-                    })
-                    .clear_value(clear_value);
-
-                if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
-                    depth_attachment_info = Some(attachment);
-                } else if color_count < 8 {
-                    color_attachments[color_count] = attachment;
-                    color_count += 1;
-                }
-            }
-        }
-
-        // Deduplicate and synchronize buffers while preserving order
-        let mut pass_buffers_order = Vec::new();
-        let mut pass_buffers_map: HashMap<BufferHandle, ResourceUsage> = HashMap::new();
-        for (handle, usage) in desc.buffer_writes {
-            if !pass_buffers_map.contains_key(handle) {
-                pass_buffers_order.push(*handle);
-            }
-            pass_buffers_map.insert(*handle, *usage);
-        }
-        for (handle, usage) in desc.buffer_reads {
-            if !pass_buffers_map.contains_key(handle) {
-                pass_buffers_order.push(*handle);
-                pass_buffers_map.insert(*handle, *usage);
-            } else {
-                let entry = pass_buffers_map.get_mut(handle).unwrap();
-                *entry |= *usage;
-            }
-        }
-
-        for handle in pass_buffers_order {
-            let usage = pass_buffers_map[&handle];
-            let pid = self.resolve_buffer(handle).0;
-            let (target_access, target_stage) = self.get_buffer_state(usage, current_bind_point);
-            if let Some(barrier) = self.get_buffer_barrier(pid, target_access, target_stage) {
-                self.buffer_barrier_scratch.push(barrier);
-            }
-        }
-
-        let domain = if is_compute {
-            PreparedDomain::Compute
-        } else {
-            PreparedDomain::Graphics {
-                color_attachments,
-                color_count,
-                depth_attachment: depth_attachment_info,
-            }
-        };
-
-        VulkanPreparedPass {
-            name: desc.name.to_string(),
-            domain,
-            pipeline: desc.pipeline,
-            viewport_extent,
-            image_barriers: self.image_barrier_scratch.clone(),
-            buffer_barriers: self.buffer_barrier_scratch.clone(),
-            descriptor_sets: desc.descriptor_sets.to_vec(),
-        }
+    fn prepare_pass(&mut self, desc: PassDescriptor) -> Self::PreparedPass {
+        crate::commands::prepare_pass(self, desc)
     }
 
-    fn record_barriers(&self, passes: &[&Self::PreparedPass]) -> Option<BackendCommandBuffer> {
-        let mut total_image_barriers = 0;
-        let mut total_buffer_barriers = 0;
-        for p in passes {
-            total_image_barriers += p.image_barriers.len();
-            total_buffer_barriers += p.buffer_barriers.len();
-        }
+    fn get_prepared_pass_queue(&self, prepared: &Self::PreparedPass) -> QueueType {
+        prepared.queue
+    }
 
-        if total_image_barriers == 0 && total_buffer_barriers == 0 {
-            return None;
-        }
-
-        let device = self.get_device().clone();
-        let thread_idx = rayon::current_thread_index().unwrap_or(0);
-        let graphics = self.graphics.as_ref().unwrap();
-        let frame_ctx = &graphics.frame_contexts[self.global_frame_index];
-        let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
-
-        // Allocate Command Buffer from Thread Pool
-        let cmd = if tp.cursor < tp.allocated.len() {
-            let cmd = tp.allocated[tp.cursor];
-            tp.cursor += 1;
-            cmd
-        } else {
-            let alloc_info = vk::CommandBufferAllocateInfo::default()
-                .command_pool(tp.pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-            let cmd = unsafe { device.handle.allocate_command_buffers(&alloc_info).unwrap()[0] };
-            tp.allocated.push(cmd);
-            tp.cursor += 1;
-            cmd
-        };
-
-        // Begin Recording
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        unsafe {
-            device
-                .handle
-                .begin_command_buffer(cmd, &begin_info)
-                .unwrap();
-        }
-
-        let mut all_image_barriers = Vec::with_capacity(total_image_barriers);
-        let mut all_buffer_barriers = Vec::with_capacity(total_buffer_barriers);
-        for p in passes {
-            all_image_barriers.extend_from_slice(&p.image_barriers);
-            all_buffer_barriers.extend_from_slice(&p.buffer_barriers);
-        }
-
-        let dependency_info = vk::DependencyInfo::default()
-            .image_memory_barriers(&all_image_barriers)
-            .buffer_memory_barriers(&all_buffer_barriers);
-
-        unsafe {
-            device.handle.cmd_pipeline_barrier2(cmd, &dependency_info);
-            device.handle.end_command_buffer(cmd).unwrap();
-        }
-
-        Some(BackendCommandBuffer(unsafe {
-            std::mem::transmute::<vk::CommandBuffer, u64>(cmd)
-        }))
+    fn record_barriers(&mut self, passes: &[&Self::PreparedPass]) -> Option<BackendCommandBuffer> {
+        crate::commands::record_barriers(self, passes)
     }
 
     #[cfg(debug_assertions)]
@@ -1212,9 +988,29 @@ impl RenderBackendInternal for VulkanBackend {
         let device = self.get_device().clone();
 
         let thread_idx = rayon::current_thread_index().unwrap_or(0);
-        let graphics = self.graphics.as_ref().expect("Graphics queue not initialized");
-        let frame_ctx = &graphics.frame_contexts[self.global_frame_index];
-        let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
+
+        // Pick queue context based on assigned queue
+        let q_ctx = match prepared.queue {
+            QueueType::Graphics => self
+                .graphics
+                .as_ref()
+                .expect("Graphics queue not initialized"),
+            QueueType::AsyncCompute => self
+                .compute
+                .as_ref()
+                .or(self.graphics.as_ref())
+                .expect("Compute queue not initialized"),
+            QueueType::Transfer => self
+                .transfer
+                .as_ref()
+                .or(self.graphics.as_ref())
+                .expect("Transfer queue not initialized"),
+        };
+
+        let frame_ctx = &q_ctx.frame_contexts[self.global_frame_index];
+        let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()]
+            .lock()
+            .unwrap();
 
         // Allocate Command Buffer from Thread Pool
         let cmd = if tp.cursor < tp.allocated.len() {
@@ -1354,7 +1150,14 @@ impl RenderBackendInternal for VulkanBackend {
                         layer_count: 1,
                     });
 
-                let barriers = [barrier];
+                let sanitized_barrier = crate::sync::sanitize_image_barrier(
+                    barrier,
+                    self.graphics_family,
+                    self.compute_family,
+                    self.transfer_family,
+                    prepared.queue,
+                );
+                let barriers = [sanitized_barrier];
                 let dependency_info =
                     vk::DependencyInfo::default().image_memory_barriers(&barriers);
                 unsafe {
@@ -1371,7 +1174,7 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         (
-            Some(graphics.cpu_timeline),
+            Some(q_ctx.cpu_timeline),
             Some(BackendCommandBuffer(unsafe {
                 std::mem::transmute::<vk::CommandBuffer, u64>(cmd)
             })),
@@ -1394,7 +1197,6 @@ impl RenderBackendInternal for VulkanBackend {
     fn update_descriptor_set(&mut self, set: DescriptorSetHandle, writes: &[DescriptorWrite]) {
         crate::descriptors::update_descriptor_set(self, set, writes);
     }
-
 }
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
@@ -1414,19 +1216,29 @@ impl Drop for VulkanBackend {
 
                 debug!("Destroying frame contexts...");
                 let mut contexts_to_clean = Vec::new();
-                if let Some(ctx) = self.graphics.take() { contexts_to_clean.push(ctx); }
-                if let Some(ctx) = self.compute.take() { contexts_to_clean.push(ctx); }
-                if let Some(ctx) = self.transfer.take() { contexts_to_clean.push(ctx); }
+                if let Some(ctx) = self.graphics.take() {
+                    contexts_to_clean.push(ctx);
+                }
+                if let Some(ctx) = self.compute.take() {
+                    contexts_to_clean.push(ctx);
+                }
+                if let Some(ctx) = self.transfer.take() {
+                    contexts_to_clean.push(ctx);
+                }
 
                 for q_ctx in contexts_to_clean {
                     device.handle.destroy_semaphore(q_ctx.timeline_sem, None);
                     for ctx in q_ctx.frame_contexts {
                         device.handle.destroy_command_pool(ctx.command_pool, None);
-                        device.handle.destroy_descriptor_pool(ctx.descriptor_pool, None);
+                        device
+                            .handle
+                            .destroy_descriptor_pool(ctx.descriptor_pool, None);
                         for tp_mutex in ctx.per_thread_pools {
                             let tp = tp_mutex.into_inner().unwrap();
                             device.handle.destroy_command_pool(tp.pool, None);
-                            device.handle.destroy_descriptor_pool(tp.descriptor_pool, None);
+                            device
+                                .handle
+                                .destroy_descriptor_pool(tp.descriptor_pool, None);
                         }
                     }
                 }

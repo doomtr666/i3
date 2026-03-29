@@ -74,6 +74,15 @@ impl VulkanDevice {
             .map(|(i, _)| i as u32)
             .ok_or_else(|| "No graphics queue family found".to_string())?;
 
+        for (i, prop) in queue_families.iter().enumerate() {
+            debug!(
+                family = i,
+                flags = ?prop.queue_flags,
+                count = prop.queue_count,
+                "Queue family"
+            );
+        }
+
         let compute_family = queue_families
             .iter()
             .enumerate()
@@ -95,6 +104,8 @@ impl VulkanDevice {
                     && compute_family.map_or(true, |cf| *i as u32 != cf)
             })
             .map(|(i, _)| i as u32);
+
+        info!(graphics_family, ?compute_family, ?transfer_family, "Queue families selected");
 
         // Enable Vulkan 1.3/1.2/1.0 features
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default()

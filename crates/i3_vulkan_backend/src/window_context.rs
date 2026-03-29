@@ -49,7 +49,7 @@ pub fn create_window(
 
     // Acquire semaphores are per-frame-in-flight (usually 3)
     for _ in 0..3 {
-        let a_id = backend.create_semaphore();
+        let a_id = backend.create_semaphore(false);
         let a_sem = backend.semaphores.get(a_id).cloned().unwrap();
 
         acquire_sems.push(a_sem);

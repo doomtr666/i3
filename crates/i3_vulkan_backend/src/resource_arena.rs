@@ -71,6 +71,10 @@ pub struct PhysicalImage {
     pub last_write_frame: u64,
     /// Last queue family that owned this image (for ownership transfers)
     pub last_queue_family: u32,
+    /// Whether this is a swapchain image (presented to screen)
+    pub is_swapchain: bool,
+    /// Whether this resource was created with CONCURRENT sharing mode (no ownership transfer needed)
+    pub concurrent: bool,
 }
 
 /// Physical representation of a Vulkan buffer.
@@ -84,6 +88,9 @@ pub struct PhysicalBuffer {
     // Synchronization state (Sync2)
     pub last_access: vk::AccessFlags2,
     pub last_stage: vk::PipelineStageFlags2,
+    pub last_queue_family: u32,
+    /// Whether this resource was created with CONCURRENT sharing mode (no ownership transfer needed)
+    pub concurrent: bool,
 }
 
 /// Slot in the arena - either occupied with data or free with generation tracking.
