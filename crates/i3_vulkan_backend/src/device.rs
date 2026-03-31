@@ -48,6 +48,7 @@ impl VulkanDevice {
         Self::new_with_physical(instance, physical_device)
     }
 
+    #[allow(unused_assignments)]
     pub fn new_with_physical(
         instance: Arc<crate::instance::VulkanInstance>,
         physical_device: vk::PhysicalDevice,
@@ -105,13 +106,20 @@ impl VulkanDevice {
             })
             .map(|(i, _)| i as u32);
 
-        info!(graphics_family, ?compute_family, ?transfer_family, "Queue families selected");
+        info!(
+            graphics_family,
+            ?compute_family,
+            ?transfer_family,
+            "Queue families selected"
+        );
 
         // Enable Vulkan 1.3/1.2/1.0 features
+        #[allow(unused_assignments)]
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
             .synchronization2(true);
 
+        #[allow(unused_assignments)]
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .buffer_device_address(true)
             .draw_indirect_count(true)
@@ -142,6 +150,7 @@ impl VulkanDevice {
         features2.p_next = &mut features13 as *mut _ as *mut _;
         features13.p_next = &mut features12 as *mut _ as *mut _;
         features12.p_next = &mut features11 as *mut _ as *mut _;
+
         // Keep tracking the end of the chain for RT features later
         let mut last_feature: *mut vk::BaseOutStructure = &mut features11 as *mut _ as *mut _;
 
@@ -192,14 +201,14 @@ impl VulkanDevice {
         let rt_supported = has_as && has_deferred;
         let mut as_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
             .acceleration_structure(true);
-        let mut rt_pipeline_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default()
-            .ray_tracing_pipeline(true);
+        let mut rt_pipeline_features =
+            vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
 
         if rt_supported {
             info!("Ray Tracing extensions detected and enabled");
             device_extensions.push(ash::khr::acceleration_structure::NAME.as_ptr());
             device_extensions.push(ash::khr::deferred_host_operations::NAME.as_ptr());
-            
+
             unsafe {
                 (*last_feature).p_next = &mut as_features as *mut _ as *mut _;
                 last_feature = &mut as_features as *mut _ as *mut _;
@@ -226,23 +235,27 @@ impl VulkanDevice {
         .map_err(|e| format!("Failed to create logical device: {}", e))?;
 
         let graphics_queue = unsafe { handle.get_device_queue(graphics_family, 0) };
-        let compute_queue =
-            compute_family.map(|f| unsafe { handle.get_device_queue(f, 0) });
-        let transfer_queue =
-            transfer_family.map(|f| unsafe { handle.get_device_queue(f, 0) });
+        let compute_queue = compute_family.map(|f| unsafe { handle.get_device_queue(f, 0) });
+        let transfer_queue = transfer_family.map(|f| unsafe { handle.get_device_queue(f, 0) });
 
         // Load extensions
         let dynamic_rendering = ash::khr::dynamic_rendering::Device::new(&instance.handle, &handle);
         let sync2 = ash::khr::synchronization2::Device::new(&instance.handle, &handle);
 
         let accel_struct = if rt_supported {
-            Some(ash::khr::acceleration_structure::Device::new(&instance.handle, &handle))
+            Some(ash::khr::acceleration_structure::Device::new(
+                &instance.handle,
+                &handle,
+            ))
         } else {
             None
         };
 
         let rt_pipeline = if rt_supported && has_rt_pipeline {
-            Some(ash::khr::ray_tracing_pipeline::Device::new(&instance.handle, &handle))
+            Some(ash::khr::ray_tracing_pipeline::Device::new(
+                &instance.handle,
+                &handle,
+            ))
         } else {
             None
         };

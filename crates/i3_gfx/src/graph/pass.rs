@@ -200,7 +200,7 @@ pub trait RenderPass: Any + Send + Sync {
     /// Hint: request execution on a dedicated async queue.
     /// Only meaningful for Compute/Transfer domains. Default: false.
     fn prefer_async(&self) -> bool {
-        true
+        false
     }
 
     /// Called once during graph global initialization, for creating pipelines/resources.
