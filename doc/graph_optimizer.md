@@ -335,7 +335,17 @@ if !resource.concurrent && current.queue_family != pass_queue_family:
     current.queue_family = pass_queue_family
 ```
 
-**Concurrent resources**: skip Step D. No Release/Acquire needed.
+**Sharing mode policy** (set at resource creation in `resources.rs`, deliberate):
+
+| Resource | Sharing mode | Reason |
+|----------|-------------|--------|
+| Images | `EXCLUSIVE` always | Preserves AMD DCC (Delta Color Compression). `CONCURRENT` forces the driver to disable DCC because it cannot guarantee compression metadata coherency when two queue families can access the image simultaneously. `EXCLUSIVE` + explicit Release/Acquire keeps DCC active → 2–4× bandwidth improvement on render targets and GBuffers. |
+| Buffers | `CONCURRENT` if >1 family | Buffers have no DCC equivalent. `CONCURRENT` avoids ownership transfers for resources accessed by both graphics and compute (VBOs, SSBOs, indirect buffers). Marginal sync overhead, no compression impact. |
+
+**Consequence for the Oracle:**
+- Images (`concurrent=false`): Step D always applies on queue family change → Release/Acquire generated.
+- Buffers with `concurrent=true`: skip Step D entirely — no Release/Acquire needed.
+- Buffers with `concurrent=false` (single-queue machine): Step D applies normally.
 
 #### Step E — Update tracking
 
