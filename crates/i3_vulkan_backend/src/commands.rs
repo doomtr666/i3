@@ -86,10 +86,7 @@ pub struct VulkanPreparedPass {
     pub queue: i3_gfx::graph::types::QueueType,
     pub pipeline: Option<i3_gfx::graph::types::PipelineHandle>,
     pub viewport_extent: vk::Extent2D,
-    pub image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
-    pub buffer_barriers: Vec<vk::BufferMemoryBarrier2<'static>>,
-    pub release_barriers: Vec<SyncBarrier>,
-    pub acquire_barriers: Vec<SyncBarrier>,
+    pub sync: crate::sync::PassSyncData,
     pub descriptor_sets: Vec<(u32, Vec<i3_gfx::graph::backend::DescriptorWrite>)>,
 }
 
@@ -181,7 +178,7 @@ impl VulkanPassContext {
                     .backend()
                     .pipeline_resources
                     .get(pipe.physical_id)
-                    .unwrap();
+                    .expect("Failed to retrieve physical pipeline resource for descriptor layout");
                 p.set_layouts[set_index as usize]
             };
 
@@ -198,7 +195,7 @@ impl VulkanPassContext {
             }[0];
 
             let backend = self.backend_mut();
-            let handle_id = backend.descriptor_sets.lock().unwrap().insert(set);
+            let handle_id = backend.descriptor_sets.lock().unwrap_or_else(|e| e.into_inner()).insert(set);
             let set_handle = DescriptorSetHandle(handle_id);
 
             backend.update_descriptor_set(set_handle, &writes);
@@ -574,145 +571,39 @@ impl PassContext for VulkanPassContext {
     }
 }
 
-use std::collections::HashMap;
-
 /// Prepare a pass for recording by resolving resources and building barriers.
 ///
 /// This function is called before recording a render pass. It:
 /// 1. Resolves virtual resource handles to physical IDs
 /// 2. Determines the viewport extent from the first render target
-/// 3. Generates image and buffer barriers for synchronization
+/// 3. Retrieves pre-calculated synchronization data from the Oracle.
 /// 4. Prepares attachment info for rendering
-///
-/// # Barrier Generation
-///
-/// Barriers are generated based on the resource usage declared in the pass descriptor.
-/// The function uses the [`sync`] module to determine optimal barrier placement.
 ///
 /// # Viewport Detection
 ///
 /// The viewport extent is determined from the first image write target.
 /// If the target is a swapchain image, the swapchain extent is used.
-pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> VulkanPreparedPass {
-    // Clear scratch vectors for this pass
-    backend.image_barrier_scratch.clear();
-    backend.buffer_barrier_scratch.clear();
+pub fn prepare_pass(
+    backend: &mut VulkanBackend,
+    pass_index: usize,
+    desc: PassDescriptor<'_>,
+) -> VulkanPreparedPass {
+    // 1. Retrieve Sync Data
+    let sync = backend
+        .current_plan
+        .as_ref()
+        .and_then(|plan| plan.pass_sync.get(pass_index).cloned())
+        .unwrap_or_default();
 
-    // Generate Release Barriers
-    let mut release_barriers = Vec::new();
-    for transfer in desc.releases {
-        let pid = if let Some(h) = transfer.image {
-            let handle = h.0.0;
-            if let Some(&p) = backend.external_to_physical.get(&handle) { p } else { handle }
-        } else if let Some(h) = transfer.buffer {
-            let handle = h.0.0;
-            if let Some(&p) = backend.external_buffer_to_physical.get(&handle) { p } else { handle }
-        } else {
-            0
-        };
-
-        let src_family = crate::sync::get_queue_family(backend, transfer.src_queue);
-        let dst_family = crate::sync::get_queue_family(backend, transfer.dst_queue);
-
-        if transfer.image.is_some() {
-            let (old_layout, _, _) =
-                backend.get_image_state(transfer.src_usage, true, vk::PipelineBindPoint::GRAPHICS);
-            let (new_layout, _, _) =
-                backend.get_image_state(transfer.dst_usage, false, vk::PipelineBindPoint::GRAPHICS);
-
-            let barrier = crate::sync::get_image_ownership_barrier(
-                backend,
-                pid,
-                src_family,
-                dst_family,
-                old_layout,
-                new_layout,
-                transfer.src_usage,
-                transfer.dst_usage,
-                true,
-            );
-            release_barriers.push(SyncBarrier::Image(barrier));
-        } else {
-            let barrier = crate::sync::get_buffer_ownership_barrier(
-                backend,
-                pid,
-                src_family,
-                dst_family,
-                transfer.src_usage,
-                transfer.dst_usage,
-                true,
-            );
-            release_barriers.push(SyncBarrier::Buffer(barrier));
-        }
-    }
-
-    // Generate Acquire Barriers
-    let mut acquire_barriers = Vec::new();
-    for transfer in desc.acquires {
-        let pid = if let Some(h) = transfer.image {
-            let handle = h.0.0;
-            if let Some(&p) = backend.external_to_physical.get(&handle) { p } else { handle }
-        } else if let Some(h) = transfer.buffer {
-            let handle = h.0.0;
-            if let Some(&p) = backend.external_buffer_to_physical.get(&handle) { p } else { handle }
-        } else {
-            0
-        };
-
-        let src_family = crate::sync::get_queue_family(backend, transfer.src_queue);
-        let dst_family = crate::sync::get_queue_family(backend, transfer.dst_queue);
-
-        if transfer.image.is_some() {
-            let (old_layout, _, _) =
-                backend.get_image_state(transfer.src_usage, true, vk::PipelineBindPoint::GRAPHICS);
-            let (new_layout, _, _) =
-                backend.get_image_state(transfer.dst_usage, false, vk::PipelineBindPoint::GRAPHICS);
-
-            let barrier = crate::sync::get_image_ownership_barrier(
-                backend,
-                pid,
-                src_family,
-                dst_family,
-                old_layout,
-                new_layout,
-                transfer.src_usage,
-                transfer.dst_usage,
-                false,
-            );
-            acquire_barriers.push(SyncBarrier::Image(barrier));
-        } else {
-            let barrier = crate::sync::get_buffer_ownership_barrier(
-                backend,
-                pid,
-                src_family,
-                dst_family,
-                transfer.src_usage,
-                transfer.dst_usage,
-                false,
-            );
-            acquire_barriers.push(SyncBarrier::Buffer(barrier));
-        }
-    }
-
-    // Resolve target physical IDs from writes (Using scratch)
-    backend.target_id_scratch.clear();
-    for (handle, _) in desc.image_writes {
-        let pid = if let Some(&p) = backend.external_to_physical.get(&handle.0.0) {
-            p
-        } else {
-            handle.0.0
-        };
-        backend.target_id_scratch.push(pid);
-    }
-
-    // Identify Target Window & Extent (for Viewport/Pool)
+    // 2. Identify Target Window & Extent (for Viewport/Pool)
     let mut viewport_extent = vk::Extent2D {
         width: 800,
         height: 600,
-    }; // Fallback
+    };
 
-    if let Some(&first_pid) = backend.target_id_scratch.first() {
-        if let Some(img) = backend.images.get(first_pid) {
+    if let Some(&(handle, _)) = desc.image_writes.first() {
+        let pid = backend.resolve_image(handle).0;
+        if let Some(img) = backend.images.get(pid) {
             viewport_extent = vk::Extent2D {
                 width: img.desc.width,
                 height: img.desc.height,
@@ -723,7 +614,7 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
             if let (Some(sc), Some(idx)) = (&ctx_win.swapchain, ctx_win.current_image_index) {
                 let sc_handle = sc.images[idx as usize].as_raw();
                 if let Some(&sc_arena_id) = backend.external_to_physical.get(&sc_handle) {
-                    if sc_arena_id == first_pid {
+                    if sc_arena_id == pid {
                         viewport_extent = sc.extent;
                         break;
                     }
@@ -732,7 +623,7 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
         }
     }
 
-    // Infer domain from pipeline bind point (no user-declared domain)
+    // 3. Attachment Setup (Still needed for dynamic rendering)
     let is_compute_pipeline = if let Some(h) = desc.pipeline {
         backend
             .pipeline_resources
@@ -743,142 +634,63 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
         false
     };
 
-    // Queue type is authoritative: AsyncCompute/Transfer always use the compute bind point
-    // so that get_image_state / get_buffer_state produce correct pipeline stages in barriers.
-    // Graphics queue falls back to detecting the pipeline type (compute dispatch on gfx queue).
     let is_compute = matches!(desc.queue, QueueType::AsyncCompute | QueueType::Transfer)
         || is_compute_pipeline;
 
-    let current_bind_point = if is_compute {
-        vk::PipelineBindPoint::COMPUTE
-    } else {
-        vk::PipelineBindPoint::GRAPHICS
-    };
-
-    let current_family = crate::sync::get_queue_family(backend, desc.queue);
-
-
-    // Prepare attachments
-    // --- Unified Resource Synchronization & Attachment Discovery ---
     let mut color_attachments = [vk::RenderingAttachmentInfo::default(); 8];
     let mut color_count = 0;
     let mut depth_attachment_info = None;
 
-    // Dedup and merge usages for all images while preserving order
-    let mut pass_images_order = Vec::new();
-    let mut pass_images_map: HashMap<ImageHandle, (ResourceUsage, bool)> = HashMap::new();
-
-    for (handle, usage) in desc.image_writes {
-        if !pass_images_map.contains_key(handle) {
-            pass_images_order.push(*handle);
-        }
-        pass_images_map.insert(*handle, (*usage, true));
-    }
-    for (handle, usage) in desc.image_reads {
-        if !pass_images_map.contains_key(handle) {
-            pass_images_order.push(*handle);
-            pass_images_map.insert(*handle, (*usage, false));
-        } else {
-            let entry = pass_images_map.get_mut(handle).unwrap();
-            entry.0 |= *usage;
-        }
-    }
-
-    // Synchronize and collect attachments in deterministic order
-    for handle in pass_images_order {
-        let (usage, is_write) = pass_images_map[&handle];
-        let pid = backend.resolve_image(handle).0;
-        let (target_layout, target_access, target_stage) =
-            backend.get_image_state(usage, is_write, current_bind_point);
-
-        if let Some(barrier) =
-            backend.get_image_barrier(pid, target_layout, target_access, target_stage, current_family)
-        {
-            backend.image_barrier_scratch.push(barrier);
-        }
-
-        if usage.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL) {
-            let img_info = if let Some(img) = backend.images.get(pid) {
-                (img.format, img.view)
-            } else {
+    if !is_compute {
+        let bind_point = vk::PipelineBindPoint::GRAPHICS;
+        
+        let mut processed_handles = std::collections::HashSet::new();
+        for (handle, usage) in desc.image_writes.iter().chain(desc.image_reads.iter()) {
+            if processed_handles.contains(handle) {
                 continue;
-            };
+            }
+            if usage.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL) {
+                processed_handles.insert(*handle);
+                let pid = backend.resolve_image(*handle).0;
+                let img = backend.images.get(pid).expect("Attachment not found");
+                let (layout, _, _) = backend.get_image_state(*usage, bind_point);
+                
+                let is_write = usage.intersects(ResourceUsage::WRITE | ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL);
+                let load_op = sync.load_ops.get(&img.image).cloned().unwrap_or(vk::AttachmentLoadOp::LOAD);
 
-            let load_op = if is_write {
-                if let Some(img) = backend.images.get_mut(pid) {
-                    if img.last_write_frame < backend.frame_count {
-                        img.last_write_frame = backend.frame_count;
-                        vk::AttachmentLoadOp::CLEAR
-                    } else {
-                        vk::AttachmentLoadOp::LOAD
+                let clear_value = if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
+                    vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
                     }
                 } else {
-                    vk::AttachmentLoadOp::LOAD
-                }
-            } else {
-                vk::AttachmentLoadOp::LOAD
-            };
+                    vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                    }
+                };
 
-            let clear_value = if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
-                vk::ClearValue {
-                    depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 1.0,
-                        stencil: 0,
-                    },
-                }
-            } else {
-                vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                }
-            };
+                let attachment = vk::RenderingAttachmentInfo::default()
+                    .image_view(img.view)
+                    .image_layout(layout)
+                    .load_op(load_op)
+                    .store_op(if is_write {
+                        vk::AttachmentStoreOp::STORE
+                    } else {
+                        vk::AttachmentStoreOp::NONE
+                    })
+                    .clear_value(clear_value);
 
-            let attachment = vk::RenderingAttachmentInfo::default()
-                .image_view(img_info.1)
-                .image_layout(target_layout)
-                .load_op(load_op)
-                .store_op(if is_write {
-                    vk::AttachmentStoreOp::STORE
-                } else {
-                    vk::AttachmentStoreOp::NONE
-                })
-                .clear_value(clear_value);
-
-            if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
-                depth_attachment_info = Some(attachment);
-            } else if color_count < 8 {
-                color_attachments[color_count] = attachment;
-                color_count += 1;
+                if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
+                    depth_attachment_info = Some(attachment);
+                } else if color_count < 8 {
+                    color_attachments[color_count] = attachment;
+                    color_count += 1;
+                }
             }
-        }
-    }
-
-    // Deduplicate and synchronize buffers while preserving order
-    let mut pass_buffers_order = Vec::new();
-    let mut pass_buffers_map: HashMap<BufferHandle, ResourceUsage> = HashMap::new();
-    for (handle, usage) in desc.buffer_writes {
-        if !pass_buffers_map.contains_key(handle) {
-            pass_buffers_order.push(*handle);
-        }
-        pass_buffers_map.insert(*handle, *usage);
-    }
-    for (handle, usage) in desc.buffer_reads {
-        if !pass_buffers_map.contains_key(handle) {
-            pass_buffers_order.push(*handle);
-            pass_buffers_map.insert(*handle, *usage);
-        } else {
-            let entry = pass_buffers_map.get_mut(handle).unwrap();
-            *entry |= *usage;
-        }
-    }
-
-    for handle in pass_buffers_order {
-        let usage = pass_buffers_map[&handle];
-        let pid = backend.resolve_buffer(handle).0;
-        let (target_access, target_stage) = backend.get_buffer_state(usage, current_bind_point);
-        if let Some(barrier) = backend.get_buffer_barrier(pid, target_access, target_stage, current_family) {
-            backend.buffer_barrier_scratch.push(barrier);
         }
     }
 
@@ -898,10 +710,7 @@ pub fn prepare_pass(backend: &mut VulkanBackend, desc: PassDescriptor<'_>) -> Vu
         queue: desc.queue,
         pipeline: desc.pipeline,
         viewport_extent,
-        image_barriers: backend.image_barrier_scratch.clone(),
-        buffer_barriers: backend.buffer_barrier_scratch.clone(),
-        release_barriers,
-        acquire_barriers,
+        sync,
         descriptor_sets: desc.descriptor_sets.to_vec(),
     }
 }
@@ -918,22 +727,29 @@ pub fn record_barriers(
     let mut total_image_barriers = 0;
     let mut total_buffer_barriers = 0;
     for p in passes {
-        total_image_barriers += p.image_barriers.len() + p.release_barriers.len() + p.acquire_barriers.len();
-        total_buffer_barriers += p.buffer_barriers.len();
+        for b in &p.sync.pre_barriers {
+            match b {
+                crate::sync::Barrier::Image(_) => total_image_barriers += 1,
+                crate::sync::Barrier::Buffer(_) => total_buffer_barriers += 1,
+            }
+        }
     }
 
     if total_image_barriers == 0 && total_buffer_barriers == 0 {
+        tracing::debug!("record_barriers: No barriers to record for {} passes", passes.len());
         return None;
     }
+
+    tracing::debug!("record_barriers: Recording {} image barriers and {} buffer barriers for {} passes", total_image_barriers, total_buffer_barriers, passes.len());
 
     let device = backend.get_device().clone();
     let thread_idx = rayon::current_thread_index().unwrap_or(0);
     
     // Select Queue Context based on Pass Queue Type
     let queue_ctx = match passes[0].queue {
-        QueueType::Graphics => backend.graphics.as_ref().unwrap(),
-        QueueType::AsyncCompute => backend.compute.as_ref().unwrap(),
-        QueueType::Transfer => backend.transfer.as_ref().unwrap(),
+        QueueType::Graphics => backend.graphics.as_ref().expect("Graphics queue not initialized for recording barriers"),
+        QueueType::AsyncCompute => backend.compute.as_ref().or(backend.graphics.as_ref()).expect("No queue context available for compute barriers"),
+        QueueType::Transfer => backend.transfer.as_ref().or(backend.graphics.as_ref()).expect("No queue context available for transfer barriers"),
     };
     
     let frame_ctx = &queue_ctx.frame_contexts[backend.global_frame_index];
@@ -969,21 +785,12 @@ pub fn record_barriers(
     let mut all_buffer_barriers = Vec::with_capacity(total_buffer_barriers);
 
     for p in passes {
-        // Order: Acquire -> Normal -> Release
-        for b in &p.acquire_barriers {
+        for b in &p.sync.pre_barriers {
             match b {
-                SyncBarrier::Image(i) => all_image_barriers.push(i.clone()),
-                SyncBarrier::Buffer(b) => all_buffer_barriers.push(b.clone()),
+                crate::sync::Barrier::Image(i) => all_image_barriers.push(i.clone()),
+                crate::sync::Barrier::Buffer(b) => all_buffer_barriers.push(b.clone()),
             }
         }
-        all_image_barriers.extend_from_slice(&p.image_barriers);
-        for b in &p.release_barriers {
-            match b {
-                SyncBarrier::Image(i) => all_image_barriers.push(i.clone()),
-                SyncBarrier::Buffer(b) => all_buffer_barriers.push(b.clone()),
-            }
-        }
-        all_buffer_barriers.extend_from_slice(&p.buffer_barriers);
     }
 
     let dependency_info = vk::DependencyInfo::default()
@@ -1135,8 +942,6 @@ pub fn record_pass(
         ctx.bind_pipeline(pipe_handle);
     }
 
-    // (Barriers were already emitted globally via submit_barriers before the pass recording started)
-
     let is_compute = matches!(prepared.domain, PreparedDomain::Compute);
 
     if !is_compute {
@@ -1184,9 +989,9 @@ pub fn record_pass(
 
     if !is_compute {
         if let PreparedDomain::Graphics {
-            color_attachments: _,
             color_count,
             depth_attachment,
+            ..
         } = &prepared.domain
         {
             if *color_count > 0 || depth_attachment.is_some() {

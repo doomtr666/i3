@@ -141,7 +141,8 @@ impl VulkanDevice {
             .fill_mode_non_solid(true)
             .sampler_anisotropy(true)
             .shader_int64(true)
-            .shader_int16(true);
+            .shader_int16(true)
+            .draw_indirect_first_instance(true);
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features10);

@@ -63,6 +63,7 @@ impl EguiRenderer {
                         mip_levels: 1,
                         array_layers: 1,
                         swizzle: ComponentMapping::default(),
+                        clear_value: None,
                     };
 
                     let handle = backend.create_image(&desc);

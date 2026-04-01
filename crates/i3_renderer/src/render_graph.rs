@@ -160,6 +160,7 @@ impl DefaultRenderGraph {
             array_layers: 1,
             view_type: ImageViewType::Type2D,
             swizzle: Default::default(),
+            clear_value: None,
         });
         _backend
             .upload_image(white_image, &[255, 255, 255, 255], 0, 0, 1, 1, 0, 0)
@@ -491,6 +492,7 @@ impl DefaultRenderGraph {
                 usage: ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | ImageUsageFlags::SAMPLED,
                 view_type: ImageViewType::Type2D,
                 swizzle: ComponentMapping::default(),
+                clear_value: None,
             },
         );
 

@@ -13,6 +13,7 @@ pub mod resources;
 pub mod submission;
 pub mod swapchain;
 pub mod sync;
+pub mod sync_planner;
 pub mod window;
 pub mod window_context;
 

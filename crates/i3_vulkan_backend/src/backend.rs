@@ -5,8 +5,8 @@ use i3_gfx::graph::backend::*;
 use i3_gfx::graph::pass::RenderPass;
 use i3_gfx::graph::pipeline::*;
 use i3_gfx::graph::types::*;
-
 use std::collections::HashMap;
+
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -16,6 +16,8 @@ use crate::window_context::WindowContext;
 pub(crate) use crate::commands::{
     PreparedDomain, ThreadCommandPool, VulkanFrameContext, VulkanPreparedPass,
 };
+
+use crate::sync;
 
 /// Per-queue context for managing execution, synchronization and command pools.
 pub struct QueueContext {
@@ -98,10 +100,9 @@ pub struct VulkanBackend {
 
     pub rt_supported: bool,
 
-    // Scratch Buffers for hot path
-    pub(crate) target_id_scratch: Vec<u64>,
-    pub(crate) image_barrier_scratch: Vec<vk::ImageMemoryBarrier2<'static>>,
-    pub(crate) buffer_barrier_scratch: Vec<vk::BufferMemoryBarrier2<'static>>,
+    /* Removed oracle field - now uses i3_gfx::graph::oracle::SyncPlanner during analyze_frame */
+    /// Current synchronization plan for the active frame.
+    pub(crate) current_plan: Option<sync::SyncPlan>,
 
     // Global Frame Contexts
     pub(crate) frame_started: bool,
@@ -180,9 +181,9 @@ impl VulkanBackend {
             accel_struct: None,
             rt_pipeline: None,
             rt_supported: false,
-            target_id_scratch: Vec::with_capacity(32),
-            image_barrier_scratch: Vec::with_capacity(32),
-            buffer_barrier_scratch: Vec::with_capacity(32),
+
+            current_plan: None,
+
             frame_started: false,
             global_frame_index: 0,
             next_resource_id: 1,
@@ -234,10 +235,9 @@ impl VulkanBackend {
     pub fn get_image_state(
         &self,
         usage: ResourceUsage,
-        is_write: bool,
         bind_point: vk::PipelineBindPoint,
     ) -> (vk::ImageLayout, vk::AccessFlags2, vk::PipelineStageFlags2) {
-        crate::sync::get_image_state(usage, is_write, bind_point)
+        crate::sync::get_image_state(usage, bind_point)
     }
 
     pub fn get_buffer_state(
@@ -725,6 +725,14 @@ impl RenderBackend for VulkanBackend {
     fn create_transient_image(&mut self, desc: &ImageDesc) -> BackendImage {
         if let Some(pool) = self.transient_image_pool.get_mut(desc) {
             if let Some(id) = pool.pop() {
+                // Reset sync state so the oracle treats this as a fresh image each frame.
+                // Transitioning from UNDEFINED tells the driver it can discard previous contents,
+                // which is the correct semantic for transient render targets.
+                if let Some(img) = self.images.get_mut(id) {
+                    img.last_layout = ash::vk::ImageLayout::UNDEFINED;
+                    img.last_access = ash::vk::AccessFlags2::empty();
+                    img.last_stage = ash::vk::PipelineStageFlags2::NONE;
+                }
                 return BackendImage(id);
             }
         }
@@ -926,7 +934,80 @@ impl RenderBackendInternal for VulkanBackend {
     }
 
     fn end_frame(&mut self) {
+        self.frame_count += 1;
         crate::submission::end_frame(self);
+    }
+
+    fn analyze_frame(
+        &mut self,
+        passes: &[i3_gfx::graph::types::FlatPass],
+    ) -> i3_gfx::graph::sync::SyncPlan {
+        // Seed using virtual IDs (SymbolId) matching what FlatPass.image_reads/writes use.
+        // The external_to_physical map is populated by resolve_resources_recursive before this call.
+        let mut image_states = std::collections::HashMap::new();
+        let mut buffer_states = std::collections::HashMap::new();
+
+        for (&virtual_id, &physical_id) in &self.external_to_physical {
+            if let Some(img) = self.images.get(physical_id) {
+                image_states.insert(
+                    virtual_id,
+                    i3_gfx::graph::sync::ResourceState {
+                        layout: crate::sync_planner::translate_layout_to_abstract(img.last_layout),
+                        access: crate::sync_planner::translate_access_to_abstract(img.last_access),
+                        stage: crate::sync_planner::translate_stages_to_abstract(img.last_stage),
+                        queue_family: img.last_queue_family,
+                    },
+                );
+            }
+        }
+        for (&virtual_id, &physical_id) in &self.external_buffer_to_physical {
+            if let Some(buf) = self.buffers.get(physical_id) {
+                buffer_states.insert(
+                    virtual_id,
+                    i3_gfx::graph::sync::ResourceState {
+                        layout: i3_gfx::graph::sync::ImageLayout::Undefined,
+                        access: crate::sync_planner::translate_access_to_abstract(buf.last_access),
+                        stage: crate::sync_planner::translate_stages_to_abstract(buf.last_stage),
+                        queue_family: buf.last_queue_family,
+                    },
+                );
+            }
+        }
+
+        let mut planner = i3_gfx::graph::sync_planner::SyncPlanner::new();
+        let abstract_plan = planner.analyze(passes, &image_states, &buffer_states);
+
+        // Translate abstract plan to Vulkan barriers
+        let vk_plan = crate::sync_planner::translate_plan(self, &abstract_plan, passes);
+        self.current_plan = Some(vk_plan);
+
+        // Commit final states back to physical resources.
+        // begin_frame() already waited for the previous frame's GPU completion,
+        // so these planned-end states are safe to commit now for next-frame seeding.
+        for (&virtual_id, &final_state) in &abstract_plan.final_states {
+            if let Some(&physical_id) = self.external_to_physical.get(&virtual_id) {
+                if let Some(img) = self.images.get_mut(physical_id) {
+                    img.last_layout =
+                        crate::sync_planner::translate_layout_from_abstract(final_state.layout);
+                    img.last_access =
+                        crate::sync_planner::translate_access_from_abstract(final_state.access);
+                    img.last_stage =
+                        crate::sync_planner::translate_stages_from_abstract(final_state.stage);
+                    img.last_queue_family = final_state.queue_family;
+                }
+            }
+            if let Some(&physical_id) = self.external_buffer_to_physical.get(&virtual_id) {
+                if let Some(buf) = self.buffers.get_mut(physical_id) {
+                    buf.last_access =
+                        crate::sync_planner::translate_access_from_abstract(final_state.access);
+                    buf.last_stage =
+                        crate::sync_planner::translate_stages_from_abstract(final_state.stage);
+                    buf.last_queue_family = final_state.queue_family;
+                }
+            }
+        }
+
+        abstract_plan
     }
 
     fn acquire_swapchain_image(
@@ -942,8 +1023,8 @@ impl RenderBackendInternal for VulkanBackend {
 
     type PreparedPass = VulkanPreparedPass;
 
-    fn prepare_pass(&mut self, desc: PassDescriptor) -> Self::PreparedPass {
-        crate::commands::prepare_pass(self, desc)
+    fn prepare_pass(&mut self, pass_index: usize, desc: PassDescriptor) -> Self::PreparedPass {
+        crate::commands::prepare_pass(self, pass_index, desc)
     }
 
     fn get_prepared_pass_queue(&self, prepared: &Self::PreparedPass) -> QueueType {
@@ -987,6 +1068,7 @@ impl RenderBackendInternal for VulkanBackend {
     ) {
         let device = self.get_device().clone();
 
+        // Use Rayon's thread index for command buffer allocation, fallback to 0 if not in a Rayon task.
         let thread_idx = rayon::current_thread_index().unwrap_or(0);
 
         // Pick queue context based on assigned queue
@@ -994,17 +1076,17 @@ impl RenderBackendInternal for VulkanBackend {
             QueueType::Graphics => self
                 .graphics
                 .as_ref()
-                .expect("Graphics queue not initialized"),
+                .expect("CRITICAL: Graphics queue context not initialized during command recording! This should have been caught during backend startup."),
             QueueType::AsyncCompute => self
                 .compute
                 .as_ref()
                 .or(self.graphics.as_ref())
-                .expect("Compute queue not initialized"),
+                .expect("Compute queue context not initialized"),
             QueueType::Transfer => self
                 .transfer
                 .as_ref()
                 .or(self.graphics.as_ref())
-                .expect("Transfer queue not initialized"),
+                .expect("Transfer queue context not initialized"),
         };
 
         let frame_ctx = &q_ctx.frame_contexts[self.global_frame_index];
@@ -1035,7 +1117,7 @@ impl RenderBackendInternal for VulkanBackend {
             device
                 .handle
                 .begin_command_buffer(cmd, &begin_info)
-                .unwrap()
+                .expect("Failed to begin Vulkan command buffer")
         };
 
         #[cfg(debug_assertions)]
@@ -1234,7 +1316,7 @@ impl Drop for VulkanBackend {
                             .handle
                             .destroy_descriptor_pool(ctx.descriptor_pool, None);
                         for tp_mutex in ctx.per_thread_pools {
-                            let tp = tp_mutex.into_inner().unwrap();
+                            let tp = tp_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
                             device.handle.destroy_command_pool(tp.pool, None);
                             device
                                 .handle

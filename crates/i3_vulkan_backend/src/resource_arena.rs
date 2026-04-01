@@ -75,6 +75,8 @@ pub struct PhysicalImage {
     pub is_swapchain: bool,
     /// Whether this resource was created with CONCURRENT sharing mode (no ownership transfer needed)
     pub concurrent: bool,
+    /// Whether this was created via create_transient_image
+    pub is_transient: bool,
 }
 
 /// Physical representation of a Vulkan buffer.
@@ -91,6 +93,22 @@ pub struct PhysicalBuffer {
     pub last_queue_family: u32,
     /// Whether this resource was created with CONCURRENT sharing mode (no ownership transfer needed)
     pub concurrent: bool,
+    /// Whether this was created via create_transient_buffer
+    pub is_transient: bool,
+}
+
+/// Physical representation of a Vulkan Acceleration Structure (TLAS/BLAS).
+pub struct PhysicalAccelerationStructure {
+    pub handle: vk::AccelerationStructureKHR,
+    pub buffer: vk::Buffer, // Backing buffer
+    pub allocation: Option<vk_mem::Allocation>,
+    pub desc: AccelerationStructureDesc,
+
+    // Synchronization state
+    pub last_access: vk::AccessFlags2,
+    pub last_stage: vk::PipelineStageFlags2,
+
+    pub is_transient: bool,
 }
 
 /// Slot in the arena - either occupied with data or free with generation tracking.

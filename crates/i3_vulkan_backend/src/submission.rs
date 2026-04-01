@@ -408,6 +408,7 @@ pub fn acquire_swapchain_image(
                         last_queue_family: backend.graphics_family,
                         is_swapchain: true,
                         concurrent: false, // swapchain images are always EXCLUSIVE
+                        is_transient: false,
                     });
                     backend.external_to_physical.insert(image_id, new_id);
                     new_id

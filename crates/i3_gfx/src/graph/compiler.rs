@@ -321,6 +321,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                     usage: ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::TRANSFER_DST,
                     view_type: crate::graph::types::ImageViewType::Type2D,
                     swizzle: crate::graph::types::ComponentMapping::default(),
+                    clear_value: None,
                 }),
                 lifetime: SymbolLifetime::External,
                 data: None,
@@ -397,6 +398,8 @@ pub struct FrameGraph {
     pub globals: SymbolTable,
     /// Tree root.
     root: NodeStorage,
+    /// Explicitly declared graph outputs (Present, Readback, etc.)
+    pub outputs: HashMap<SymbolId, OutputKind>,
 }
 
 impl FrameGraph {
@@ -423,7 +426,14 @@ impl FrameGraph {
                 descriptor_sets: Vec::new(),
                 prefer_async: false,
             },
+            outputs: HashMap::new(),
         }
+    }
+
+    /// Explicitly mark a resource as a final product of the graph.
+    /// This drives Dead Pass Culling (DCE) and final layout transitions.
+    pub fn mark_output<H: Into<SymbolId>>(&mut self, handle: H, kind: OutputKind) {
+        self.outputs.insert(handle.into(), kind);
     }
 
     pub fn record<F>(&mut self, setup: F)
@@ -683,7 +693,13 @@ impl FrameGraph {
             || node.name == "root"; // root is never a leaf
 
         if node.name != "root" && (is_leaf || node.children.is_empty()) {
-            let domain = FlatPass::infer_domain(node);
+            let domain = FlatPass::infer_domain_from_intents(
+                &node.image_reads,
+                &node.image_writes,
+                &node.buffer_reads,
+                &node.buffer_writes,
+                node.pipeline.is_some(),
+            );
             tracing::trace!(pass = %node.name, ?domain, "Flattened pass");
             flat_passes.push(FlatPass {
                 node_id: node.node_id,
@@ -897,76 +913,7 @@ impl FrameGraph {
     }
 }
 
-/// A flattened pass extracted from the node tree.
-#[derive(Debug)]
-struct FlatPass {
-    node_id: u64,
-    name: String,
-    domain: PassDomain,
-    pipeline: Option<PipelineHandle>,
-    image_reads: Vec<(ImageHandle, ResourceUsage)>,
-    image_writes: Vec<(ImageHandle, ResourceUsage)>,
-    buffer_reads: Vec<(BufferHandle, ResourceUsage)>,
-    buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
-    data_reads: Vec<String>,
-    data_writes: Vec<String>,
-    prefer_async: bool,
-    queue: QueueType,
-    releases: Vec<CrossQueueTransfer>,
-    acquires: Vec<CrossQueueTransfer>,
-}
 
-impl FlatPass {
-    /// Infer the execution domain from resource usage intents.
-    fn infer_domain(node: &NodeStorage) -> PassDomain {
-        let has_raster = node.image_writes.iter().any(|(_, u)| {
-            u.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL)
-        });
-        let has_present = node
-            .image_reads
-            .iter()
-            .any(|(_, u)| u.intersects(ResourceUsage::PRESENT));
-
-        if has_raster || has_present {
-            return PassDomain::Graphics;
-        }
-
-        let has_transfer = node
-            .image_reads
-            .iter()
-            .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_READ))
-            || node
-                .image_writes
-                .iter()
-                .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_WRITE))
-            || node
-                .buffer_reads
-                .iter()
-                .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_READ))
-            || node
-                .buffer_writes
-                .iter()
-                .any(|(_, u)| u.intersects(ResourceUsage::TRANSFER_WRITE));
-
-        if has_transfer && node.pipeline.is_none() {
-            return PassDomain::Transfer;
-        }
-
-        let has_gpu_work = node.pipeline.is_some()
-            || !node.image_reads.is_empty()
-            || !node.image_writes.is_empty()
-            || !node.buffer_reads.is_empty()
-            || !node.buffer_writes.is_empty();
-
-        if has_gpu_work {
-            // Has a pipeline but no raster intents → Compute
-            // Has shader read/write but no raster → Compute
-            return PassDomain::Compute;
-        }
-
-        PassDomain::Cpu
-    }
-}
 
 /// A discrete step in the compiled execution plan.
 #[derive(Debug)]
@@ -1020,8 +967,12 @@ impl CompiledGraph {
         backend.begin_frame();
 
         // 3. Swapchain acquire + external resource registration (must be after begin_frame)
+        // IMPORTANT: must happen before analyze_frame so swapchain images are in external_to_physical
         let mut inactive_images: Vec<u64> = Vec::with_capacity(2);
         Self::process_externals_recursive(&mut self._root, backend, &mut inactive_images)?;
+
+        // 3.5 Analyze frame synchronization plan — all resources now registered
+        backend.analyze_frame(&self.flat_passes);
 
         // 4. Build node_id → NodeStorage SyncPtr map for O(1) lookup
         let mut node_map: HashMap<u64, SyncPtr<NodeStorage>> = HashMap::new();
@@ -1030,7 +981,7 @@ impl CompiledGraph {
         // 4.5 Prepare all active passes sequentially
         let mut prepared_passes: Vec<Option<B::PreparedPass>> =
             Vec::with_capacity(self.flat_passes.len());
-        for flat in &self.flat_passes {
+        for (idx, flat) in self.flat_passes.iter().enumerate() {
             let is_skipped = !inactive_images.is_empty()
                 && flat
                     .image_writes
@@ -1060,7 +1011,7 @@ impl CompiledGraph {
                     releases: &flat.releases,
                     acquires: &flat.acquires,
                 };
-                prepared_passes.push(Some(backend.prepare_pass(desc)));
+                prepared_passes.push(Some(backend.prepare_pass(idx, desc)));
             } else {
                 tracing::error!(
                     pass = %flat.name,

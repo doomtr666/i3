@@ -327,6 +327,10 @@ impl RenderBackendInternal for NullBackend {
         // No-op
     }
 
+    fn analyze_frame(&mut self, _passes: &[i3_gfx::graph::types::FlatPass]) -> i3_gfx::graph::sync::SyncPlan {
+        i3_gfx::graph::sync::SyncPlan::default()
+    }
+
     fn acquire_swapchain_image(
         &mut self,
         _window: WindowHandle,
@@ -342,7 +346,7 @@ impl RenderBackendInternal for NullBackend {
 
     type PreparedPass = NullPreparedPass;
 
-    fn prepare_pass(&mut self, desc: PassDescriptor<'_>) -> Self::PreparedPass {
+    fn prepare_pass(&mut self, _pass_index: usize, desc: PassDescriptor<'_>) -> Self::PreparedPass {
         info!(name = %desc.name, "Preparing null pass");
         NullPreparedPass {
             name: desc.name.to_string(),

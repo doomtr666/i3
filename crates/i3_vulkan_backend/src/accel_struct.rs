@@ -368,6 +368,19 @@ pub fn build_blas(ctx: &mut VulkanPassContext, handle: BackendAccelerationStruct
 
     let build_range_infos = [build_ranges.as_slice()];
 
+    // Barrier: serialize against any prior AS writes on this queue (WAW, BLAS→TLAS RAW).
+    // vkCmdPipelineBarrier2 within a CB also covers prior submissions on the same queue.
+    let as_barrier = vk::MemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
+        .src_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR)
+        .dst_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
+        .dst_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR);
+    let dep_info = vk::DependencyInfo::default()
+        .memory_barriers(std::slice::from_ref(&as_barrier));
+    unsafe {
+        device.handle.cmd_pipeline_barrier2(ctx.cmd, &dep_info);
+    }
+
     unsafe {
         device
             .accel_struct
@@ -510,6 +523,18 @@ pub fn build_tlas(
 
     let build_ranges = [build_range];
     let build_range_infos = [build_ranges.as_slice()];
+
+    // Barrier: serialize against prior AS writes (WAW inter-frame, BLAS→TLAS RAW).
+    let as_barrier = vk::MemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
+        .src_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR)
+        .dst_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
+        .dst_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR);
+    let dep_info = vk::DependencyInfo::default()
+        .memory_barriers(std::slice::from_ref(&as_barrier));
+    unsafe {
+        device.handle.cmd_pipeline_barrier2(ctx.cmd, &dep_info);
+    }
 
     unsafe {
         device

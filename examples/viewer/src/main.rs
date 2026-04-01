@@ -116,6 +116,7 @@ impl DeferredGltfApp {
                                     array_layers: 1,
                                     view_type: ImageViewType::Type2D,
                                     swizzle: Default::default(),
+                                    clear_value: None,
                                 });
 
                                 let handle = ImageHandle(SymbolId(image.0));

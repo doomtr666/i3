@@ -525,6 +525,10 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     fn begin_frame(&mut self);
     fn end_frame(&mut self);
 
+    /// Statelessly analyzes the frame's pass list to generate a synchronization plan.
+    /// This must be called before any pass preparation or recording.
+    fn analyze_frame(&mut self, passes: &[crate::graph::types::FlatPass]) -> crate::graph::sync::SyncPlan;
+
     /// Acquire the next available image from the swapchain associated with the window.
     fn acquire_swapchain_image(
         &mut self,
@@ -540,7 +544,8 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     ) -> Result<u64, String>;
 
     type PreparedPass: Send + Sync;
-    fn prepare_pass(&mut self, desc: PassDescriptor) -> Self::PreparedPass;
+    fn prepare_pass(&mut self, pass_index: usize, desc: PassDescriptor) -> Self::PreparedPass;
+    
 
     /// Get the queue assigned to a prepared pass.
     fn get_prepared_pass_queue(&self, prepared: &Self::PreparedPass) -> crate::graph::types::QueueType;

@@ -103,6 +103,7 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         last_queue_family: backend.graphics_family,
         is_swapchain: false,
         concurrent: false,
+        is_transient: false,
     };
 
     let id = backend.images.insert(physical);
@@ -142,12 +143,12 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         let dependency = vk::DependencyInfo::default().image_memory_barriers(&barriers);
         device.handle.cmd_pipeline_barrier2(cmd, &dependency);
 
-        device.handle.end_command_buffer(cmd).unwrap();
+        device.handle.end_command_buffer(cmd).expect("Failed to end command buffer during image creation");
         let cmd_bufs = [cmd];
         let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
         let submits = [submit_info];
-        device.handle.queue_submit(device.graphics_queue, &submits, vk::Fence::null()).unwrap();
-        device.handle.queue_wait_idle(device.graphics_queue).unwrap();
+        device.handle.queue_submit(device.graphics_queue, &submits, vk::Fence::null()).expect("Failed to submit image initialization commands");
+        device.handle.queue_wait_idle(device.graphics_queue).expect("Failed to wait for image initialization queue idle");
         device.handle.destroy_command_pool(cmd_pool, None);
     }
 
@@ -234,8 +235,9 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
         desc: desc.clone(),
         last_access: vk::AccessFlags2::empty(),
         last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
-        last_queue_family: backend.graphics.as_ref().unwrap().family,
+        last_queue_family: backend.graphics.as_ref().map(|g| g.family).unwrap_or(backend.graphics_family),
         concurrent: sharing_mode == vk::SharingMode::CONCURRENT,
+        is_transient: false,
     };
 
     let id = backend.buffers.insert(physical);
@@ -697,20 +699,30 @@ pub fn wait_for_timeline(
 
 pub fn create_transient_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendImage {
     if let Some(pool) = backend.transient_image_pool.get_mut(desc) {
-        if let Some(id) = pool.pop() {
+        let id_opt: Option<u64> = pool.pop();
+        if let Some(id) = id_opt {
             return BackendImage(id);
         }
     }
-    create_image(backend, desc)
+    let handle = create_image(backend, desc);
+    if let Some(img) = backend.images.get_mut(handle.0) {
+        img.is_transient = true;
+    }
+    handle
 }
 
 pub fn create_transient_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendBuffer {
     if let Some(pool) = backend.transient_buffer_pool.get_mut(desc) {
-        if let Some(id) = pool.pop() {
+        let id_opt: Option<u64> = pool.pop();
+        if let Some(id) = id_opt {
             return BackendBuffer(id);
         }
     }
-    create_buffer(backend, desc)
+    let handle = create_buffer(backend, desc);
+    if let Some(buf) = backend.buffers.get_mut(handle.0) {
+        buf.is_transient = true;
+    }
+    handle
 }
 
 pub fn release_transient_image(backend: &mut VulkanBackend, handle: BackendImage) {
