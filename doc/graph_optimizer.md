@@ -1,4 +1,4 @@
-# Frame Graph Optimizer & Sync Oracle — Technical Specification
+# Frame Graph Optimizer & Sync SyncPlanner — Technical Specification
 
 ## Overview
 
@@ -15,7 +15,7 @@ User passes (declarations)
         │ flat_passes (ordered)
         ▼
 ┌─────────────────────┐
-│  Sync Oracle        │  takes the order as given, computes all barriers
+│  Sync SyncPlanner   │  takes the order as given, computes all barriers
 │  oracle.rs          │  ← Phase 1 (this document)
 └─────────────────────┘
         │ SyncPlan
@@ -26,37 +26,93 @@ User passes (declarations)
 └─────────────────────┘
 ```
 
-These two concerns are **orthogonal**: the Oracle does not decide order, the Scheduler does not compute barriers. This separation is critical — the Oracle can be built and validated independently of any scheduling improvements.
+These two concerns are **orthogonal**: the SyncPlanner does not decide order, the Scheduler does not compute barriers. This separation is critical — the SyncPlanner can be built and validated independently of any scheduling improvements.
 
 Primary duties:
-1. **Sync Oracle**: Generating a static `SyncPlan` for pre-calculated barriers (Phase 1).
+1. **Sync SyncPlanner**: Generating a static `SyncPlan` for pre-calculated barriers (Phase 1).
 2. **Aliasing Analyzer**: Resource lifetime analysis for memory reuse (Phase 4).
 3. **Scheduler**: Finding the execution order that minimizes frame time (Phase 5).
 
 ---
 
-## 1. Integration Point in the Compiler
+## 1. Crate Boundaries and Integration Point
 
-The Oracle inserts itself in `compiler.rs::execute()` between existing steps:
+### 1.1 Backend-Agnostic Split
+
+The SyncPlanner analysis algorithm is independent of Vulkan. It works on abstract resource states and produces abstract transition descriptions. The Vulkan backend translates those to `vk::ImageMemoryBarrier2`.
+
+```
+crate i3_gfx                          crate i3_vulkan_backend
+──────────────────────────────         ──────────────────────────────
+graph/oracle.rs                        oracle_bridge.rs
+  SyncPlanner          (algorithm)        seed_initial_states()   (reads PhysicalImage.sync)
+  ResourceFlowState   (simulation)       translate_plan()        (AbstractTransition → vk::*Barrier2)
+  SyncPlan            (abstract output)
+  AbstractTransition  (no ash types)   commands.rs
+  ResourceState       (abstract enums)   prepare_pass()          (consumes translated barriers)
+  ImageLayout / AccessFlags / StageFlags
+```
+
+**Rule**: `i3_gfx` must never import `ash`. `i3_vulkan_backend` owns all Vulkan types.
+
+### 1.2 Abstract Types in `i3_gfx::graph::sync`
+
+```rust
+// No ash dependency — pure Rust enums/bitflags
+pub struct ResourceState {
+    pub layout: ImageLayout,    // i3_gfx enum (maps 1:1 to vk::ImageLayout)
+    pub access: AccessFlags,    // i3_gfx bitflags (maps to vk::AccessFlags2)
+    pub stage: StageFlags,      // i3_gfx bitflags (maps to vk::PipelineStageFlags2)
+    pub queue_family: u32,
+}
+
+pub enum TransitionKind { Regular, Release, Acquire }
+
+pub struct AbstractTransition {
+    pub resource_id: u64,
+    pub resource_kind: ResourceKind,  // Image, Buffer, AccelStruct
+    pub old_state: ResourceState,
+    pub new_state: ResourceState,
+    pub kind: TransitionKind,
+}
+
+pub struct PassSyncData {
+    pub pre_transitions: Vec<AbstractTransition>,
+    pub post_transitions: Vec<AbstractTransition>,  // Release barriers
+    pub load_ops: HashMap<u64, LoadOp>,  // resource_id → CLEAR or LOAD
+}
+
+pub struct SyncPlan {
+    pub passes: Vec<PassSyncData>,
+    pub final_states: HashMap<u64, ResourceState>,
+}
+```
+
+`i3_vulkan_backend` converts `AbstractTransition → vk::ImageMemoryBarrier2` in `translate_plan()`, called once after `analyze_frame`. The translated barriers are stored alongside the `SyncPlan` on `VulkanBackend`.
+
+### 1.3 Integration Point in the Compiler
+
+The SyncPlanner inserts itself in `compiler.rs::execute()` between existing steps:
 
 ```
 // Step 3: Swapchain acquire + external resource registration  ← existing
-// Step NEW: Oracle analysis → produces SyncPlan              ← new
-// Step 4.5: prepare_pass loop (now reads from SyncPlan)       ← modified
+// Step NEW: backend.seed_sync_state()                         ← new: backend reads PhysicalImage.sync
+// Step NEW: SyncPlanner::analyze(passes) → SyncPlan           ← new: pure i3_gfx, no Vulkan
+// Step NEW: backend.translate_plan(sync_plan)                 ← new: SyncPlan → vk barriers
+// Step 4.5: prepare_pass loop (now reads from translated plan) ← modified
 ```
 
-A new method is added to `RenderBackendInternal`:
+New method on `RenderBackendInternal`:
 
 ```rust
 fn analyze_frame(&mut self, passes: &[FlatPass]) -> SyncPlan;
 ```
 
-Called once per frame with the full ordered pass list. `prepare_pass` signature stays the same but its implementation becomes a lookup into the pre-computed `SyncPlan` instead of computing barriers on the fly.
-
-The `SyncPlan` is stored on `VulkanBackend` for the duration of the frame:
+The implementation in `VulkanBackend` calls `seed → SyncPlanner::analyze → translate` in sequence. From the compiler's perspective it's one opaque call. The `SyncPlan` and translated barriers are stored on `VulkanBackend` for the duration of the frame:
 
 ```rust
-pub(crate) sync_plan: Option<SyncPlan>, // set by analyze_frame, consumed by prepare_pass
+pub(crate) sync_plan: Option<SyncPlan>,              // abstract, from SyncPlanner
+pub(crate) translated_barriers: Option<FrameBarriers>, // vk::*Barrier2, ready for commands
 ```
 
 ---
@@ -81,7 +137,7 @@ This is the only persistent sync state. Updated once at frame end via `SyncPlan:
 
 ### 2.2 `ResourceFlowState` — Transient Analysis State
 
-Used exclusively inside the Oracle during `analyze_frame`. Never stored between frames.
+Used exclusively inside the SyncPlanner during `analyze_frame`. Never stored between frames.
 
 ```rust
 struct ResourceFlowState {
@@ -119,7 +175,7 @@ A Release barrier must be recorded *after* the producing commands on its queue, 
 
 The recording logic in `record_pass` uses the same `post_barriers` field regardless of domain — the domain only determines *where* rendering/dispatch ends.
 
-### 2.4 `SyncPlan` — Oracle Output
+### 2.4 `SyncPlan` — SyncPlanner Output
 
 ```rust
 pub struct SyncPlan {
@@ -147,7 +203,7 @@ pub enum Barrier {
 
 ## 3. Resource Coverage
 
-The Oracle handles all three resource categories. The analysis logic is identical; only the state derivation differs.
+The SyncPlanner handles all three resource categories. The analysis logic is identical; only the state derivation differs.
 
 | Resource type     | Vulkan barrier type       | Layout field        | Notes |
 |-------------------|---------------------------|---------------------|-------|
@@ -187,7 +243,7 @@ Let:
 - **R** = total number of distinct resources (images + buffers + AS)
 - **D** = average resource *degree* = average number of resources accessed per pass
 
-### Oracle Simulation Loop
+### SyncPlanner Simulation Loop
 
 ```
 Phase 1 Init:       O(R)         — one pass over all physical resources
@@ -342,7 +398,7 @@ if !resource.concurrent && current.queue_family != pass_queue_family:
 | Images | `EXCLUSIVE` always | Preserves AMD DCC (Delta Color Compression). `CONCURRENT` forces the driver to disable DCC because it cannot guarantee compression metadata coherency when two queue families can access the image simultaneously. `EXCLUSIVE` + explicit Release/Acquire keeps DCC active → 2–4× bandwidth improvement on render targets and GBuffers. |
 | Buffers | `CONCURRENT` if >1 family | Buffers have no DCC equivalent. `CONCURRENT` avoids ownership transfers for resources accessed by both graphics and compute (VBOs, SSBOs, indirect buffers). Marginal sync overhead, no compression impact. |
 
-**Consequence for the Oracle:**
+**Consequence for the SyncPlanner:**
 - Images (`concurrent=false`): Step D always applies on queue family change → Release/Acquire generated.
 - Buffers with `concurrent=true`: skip Step D entirely — no Release/Acquire needed.
 - Buffers with `concurrent=false` (single-queue machine): Step D applies normally.
@@ -405,11 +461,11 @@ Each kind drives specific backend behavior after the last writing pass:
 | `Texture` | none (stays in last written layout) | none |
 | `AccumulationBuffer` | none (preserved for next `execute()`) | none |
 
-The Oracle generates the final barrier as part of Phase 3 (Final States), using the `OutputKind` to determine the target layout. `Readback` and `Texture` outputs have `is_transient = false` — layout is preserved across `execute()` calls.
+The SyncPlanner generates the final barrier as part of Phase 3 (Final States), using the `OutputKind` to determine the target layout. `Readback` and `Texture` outputs have `is_transient = false` — layout is preserved across `execute()` calls.
 
 ### 6.3 Headless Graph — No Code Divergence
 
-A headless bake graph simply has no `Present` output. The rest of the pipeline — compiler, Oracle, submit — is identical:
+A headless bake graph simply has no `Present` output. The rest of the pipeline — compiler, SyncPlanner, submit — is identical:
 
 ```
 Presentation graph:    mark_output(backbuffer, Present(window))  → DCE root
@@ -422,9 +478,9 @@ No swapchain acquire, no binary semaphores, no `inactive_images` path. The compi
 
 ### 6.4 Multi-Iteration Baking
 
-Baking runs `execute()` N times accumulating results. The Oracle handles this correctly via `is_transient`:
+Baking runs `execute()` N times accumulating results. The SyncPlanner handles this correctly via `is_transient`:
 
-| OutputKind | `is_transient` | Oracle first-use | Baking semantics |
+| OutputKind | `is_transient` | SyncPlanner first-use | Baking semantics |
 |------------|---------------|-----------------|-----------------|
 | `Present` | `true` (swapchain) | UNDEFINED, CLEAR | Fresh frame each time ✓ |
 | `Readback` | `false` | Layout preserved | Accumulation across iterations ✓ |
@@ -450,11 +506,55 @@ for _ in 0..iterations {
 backend.wait_for_timeline(timeline_value, u64::MAX);
 ```
 
-The Oracle automatically generates the correct final barrier for each output based on its `OutputKind` — no manual `vkCmdPipelineBarrier` needed.
+The SyncPlanner automatically generates the correct final barrier for each output based on its `OutputKind` — no manual `vkCmdPipelineBarrier` needed.
 
 ---
 
-## 7. Commit Phase
+## 7. Backend Record Contract
+
+Once `analyze_frame` has run and the `SyncPlan` is translated into `FrameBarriers`, the backend record phase is purely mechanical. **No sync decisions are made during recording.** The sequence per pass is fixed:
+
+```
+record_pass(pass_index, pass_sync_data, user_pass):
+
+  1. cmd_begin_command_buffer()
+
+  2. emit pre_barriers[pass_index]          ← single vkCmdPipelineBarrier2, all batched
+       layout transitions, WAR/WAW sync, Acquires
+
+  3. begin domain
+       Graphics  → vkCmdBeginRendering()    ← attachments + load_ops from plan
+       Compute   → (nothing)
+       Transfer  → (nothing)
+
+  4. user_pass.execute(ctx)                 ← bind, draw, dispatch, copy — zero sync logic
+
+  5. end domain
+       Graphics  → vkCmdEndRendering()
+       Compute   → (nothing)
+       Transfer  → (nothing)
+
+  6. emit post_barriers[pass_index]         ← single vkCmdPipelineBarrier2, Release barriers only
+
+  7. cmd_end_command_buffer()
+```
+
+**Invariants:**
+- Steps 2 and 6 are always emitted regardless of domain. Only steps 3/5 are domain-dependent.
+- If a barriers list is empty, the `vkCmdPipelineBarrier2` call is skipped — no empty submissions.
+- `load_ops` (CLEAR vs LOAD) come from `PassSyncData` — no runtime decision in `vkCmdBeginRendering`.
+
+**What the backend no longer does during record:**
+- ~~Compute whether a barrier is needed~~
+- ~~Read or write resource sync state (`img.sync`, `buf.sync`)~~
+- ~~Decide load_op~~
+- ~~Handle queue family transitions~~
+
+All of that happened in `analyze_frame`. Recording is a transcription, not a decision.
+
+---
+
+## 8. Commit Phase
 
 Applied in `VulkanBackend::end_frame()`, after `submit()` returns:
 
@@ -476,7 +576,7 @@ if let Some(plan) = backend.sync_plan.take() {
 
 ---
 
-## 7. Multi-Queue Synchronization
+## 9. Multi-Queue Synchronization
 
 See §5 Step D for the Release/Acquire injection algorithm.
 
@@ -523,7 +623,7 @@ FINAL STATES:
 
 ### 8.2 Structured Tracing
 
-`tracing::debug!` per Oracle decision (gated behind `target: "i3_oracle"`):
+`tracing::debug!` per SyncPlanner decision (gated behind `target: "i3_oracle"`):
 
 ```
 DEBUG i3_oracle: [img:SceneDepth] first_use, transient → UNDEFINED, load_op=CLEAR
@@ -535,11 +635,11 @@ DEBUG i3_oracle: [buf:InstanceData] WAW hazard → barrier emitted (SHADER_WRITE
 
 ## 9. Code to Delete After Phase 1
 
-The following code becomes dead once the Oracle is in place and verified. Delete in one cleanup commit after validation layers report zero errors.
+The following code becomes dead once the SyncPlanner is in place and verified. Delete in one cleanup commit after validation layers report zero errors.
 
 **`crates/i3_vulkan_backend/src/sync.rs`**
-- `get_image_barrier()` — stateful wrapper (replaced by Oracle)
-- `get_buffer_barrier()` — stateful wrapper (replaced by Oracle)
+- `get_image_barrier()` — stateful wrapper (replaced by SyncPlanner)
+- `get_buffer_barrier()` — stateful wrapper (replaced by SyncPlanner)
 - The `SyncContext` struct (unused placeholder, superseded by `ResourceFlowState` in `oracle.rs`)
 
 **`crates/i3_vulkan_backend/src/backend.rs`**
@@ -559,25 +659,31 @@ The following code becomes dead once the Oracle is in place and verified. Delete
 - Inline `img.sync.*` mutation at end of `upload_image_data()` — replaced by commit phase
 
 **`crates/i3_vulkan_backend/src/submission.rs`**
-- Inline `img.sync.*` mutations on swapchain image acquire/recreate — replaced by Oracle init phase reading `img.sync` as canonical state (which is already correct since swapchain images are transient)
+- Inline `img.sync.*` mutations on swapchain image acquire/recreate — replaced by SyncPlanner init phase reading `img.sync` as canonical state (which is already correct since swapchain images are transient)
 
 ---
 
 ## 10. Implementation Roadmap
 
-### Phase 1: SyncOracle
+### Phase 1: SyncPlanner
 
-1. Add `is_transient: bool` to `PhysicalImage` / `PhysicalBuffer`. Add `sync: ResourceState` to `PhysicalAccelerationStructure`.
-2. Define `Barrier`, `PassSyncData`, `SyncPlan` in `sync.rs`.
-3. Implement `SyncOracle::analyze(flat_passes, backend) -> SyncPlan` in new `oracle.rs`.
-4. Add `get_as_state(usage)` to `sync.rs`.
-5. Add `analyze_frame` to `RenderBackendInternal` trait + `VulkanBackend` impl.
-6. Call `analyze_frame` in `compiler.rs::execute()` between steps 3 and 4.5.
-7. Refactor `prepare_pass` to read `pre_barriers`, `post_barriers`, `load_ops` from `SyncPlan` by index.
-8. Emit `post_barriers` in `record_pass` after end of rendering/dispatch, before `end_command_buffer`.
-9. Add commit phase in `end_frame`.
-10. Validate with Vulkan Validation Layers → zero SYNC-HAZARD errors.
-11. Delete dead code (see §9).
+**In `i3_gfx` (no ash dependency):**
+1. Define abstract types in `i3_gfx/src/graph/sync.rs`: `ResourceState`, `ImageLayout`, `AccessFlags`, `StageFlags`, `AbstractTransition`, `TransitionKind`, `PassSyncData`, `SyncPlan`, `LoadOp`.
+2. Implement `SyncPlanner::analyze(passes: &[FlatPass], initial_states: &HashMap<u64, ResourceState>) -> SyncPlan` in `i3_gfx/src/graph/oracle.rs`. Pure algorithm, no Vulkan.
+3. Add `analyze_frame(&mut self, passes: &[FlatPass]) -> SyncPlan` to `RenderBackendInternal` trait.
+
+**In `i3_vulkan_backend`:**
+4. Add `is_transient: bool` to `PhysicalImage` / `PhysicalBuffer`. Add `sync: ResourceState` to `PhysicalAccelerationStructure`.
+5. Implement `seed_initial_states() -> HashMap<u64, ResourceState>` — reads `img.sync` / `buf.sync`, converts to abstract `ResourceState`.
+6. Implement `translate_plan(plan: &SyncPlan) -> FrameBarriers` — converts `AbstractTransition` to `vk::ImageMemoryBarrier2` / `vk::BufferMemoryBarrier2`.
+7. Implement `VulkanBackend::analyze_frame()` = `seed → SyncPlanner::analyze → translate`.
+8. Move `oracle.rs` (current Vulkan-coupled impl) into the bridge layer; delete the `use ash::vk` dependency from SyncPlanner logic.
+9. Call `analyze_frame` in `compiler.rs::execute()` between steps 3 and 4.5.
+10. Refactor `prepare_pass` to read from `FrameBarriers` by pass index.
+11. Emit `post_barriers` in `record_pass` after end of rendering/dispatch, before `end_command_buffer`.
+12. Add commit phase in `end_frame`.
+13. Validate with Vulkan Validation Layers → zero SYNC-HAZARD errors.
+14. Delete dead code (see §9).
 
 ### Phase 2: Plan Dumper
 
@@ -606,7 +712,7 @@ This is a DAG scheduling problem on k heterogeneous machines. It is NP-hard in g
 
 ### 11.2 Separation of Concerns
 
-The Scheduler lives in the Compiler, before Oracle analysis:
+The Scheduler lives in the Compiler, before SyncPlanner analysis:
 
 ```
 compiler.rs::compile():
@@ -615,10 +721,10 @@ compiler.rs::compile():
   3. build_dependency_dag()    → adj (edge list)
   4. [NEW] schedule_heft()     → flat_passes reordered   ← Phase 5
   5. detect_cross_queue_transfers()
-  ... Oracle analysis, execution ...
+  ... SyncPlanner analysis, execution ...
 ```
 
-The Oracle receives `flat_passes` already in optimal order and is unaffected by scheduling changes.
+The SyncPlanner receives `flat_passes` already in optimal order and is unaffected by scheduling changes.
 
 ### 11.3 Why Multiple Valid Orders Exist
 
@@ -721,7 +827,7 @@ This amortizes measurement overhead (one timestamp pair per pass = cheap) and co
 | HEFT rank computation | O(P + E) | backward DFS |
 | HEFT greedy assignment | O(P × k) | k ≤ 3 queues |
 | **HEFT total** | **O(P log P + E)** | dominates at sort step |
-| Oracle simulation | O(R + P × D) | R=resources, D=avg degree |
+| SyncPlanner simulation | O(R + P × D) | R=resources, D=avg degree |
 | **Full pipeline** | **O(P log P + R)** | P, R typically < 500 |
 
-For a 200-pass frame: ~1600 comparisons for HEFT + ~2000 for Oracle. Sub-millisecond on CPU.
+For a 200-pass frame: ~1600 comparisons for HEFT + ~2000 for SyncPlanner. Sub-millisecond on CPU.
