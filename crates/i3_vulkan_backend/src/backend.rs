@@ -100,7 +100,8 @@ pub struct VulkanBackend {
 
     pub rt_supported: bool,
 
-    /* Removed oracle field - now uses i3_gfx::graph::oracle::SyncPlanner during analyze_frame */
+    /// Persistent sync planner — reused every frame so its internal HashMaps are not reallocated.
+    pub(crate) sync_planner: i3_gfx::graph::sync_planner::SyncPlanner,
     /// Current synchronization plan for the active frame.
     pub(crate) current_plan: Option<sync::SyncPlan>,
 
@@ -182,6 +183,7 @@ impl VulkanBackend {
             rt_pipeline: None,
             rt_supported: false,
 
+            sync_planner: i3_gfx::graph::sync_planner::SyncPlanner::new(),
             current_plan: None,
 
             frame_started: false,
@@ -933,6 +935,14 @@ impl RenderBackendInternal for VulkanBackend {
         crate::submission::begin_frame(self);
     }
 
+    fn reset_frame_resources(&mut self) {
+        // SymbolIds are minted from a global atomic counter — each frame produces unique IDs.
+        // Without this clear, the maps grow unboundedly (N_frames × N_resources entries),
+        // making analyze_frame's iteration O(all-time resources) instead of O(current frame).
+        self.external_to_physical.clear();
+        self.external_buffer_to_physical.clear();
+    }
+
     fn end_frame(&mut self) {
         self.frame_count += 1;
         crate::submission::end_frame(self);
@@ -942,14 +952,15 @@ impl RenderBackendInternal for VulkanBackend {
         &mut self,
         passes: &[i3_gfx::graph::types::FlatPass],
     ) -> i3_gfx::graph::sync::SyncPlan {
-        // Seed using virtual IDs (SymbolId) matching what FlatPass.image_reads/writes use.
-        // The external_to_physical map is populated by resolve_resources_recursive before this call.
-        let mut image_states = std::collections::HashMap::new();
-        let mut buffer_states = std::collections::HashMap::new();
-
+        // Populate seed maps directly on the planner — no per-frame HashMap allocation.
+        // The external_to_physical maps are cleared in begin_frame and repopulated by
+        // process_externals_recursive before this call, so they contain exactly the
+        // resources active this frame.
+        self.sync_planner.image_seed.clear();
+        self.sync_planner.buffer_seed.clear();
         for (&virtual_id, &physical_id) in &self.external_to_physical {
             if let Some(img) = self.images.get(physical_id) {
-                image_states.insert(
+                self.sync_planner.image_seed.insert(
                     virtual_id,
                     i3_gfx::graph::sync::ResourceState {
                         layout: crate::sync_planner::translate_layout_to_abstract(img.last_layout),
@@ -962,7 +973,7 @@ impl RenderBackendInternal for VulkanBackend {
         }
         for (&virtual_id, &physical_id) in &self.external_buffer_to_physical {
             if let Some(buf) = self.buffers.get(physical_id) {
-                buffer_states.insert(
+                self.sync_planner.buffer_seed.insert(
                     virtual_id,
                     i3_gfx::graph::sync::ResourceState {
                         layout: i3_gfx::graph::sync::ImageLayout::Undefined,
@@ -974,8 +985,7 @@ impl RenderBackendInternal for VulkanBackend {
             }
         }
 
-        let mut planner = i3_gfx::graph::sync_planner::SyncPlanner::new();
-        let abstract_plan = planner.analyze(passes, &image_states, &buffer_states);
+        let abstract_plan = self.sync_planner.analyze(passes);
 
         // Translate abstract plan to Vulkan barriers
         let vk_plan = crate::sync_planner::translate_plan(self, &abstract_plan, passes);

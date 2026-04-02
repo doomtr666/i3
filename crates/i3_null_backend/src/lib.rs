@@ -319,13 +319,9 @@ unsafe impl Send for NullBackend {}
 unsafe impl Sync for NullBackend {}
 
 impl RenderBackendInternal for NullBackend {
-    fn begin_frame(&mut self) {
-        // No-op for null backend
-    }
-
-    fn end_frame(&mut self) {
-        // No-op
-    }
+    fn begin_frame(&mut self) {}
+    fn end_frame(&mut self) {}
+    fn reset_frame_resources(&mut self) {}
 
     fn analyze_frame(&mut self, _passes: &[i3_gfx::graph::types::FlatPass]) -> i3_gfx::graph::sync::SyncPlan {
         i3_gfx::graph::sync::SyncPlan::default()

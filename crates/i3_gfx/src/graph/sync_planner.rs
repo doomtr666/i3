@@ -11,6 +11,12 @@ pub struct ResourceFlowState {
 pub struct SyncPlanner {
     pub image_flow: HashMap<u64, ResourceFlowState>,
     pub buffer_flow: HashMap<u64, ResourceFlowState>,
+    // Scratch maps for seeding — reused across frames, owned here to avoid per-frame alloc.
+    pub image_seed: HashMap<u64, ResourceState>,
+    pub buffer_seed: HashMap<u64, ResourceState>,
+    // Scratch buffers reused across frames — grow to high-water mark then stop allocating.
+    scratch_images: Vec<(ImageHandle, ResourceUsage)>,
+    scratch_buffers: Vec<(BufferHandle, ResourceUsage)>,
 }
 
 impl SyncPlanner {
@@ -18,27 +24,27 @@ impl SyncPlanner {
         Self {
             image_flow: HashMap::new(),
             buffer_flow: HashMap::new(),
+            image_seed: HashMap::new(),
+            buffer_seed: HashMap::new(),
+            scratch_images: Vec::with_capacity(8),
+            scratch_buffers: Vec::with_capacity(16),
         }
     }
 
-    pub fn analyze(
-        &mut self,
-        passes: &[FlatPass],
-        image_states: &HashMap<u64, ResourceState>,
-        buffer_states: &HashMap<u64, ResourceState>,
-    ) -> SyncPlan {
+    pub fn analyze(&mut self, passes: &[FlatPass]) -> SyncPlan {
+        let total_resources = self.image_seed.len() + self.buffer_seed.len();
         let mut plan = SyncPlan {
             passes: vec![PassSyncData::default(); passes.len()],
-            final_states: HashMap::new(),
+            final_states: HashMap::with_capacity(total_resources),
         };
 
-        // 1. Seed initial states
+        // 1. Seed initial states from the caller-populated seed maps.
         self.image_flow.clear();
         self.buffer_flow.clear();
-        for (&id, &state) in image_states {
+        for (&id, &state) in &self.image_seed {
             self.image_flow.insert(id, ResourceFlowState { state, last_write_pass_idx: None });
         }
-        for (&id, &state) in buffer_states {
+        for (&id, &state) in &self.buffer_seed {
             self.buffer_flow.insert(id, ResourceFlowState { state, last_write_pass_idx: None });
         }
 
@@ -71,12 +77,17 @@ impl SyncPlanner {
         };
 
         // --- Process Images ---
-        let mut processed_images: HashMap<ImageHandle, ResourceUsage> = HashMap::new();
+        // Linear dedup into a scratch Vec — passes touch < 8 images, O(n²) beats HashMap here.
+        self.scratch_images.clear();
         for (handle, usage) in pass.image_reads.iter().chain(pass.image_writes.iter()) {
-            processed_images.entry(*handle).or_insert(ResourceUsage::empty()).insert(*usage);
+            if let Some(existing) = self.scratch_images.iter_mut().find(|(h, _)| h == handle) {
+                existing.1 |= *usage;
+            } else {
+                self.scratch_images.push((*handle, *usage));
+            }
         }
 
-        for (handle, usage) in processed_images {
+        for &(handle, usage) in &self.scratch_images {
             let id = handle.0.0;
             let old_flow = self.image_flow.get(&id).cloned().unwrap_or(ResourceFlowState {
                 state: ResourceState {
@@ -128,12 +139,16 @@ impl SyncPlanner {
         }
 
         // --- Process Buffers ---
-        let mut processed_buffers: HashMap<BufferHandle, ResourceUsage> = HashMap::new();
+        self.scratch_buffers.clear();
         for (handle, usage) in pass.buffer_reads.iter().chain(pass.buffer_writes.iter()) {
-            processed_buffers.entry(*handle).or_insert(ResourceUsage::empty()).insert(*usage);
+            if let Some(existing) = self.scratch_buffers.iter_mut().find(|(h, _)| h == handle) {
+                existing.1 |= *usage;
+            } else {
+                self.scratch_buffers.push((*handle, *usage));
+            }
         }
 
-        for (handle, usage) in processed_buffers {
+        for &(handle, usage) in &self.scratch_buffers {
             let id = handle.0.0;
             let old_flow = self.buffer_flow.get(&id).cloned().unwrap_or(ResourceFlowState {
                 state: ResourceState::default(),

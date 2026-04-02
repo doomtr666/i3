@@ -525,6 +525,12 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     fn begin_frame(&mut self);
     fn end_frame(&mut self);
 
+    /// Clear per-frame virtual→physical resource mappings before the new frame's
+    /// resources are registered.  Must be called before resolve_resources_recursive
+    /// and process_externals_recursive so the maps start empty and grow to exactly
+    /// the set of resources active in the current frame.
+    fn reset_frame_resources(&mut self);
+
     /// Statelessly analyzes the frame's pass list to generate a synchronization plan.
     /// This must be called before any pass preparation or recording.
     fn analyze_frame(&mut self, passes: &[crate::graph::types::FlatPass]) -> crate::graph::sync::SyncPlan;

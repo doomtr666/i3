@@ -952,6 +952,10 @@ impl CompiledGraph {
             "Executing compiled frame graph"
         );
 
+        // 0. Clear per-frame virtual→physical maps before any resources are registered.
+        // Must happen before resolve_resources_recursive so transient images are included.
+        backend.reset_frame_resources();
+
         // 1. Resource Resolution & Allocation (still tree-based)
         let mut transient_images = Vec::new();
         let mut transient_buffers = Vec::new();
