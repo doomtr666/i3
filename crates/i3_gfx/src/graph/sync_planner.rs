@@ -94,14 +94,14 @@ impl SyncPlanner {
                     layout: ImageLayout::Undefined,
                     access: AccessFlags::NONE,
                     stage: StageFlags::TOP_OF_PIPE,
-                    queue_family: 0, // Placeholder
+                    queue_family: 0,
                 },
                 last_write_pass_idx: None,
             });
-            
+
             let old_state = old_flow.state;
             let (target_layout, target_access, target_stage) = get_image_state(usage, bind_point);
-            
+
             let new_state = ResourceState {
                 layout: target_layout,
                 access: target_access,
@@ -118,10 +118,24 @@ impl SyncPlanner {
 
             // Barrier Generation
             if needs_barrier(&old_state, &new_state) {
+                // Cross-queue: normalize old_state stage/access to queue-agnostic values so
+                // the barrier is valid regardless of which queue records it.
+                // MEMORY_READ|WRITE with ALL_COMMANDS = "flush/invalidate all caches" — conservative
+                // but always valid. Proper Release/Acquire pairs (SYNC-01) would be more precise.
+                let effective_old = if old_state.queue_family != current_family {
+                    ResourceState {
+                        layout: old_state.layout,
+                        access: AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
+                        stage: StageFlags::ALL_COMMANDS,
+                        queue_family: old_state.queue_family,
+                    }
+                } else {
+                    old_state
+                };
                 plan.passes[pass_idx].pre_transitions.push(AbstractTransition {
                     resource_id: id,
                     resource_kind: ResourceKind::Image,
-                    old_state,
+                    old_state: effective_old,
                     new_state,
                     kind: TransitionKind::Regular,
                 });
@@ -165,10 +179,20 @@ impl SyncPlanner {
             };
 
             if needs_barrier(&old_state, &new_state) {
+                let effective_old = if old_state.queue_family != current_family {
+                    ResourceState {
+                        layout: ImageLayout::Undefined,
+                        access: AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
+                        stage: StageFlags::ALL_COMMANDS,
+                        queue_family: old_state.queue_family,
+                    }
+                } else {
+                    old_state
+                };
                 plan.passes[pass_idx].pre_transitions.push(AbstractTransition {
                     resource_id: id,
                     resource_kind: ResourceKind::Buffer,
-                    old_state,
+                    old_state: effective_old,
                     new_state,
                     kind: TransitionKind::Regular,
                 });

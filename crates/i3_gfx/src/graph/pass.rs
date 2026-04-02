@@ -178,6 +178,10 @@ impl RenderPass for BoxedRef {
         unsafe { (*self.inner).name() }
     }
 
+    fn prefer_async(&self) -> bool {
+        unsafe { (*self.inner).prefer_async() }
+    }
+
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         unsafe { (*self.inner).init(backend, globals) }
     }

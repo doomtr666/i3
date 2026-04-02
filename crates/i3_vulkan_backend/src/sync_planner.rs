@@ -155,144 +155,34 @@ pub fn translate_stages_from_abstract(stages: abstract_sync::StageFlags) -> vk::
     result
 }
 
-/// Clamp pipeline stage flags to those valid on the given queue type.
-///
-/// A barrier recorded on queue Q must use only stage flags supported by Q.
-/// Graphics-only stages (COLOR_ATTACHMENT_OUTPUT, ALL_GRAPHICS, fragment/vertex
-/// stages, etc.) are illegal in compute or transfer command buffers.
-/// When the original src/dst stage contains such flags we replace the whole
-/// mask with ALL_COMMANDS, which is valid on every queue and correctly
-/// represents "wait for / signal all prior work on that queue".
-fn clamp_stage_to_queue(
-    stage: vk::PipelineStageFlags2,
-    queue: i3_gfx::graph::types::QueueType,
-) -> vk::PipelineStageFlags2 {
-    use i3_gfx::graph::types::QueueType;
-    match queue {
-        QueueType::Graphics => stage, // All stages are valid on the graphics queue.
-        QueueType::AsyncCompute => {
-            let graphics_only = vk::PipelineStageFlags2::ALL_GRAPHICS
-                | vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags2::VERTEX_SHADER
-                | vk::PipelineStageFlags2::FRAGMENT_SHADER
-                | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
-                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS
-                | vk::PipelineStageFlags2::VERTEX_INPUT
-                | vk::PipelineStageFlags2::INDEX_INPUT
-                | vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
-                | vk::PipelineStageFlags2::TESSELLATION_CONTROL_SHADER
-                | vk::PipelineStageFlags2::TESSELLATION_EVALUATION_SHADER
-                | vk::PipelineStageFlags2::GEOMETRY_SHADER
-                | vk::PipelineStageFlags2::PRE_RASTERIZATION_SHADERS;
-            let filtered = stage & !graphics_only;
-            if filtered.is_empty() {
-                vk::PipelineStageFlags2::ALL_COMMANDS
-            } else {
-                filtered
-            }
-        }
-        QueueType::Transfer => {
-            let transfer_compat = vk::PipelineStageFlags2::TOP_OF_PIPE
-                | vk::PipelineStageFlags2::BOTTOM_OF_PIPE
-                | vk::PipelineStageFlags2::ALL_COMMANDS
-                | vk::PipelineStageFlags2::TRANSFER
-                | vk::PipelineStageFlags2::COPY
-                | vk::PipelineStageFlags2::BLIT
-                | vk::PipelineStageFlags2::RESOLVE
-                | vk::PipelineStageFlags2::CLEAR
-                | vk::PipelineStageFlags2::HOST;
-            let filtered = stage & transfer_compat;
-            if filtered.is_empty() {
-                vk::PipelineStageFlags2::ALL_COMMANDS
-            } else {
-                filtered
-            }
-        }
-    }
-}
-
-/// Clamp access flags to those valid on the given queue type.
-///
-/// `VK_ACCESS_2_COLOR_ATTACHMENT_*` and `VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_*`
-/// are graphics-only access types.  When they appear in a barrier recorded on a
-/// compute or transfer command buffer (even with srcStageMask = ALL_COMMANDS)
-/// the validation layer correctly rejects them because ALL_COMMANDS on a
-/// non-graphics queue does not cover the graphics pipeline stages that are the
-/// only producers/consumers of those access types.
-/// Stripping those flags is safe: the pipeline hazard is serialised by the stage
-/// mask (which falls back to ALL_COMMANDS for cross-queue cases); the access
-/// scope just needs to be consistent with the stages present in the barrier.
-fn clamp_access_to_queue(
-    access: vk::AccessFlags2,
-    queue: i3_gfx::graph::types::QueueType,
-) -> vk::AccessFlags2 {
-    use i3_gfx::graph::types::QueueType;
-    match queue {
-        QueueType::Graphics => access,
-        QueueType::AsyncCompute => {
-            let graphics_only = vk::AccessFlags2::COLOR_ATTACHMENT_READ
-                | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
-                | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE
-                | vk::AccessFlags2::INPUT_ATTACHMENT_READ;
-            access & !graphics_only
-        }
-        QueueType::Transfer => {
-            let transfer_compat = vk::AccessFlags2::TRANSFER_READ
-                | vk::AccessFlags2::TRANSFER_WRITE
-                | vk::AccessFlags2::MEMORY_READ
-                | vk::AccessFlags2::MEMORY_WRITE
-                | vk::AccessFlags2::HOST_READ
-                | vk::AccessFlags2::HOST_WRITE;
-            access & transfer_compat
-        }
-    }
-}
-
-// Translate abstract plan to Vulkan barriers
+// Translate abstract plan to Vulkan barriers.
+// Cross-queue stage/access normalization is handled upstream in the abstract
+// sync planner (SYNC-01): old_state for cross-queue transitions is already
+// normalized to (ALL_COMMANDS, MEMORY_READ|MEMORY_WRITE), so no clamping is
+// needed here. new_state is always queue-compatible by construction in
+// get_image_state / get_buffer_state.
 pub fn translate_plan(
     backend: &crate::backend::VulkanBackend,
     plan: &abstract_sync::SyncPlan,
-    flat_passes: &[i3_gfx::graph::types::FlatPass],
 ) -> crate::sync::SyncPlan {
     let mut vk_plan = crate::sync::SyncPlan::default();
     vk_plan.pass_sync = vec![PassSyncData::default(); plan.passes.len()];
 
     for (i, abstract_pass) in plan.passes.iter().enumerate() {
-        // The barrier is recorded in the command buffer of pass i, so stage masks
-        // must be valid for that pass's queue.
-        let queue = flat_passes.get(i).map(|p| p.queue).unwrap_or(i3_gfx::graph::types::QueueType::Graphics);
-
         for transition in &abstract_pass.pre_transitions {
             match transition.resource_kind {
                 abstract_sync::ResourceKind::Image => {
                     let physical_id = backend.external_to_physical.get(&transition.resource_id).copied();
                     if let Some(physical_id) = physical_id {
                         if let Some(img) = backend.images.get(physical_id) {
-                            let src_stage = clamp_stage_to_queue(
-                                translate_stages_from_abstract(transition.old_state.stage),
-                                queue,
-                            );
-                            let dst_stage = clamp_stage_to_queue(
-                                translate_stages_from_abstract(transition.new_state.stage),
-                                queue,
-                            );
-                            let src_access = clamp_access_to_queue(
-                                translate_access_from_abstract(transition.old_state.access),
-                                queue,
-                            );
-                            let dst_access = clamp_access_to_queue(
-                                translate_access_from_abstract(transition.new_state.access),
-                                queue,
-                            );
                             let barrier = vk::ImageMemoryBarrier2::default()
                                 .image(img.image)
                                 .old_layout(translate_layout_from_abstract(transition.old_state.layout))
                                 .new_layout(translate_layout_from_abstract(transition.new_state.layout))
-                                .src_access_mask(src_access)
-                                .dst_access_mask(dst_access)
-                                .src_stage_mask(src_stage)
-                                .dst_stage_mask(dst_stage)
+                                .src_access_mask(translate_access_from_abstract(transition.old_state.access))
+                                .dst_access_mask(translate_access_from_abstract(transition.new_state.access))
+                                .src_stage_mask(translate_stages_from_abstract(transition.old_state.stage))
+                                .dst_stage_mask(translate_stages_from_abstract(transition.new_state.stage))
                                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                                 .subresource_range(vk::ImageSubresourceRange {
@@ -310,28 +200,12 @@ pub fn translate_plan(
                     let physical_id = backend.external_buffer_to_physical.get(&transition.resource_id).copied();
                     if let Some(physical_id) = physical_id {
                         if let Some(buf) = backend.buffers.get(physical_id) {
-                            let src_stage = clamp_stage_to_queue(
-                                translate_stages_from_abstract(transition.old_state.stage),
-                                queue,
-                            );
-                            let dst_stage = clamp_stage_to_queue(
-                                translate_stages_from_abstract(transition.new_state.stage),
-                                queue,
-                            );
-                            let src_access = clamp_access_to_queue(
-                                translate_access_from_abstract(transition.old_state.access),
-                                queue,
-                            );
-                            let dst_access = clamp_access_to_queue(
-                                translate_access_from_abstract(transition.new_state.access),
-                                queue,
-                            );
                             let barrier = vk::BufferMemoryBarrier2::default()
                                 .buffer(buf.buffer)
-                                .src_access_mask(src_access)
-                                .dst_access_mask(dst_access)
-                                .src_stage_mask(src_stage)
-                                .dst_stage_mask(dst_stage)
+                                .src_access_mask(translate_access_from_abstract(transition.old_state.access))
+                                .dst_access_mask(translate_access_from_abstract(transition.new_state.access))
+                                .src_stage_mask(translate_stages_from_abstract(transition.old_state.stage))
+                                .dst_stage_mask(translate_stages_from_abstract(transition.new_state.stage))
                                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                                 .offset(0)

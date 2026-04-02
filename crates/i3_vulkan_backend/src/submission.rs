@@ -386,7 +386,7 @@ pub fn acquire_swapchain_image(
                     if let Some(img) = backend.images.get_mut(id) {
                         img.last_layout = vk::ImageLayout::UNDEFINED;
                         img.last_access = vk::AccessFlags2::empty();
-                        img.last_stage = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
+                        img.last_stage = vk::PipelineStageFlags2::TOP_OF_PIPE;
                     }
                     id
                 } else {
@@ -403,7 +403,7 @@ pub fn acquire_swapchain_image(
                         format: swapchain.format,
                         last_layout: vk::ImageLayout::UNDEFINED,
                         last_access: vk::AccessFlags2::empty(),
-                        last_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
                         last_write_frame: 0,
                         last_queue_family: backend.graphics_family,
                         is_swapchain: true,
@@ -503,7 +503,7 @@ pub fn submit(
         QueueType::AsyncCompute => compute_timeline,
         QueueType::Transfer    => transfer_timeline,
     };
-    let family_for = |q: QueueType| match q {
+    let _family_for = |q: QueueType| match q {
         QueueType::Graphics    => graphics_family,
         QueueType::AsyncCompute => compute_family,
         QueueType::Transfer    => transfer_family,
@@ -525,15 +525,6 @@ pub fn submit(
     }
 
     let mut present_info_list = Vec::with_capacity(active_windows.len());
-
-    // Find which family last touched the swapchain image for present signal assignment
-    let mut swapchain_last_family = graphics_family;
-    for (_, img) in backend.images.iter() {
-        if img.is_swapchain && img.last_layout != vk::ImageLayout::UNDEFINED {
-            swapchain_last_family = img.last_queue_family;
-            break;
-        }
-    }
 
     for (sc_handle, image_index, _acquire_sem, release_sem) in &active_windows {
         present_info_list.push((*sc_handle, *image_index, *release_sem));
@@ -603,19 +594,32 @@ pub fn submit(
     }
 
     // 4. Attach binary semaphores (swapchain acquire/present) to the correct sub-batches.
-    // Acquire binary → first Graphics sub-batch (or the only one).
-    // Present binary → last sub-batch that belongs to the queue family that last touched the swapchain.
-    let first_graphics_idx = finalized.iter().position(|(q, _)| *q == QueueType::Graphics);
-    let last_swapchain_idx = finalized.iter().rposition(|(q, _)| family_for(*q) == swapchain_last_family);
+    //
+    // Acquire binary → first sub-batch overall (the first queue to run must wait for the
+    // swapchain image to be ready). Prefer the first Graphics sub-batch when present so
+    // that COLOR_ATTACHMENT_OUTPUT is a valid wait stage; fall back to any first sub-batch
+    // with ALL_COMMANDS (valid on every queue type).
+    //
+    // Release binary → last sub-batch overall (the last submitted work before present,
+    // regardless of queue). Using finalized.last() is always correct because inter-queue
+    // timeline semaphores enforce ordering, so the last entry finishes last on the GPU.
+    let acquire_target_idx = finalized.iter().position(|(q, _)| *q == QueueType::Graphics)
+        .or_else(|| if finalized.is_empty() { None } else { Some(0) });
+    let release_target_idx = if finalized.is_empty() { None } else { Some(finalized.len() - 1) };
 
-    if let Some(idx) = first_graphics_idx {
+    if let Some(idx) = acquire_target_idx {
+        let wait_stage = if finalized[idx].0 == QueueType::Graphics {
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+        } else {
+            vk::PipelineStageFlags::ALL_COMMANDS
+        };
         for (_, _, acquire_sem, _) in &active_windows {
             finalized[idx].1.wait_sems.push(*acquire_sem);
             finalized[idx].1.wait_values.push(0);
-            finalized[idx].1.wait_stages.push(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
+            finalized[idx].1.wait_stages.push(wait_stage);
         }
     }
-    if let Some(idx) = last_swapchain_idx {
+    if let Some(idx) = release_target_idx {
         for (_, _, _, release_sem) in &active_windows {
             finalized[idx].1.signal_sems.push(*release_sem);
             finalized[idx].1.signal_values.push(0);
@@ -685,11 +689,18 @@ pub fn submit(
         unsafe { fp.queue_present(graphics_queue, &pi).ok(); }
     }
 
-    // 8. Update frame completion value for next-frame wait
+    // 8. Update frame completion value for next-frame wait.
+    // Only record the value if graphics work was actually submitted this frame.
+    // cpu_timeline is incremented in begin_frame *before* submission, so if no
+    // graphics Signal step was emitted the timeline semaphore was never advanced
+    // to that value. Recording it would cause begin_frame to wait forever on a
+    // value that will never be signaled (deadlock after NUM_FRAME_CONTEXTS frames).
     {
         let graphics = backend.graphics.as_mut().unwrap();
         let frame_ctx = &mut graphics.frame_contexts[global_frame_index];
-        frame_ctx.last_completion_value = graphics_signal;
+        if max_signal.contains_key(&QueueType::Graphics) {
+            frame_ctx.last_completion_value = graphics_signal;
+        }
     }
 
     Ok(graphics_signal)

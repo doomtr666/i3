@@ -988,7 +988,7 @@ impl RenderBackendInternal for VulkanBackend {
         let abstract_plan = self.sync_planner.analyze(passes);
 
         // Translate abstract plan to Vulkan barriers
-        let vk_plan = crate::sync_planner::translate_plan(self, &abstract_plan, passes);
+        let vk_plan = crate::sync_planner::translate_plan(self, &abstract_plan);
         self.current_plan = Some(vk_plan);
 
         // Commit final states back to physical resources.

@@ -68,6 +68,10 @@ impl RenderPass for MandelbrotPass {
         "MandelbrotPass"
     }
 
+    fn prefer_async(&self) -> bool {
+        false
+    }
+
     fn record(&mut self, builder: &mut PassBuilder) {
         self.backbuffer = builder.resolve_image("Backbuffer");
         builder.bind_pipeline(self.pipeline);
@@ -112,7 +116,9 @@ impl MandelbrotApp {
     fn new() -> Self {
         let mut backend = VulkanBackend::new().unwrap();
         examples_common::maybe_list_gpus(&backend);
-        backend.initialize(examples_common::get_gpu_index()).unwrap();
+        backend
+            .initialize(examples_common::get_gpu_index())
+            .unwrap();
 
         let width = 1280;
         let height = 720;
