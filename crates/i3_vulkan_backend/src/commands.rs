@@ -1,7 +1,7 @@
 //! # Command Recording - Pass Context
 //!
 //! This module implements the [`PassContext`] trait for Vulkan, providing the interface
-//! for render passes to record GPU commands.
+//! for render passes to declare GPU commands.
 //!
 //! ## PassContext Pattern
 //!
@@ -23,7 +23,7 @@
 //! ```text
 //! prepare_pass() → record_pass() → submit()
 //!      ↓               ↓              ↓
-//!  Create context   Record commands  Submit to queue
+//!  Create context   declare commands  Submit to queue
 //!  Bind pipeline    Set viewport     Signal timeline
 //!  Set barriers     Draw/dispatch    Present
 //! ```
@@ -715,7 +715,7 @@ pub fn prepare_pass(
     }
 }
 
-/// Record barriers for a set of prepared passes.
+/// declare barriers for a set of prepared passes.
 pub fn record_barriers(
     backend: &VulkanBackend,
     passes: &[&VulkanPreparedPass],
@@ -736,7 +736,7 @@ pub fn record_barriers(
     }
 
     if total_image_barriers == 0 && total_buffer_barriers == 0 {
-        tracing::debug!("record_barriers: No barriers to record for {} passes", passes.len());
+        tracing::debug!("record_barriers: No barriers to declare for {} passes", passes.len());
         return None;
     }
 
@@ -840,7 +840,7 @@ pub fn end_debug_label(backend: &VulkanBackend, command_buffer: BackendCommandBu
     }
 }
 
-/// Record a pass for execution.
+/// declare a pass for execution.
 ///
 /// This function records the actual rendering commands for a pass. It:
 /// 1. Allocates a command buffer from the thread pool
@@ -999,6 +999,18 @@ pub fn record_pass(
                     device.handle.cmd_end_rendering(cmd);
                 }
             }
+        }
+    }
+
+    // Emit post-barriers (e.g. present transition: final layout → PresentSrc).
+    if !prepared.sync.post_barriers.is_empty() {
+        let mut img_barriers: Vec<vk::ImageMemoryBarrier2> = Vec::new();
+        for b in &prepared.sync.post_barriers {
+            if let crate::sync::Barrier::Image(b) = b { img_barriers.push(b.clone()); }
+        }
+        if !img_barriers.is_empty() {
+            let dep = vk::DependencyInfo::default().image_memory_barriers(&img_barriers);
+            unsafe { device.handle.cmd_pipeline_barrier2(cmd, &dep); }
         }
     }
 

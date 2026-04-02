@@ -16,7 +16,7 @@
 | `ObjectSyncPass` + `MaterialSyncPass` | `passes/sync.rs` | Upload staging → SSBO GPU. Correct |
 | `GBufferPass` | `passes/gbuffer.rs` | Itère `Vec<DrawCommand>` CPU → `draw_indexed` par objet |
 | `GpuBuffers` | `gpu_buffers.rs` | `object_buffer`, `material_buffer`, `light_buffer`, `camera_ubo` |
-| `render_graph.rs::record()` | `render_graph.rs:432` | Construit `Vec<DrawCommand>` CPU-side, publie `"GBufferCommands"` |
+| `render_graph.rs::declare()` | `render_graph.rs:432` | Construit `Vec<DrawCommand>` CPU-side, publie `"GBufferCommands"` |
 | `PassContext::draw_indexed` | `graph/backend.rs:134` | Draw direct uniquement |
 | `BufferUsageFlags` | `graph/types.rs` | Pas de flag `INDIRECT_BUFFER` |
 
@@ -47,7 +47,7 @@
 
 ```mermaid
 graph TD
-    CPU[CPU record] -->|dirty delta| SyncGroup
+    CPU[CPU declare] -->|dirty delta| SyncGroup
     SyncGroup -->|mesh + instance + material sync| CullGroup
     CullGroup --> DrawCallGenPass[Niveau 0 - DrawCallGenPass]
     CullGroup --> FrustumCull[Niveau 1 - FrustumCullPass]
@@ -266,7 +266,7 @@ pub struct SyncGroup {
 }
 ```
 
-Ordre d'exécution dans `record()` :
+Ordre d'exécution dans `declare()` :
 1. `material_sync`
 2. `mesh_registry_sync`  
 3. `instance_sync`
@@ -329,7 +329,7 @@ pub struct CullPass {
 }
 ```
 
-**`record()` :**
+**`declare()` :**
 ```rust
 builder.read_buffer(instance_buffer,        ResourceUsage::SHADER_READ);
 builder.read_buffer(mesh_descriptor_buffer, ResourceUsage::SHADER_READ);
@@ -368,7 +368,7 @@ pub struct GBufferPass {
 }
 ```
 
-**`record()` :**
+**`declare()` :**
 ```rust
 self.draw_call_buffer        = builder.resolve_buffer("DrawCallBuffer");
 self.draw_count_buffer       = builder.resolve_buffer("DrawCountBuffer");
@@ -427,7 +427,7 @@ let draw_commands: Vec<DrawCommand> = scene.iter_objects()...collect();
 builder.publish("GBufferCommands", draw_commands);
 ```
 
-**Ajouter dans `record()` :**
+**Ajouter dans `declare()` :**
 ```rust
 // Importer les buffers GPU-driven
 builder.import_buffer("MeshDescriptorBuffer", self.gpu_buffers.mesh_descriptor_buffer);
@@ -440,7 +440,7 @@ builder.import_buffer("VisibleInstanceBuffer", self.gpu_buffers.visible_instance
 builder.publish("InstanceCount", scene.instance_count() as u32);
 ```
 
-**Ordre des passes dans `record()` (Phase 1 seule) :**
+**Ordre des passes dans `declare()` (Phase 1 seule) :**
 ```
 0. SyncGroup (MeshRegistrySync + InstanceSync + MaterialSync)
 1. CullGroup           (voir progression ci-dessous)
@@ -818,7 +818,7 @@ pub struct BlasBuildPass {
 }
 ```
 
-**`record()` :**
+**`declare()` :**
 ```rust
 // Déclarer le scratch buffer transient
 self.scratch_buffer = builder.declare_buffer("BlasScratch", BufferDesc {
@@ -846,7 +846,7 @@ for (mesh_id, desc) in &self.dirty_blas {
 
 **Rôle :** Mettre à jour le TLAS chaque frame à partir des transforms courants de toutes les instances (pas seulement les visibles — le RT a besoin de toutes).
 
-**`record()` :**
+**`declare()` :**
 ```rust
 self.instance_buffer = builder.resolve_buffer("InstanceBuffer"); // GpuInstanceData[]
 self.tlas_instance_buffer = builder.resolve_buffer("TlasInstanceBuffer");
@@ -891,7 +891,7 @@ pub struct AccelStructGroup {
 }
 ```
 
-**Ordre d'exécution dans `record()` :**
+**Ordre d'exécution dans `declare()` :**
 1. `blas_build`  — build les BLAS dirty
 2. Barrière AS implicite (via `ResourceUsage` dans le compile du frame graph)
 3. `tlas_update` — update le TLAS
@@ -995,7 +995,7 @@ Le frame graph compiler doit générer des barrières correctes autour des passe
 - Après `BlasBuildPass` : `VkMemoryBarrier { src=AS_WRITE, dst=AS_READ, srcStage=AS_BUILD, dstStage=AS_BUILD }`
 - Après `TlasUpdatePass` : `VkMemoryBarrier { src=AS_WRITE, dst=SHADER_READ, srcStage=AS_BUILD, dstStage=RAY_TRACING_SHADER }`
 
-Le `ResourceUsage::ACCELERATION_STRUCTURE_WRITE/READ` déclaré dans `record()` permet au compilateur de générer ces barrières automatiquement.
+Le `ResourceUsage::ACCELERATION_STRUCTURE_WRITE/READ` déclaré dans `declare()` permet au compilateur de générer ces barrières automatiquement.
 
 ---
 

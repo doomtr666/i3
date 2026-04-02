@@ -65,6 +65,13 @@ impl<'a> PassBuilder<'a> {
         self.inner.write_image(handle, usage);
     }
 
+    /// Declare that this pass will transition `handle` to PresentSrc at the end of execution.
+    /// Must be called from `declare()`. The sync planner emits the layout transition as a
+    /// post-pass barrier automatically; no manual barrier is needed in `execute()`.
+    pub fn present_image(&mut self, handle: ImageHandle) {
+        self.inner.declare_present_image(handle);
+    }
+
     pub fn write_acceleration_structure(
         &mut self,
         _handle: crate::graph::backend::BackendAccelerationStructure,
@@ -186,8 +193,8 @@ impl RenderPass for BoxedRef {
         unsafe { (*self.inner).init(backend, globals) }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
-        unsafe { (*self.inner).record(builder) }
+    fn declare(&mut self, builder: &mut PassBuilder) {
+        unsafe { (*self.inner).declare(builder) }
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
@@ -212,7 +219,7 @@ pub trait RenderPass: Any + Send + Sync {
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
     /// Declare resource intents and symbols.
-    fn record(&mut self, builder: &mut PassBuilder);
+    fn declare(&mut self, builder: &mut PassBuilder);
 
     /// Record GPU commands (optional for purely grouping nodes).
     fn execute(&self, _ctx: &mut dyn PassContext) {}
@@ -226,6 +233,7 @@ pub(crate) trait InternalPassBuilder {
 
     fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage);
     fn write_image(&mut self, handle: ImageHandle, usage: ResourceUsage);
+    fn declare_present_image(&mut self, handle: ImageHandle);
     fn read_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage);
     fn write_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage);
 

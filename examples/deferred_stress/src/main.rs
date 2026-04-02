@@ -60,7 +60,7 @@ impl ExampleApp for DeferredStressApp {
         self.render_graph.sync(&mut self.backend, &self.scene);
 
         let mut graph = FrameGraph::new();
-        self.render_graph.record(
+        self.render_graph.declare(
             &mut graph,
             self.window,
             &self.scene,

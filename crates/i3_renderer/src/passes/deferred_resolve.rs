@@ -20,7 +20,7 @@ pub struct DeferredResolvePushConstants {
 pub struct DeferredResolvePass {
     pub sampler: SamplerHandle,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     hdr_target: ImageHandle,
     gbuffer_albedo: ImageHandle,
     gbuffer_normal: ImageHandle,
@@ -75,7 +75,7 @@ impl RenderPass for DeferredResolvePass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

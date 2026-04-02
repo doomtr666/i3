@@ -362,7 +362,7 @@ impl DefaultRenderGraph {
     pub fn new(backend: &mut dyn RenderBackend, compiler: &SlangCompiler) -> Self;
 
     /// Records the full render graph for one frame.
-    pub fn record(
+    pub fn declare(
         &self,
         graph: &mut FrameGraph,
         scene: &dyn SceneProvider,
@@ -376,7 +376,7 @@ Usage from the application:
 ```rust
 fn render(&mut self) {
     let mut graph = FrameGraph::new();
-    self.render_graph.record(&mut graph, &self.ecs_bridge, self.window);
+    self.render_graph.declare(&mut graph, &self.ecs_bridge, self.window);
     let compiled = graph.compile();
     compiled.execute(&mut self.backend).unwrap();
 }

@@ -28,7 +28,7 @@ impl RenderPass for ClusteringGroup {
         self.light_cull_pass.init(backend, globals);
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         builder.add_pass(&mut self.cluster_build_pass);
         builder.add_pass(&mut self.light_cull_pass);
     }
@@ -61,7 +61,7 @@ impl RenderPass for PostProcessGroup {
         self.tonemap_pass.init(backend, globals);
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         builder.add_pass(&mut self.histogram_build_pass);
         builder.add_pass(&mut self.average_luminance_pass);
         builder.add_pass(&mut self.tonemap_pass);

@@ -49,8 +49,8 @@ Explicit GPU APIs (Vulkan, DX12) require manual synchronization barriers between
 ## Design Principles
 
 1. **Pass authors never touch barriers.** They declare what they use, the engine does the rest.
-2. **Parallel by default.** Independent passes record in parallel on separate threads.
-3. **Single recording pass.** No deferred → resolve → re-record. Declare lightweight, compile fast, record once.
+2. **Parallel by default.** Independent passes declare in parallel on separate threads.
+3. **Single recording pass.** No deferred → resolve → re-declare. Declare lightweight, compile fast, declare once.
 4. **Multi-queue transparent.** Async compute/transfer supported natively; falls back silently on single-queue GPUs.
 5. **Memory aliasing from day one.** Transient resources share memory when lifetimes don't overlap.
 6. **Hierarchical Scoping.** Both CPU data and GPU resources live in a Scoped Symbol Table.
@@ -101,7 +101,7 @@ graph TD
     
     subgraph Frame ["2. FRAME (Per-frame)"]
         direction LR
-        R["RECORD"] --> E["EXECUTE"]
+        R["declare"] --> E["EXECUTE"]
         E --> F["Flatten & Run"]
     end
 
@@ -111,7 +111,7 @@ graph TD
 
 ---
 
-## Phase 1: Record
+## Phase 1: declare
 
 The user builds an arborescent structure (Node Tree) by declaring passes and groups. CPU and GPU dependencies are handled via a **Scoped Symbol Table**.
 
@@ -134,7 +134,7 @@ pub trait RenderPass {
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &GlobalScope);
 
     /// Define per-frame dependencies and state.
-    fn record(&mut self, builder: &mut PassBuilder);
+    fn declare(&mut self, builder: &mut PassBuilder);
 
     /// Execute the node commands. Only valid for Leaf nodes.
     fn execute(&self, ctx: &mut dyn PassContext);
@@ -279,11 +279,11 @@ For `Graphics` domain passes, the system **automatically** handles rendering sco
 | `StorageReadWrite` (UAV) only | ❌ No | Ray Tracing, Compute-in-Graphics |
 | None (Read-only) | ❌ No | Blits (sometimes), Debug |
 
-**The pass author never calls begin/end rendering.** For Raster/Mesh passes, they just record draw calls. For RT, they just record `vkCmdTraceRaysKHR`.
+**The pass author never calls begin/end rendering.** For Raster/Mesh passes, they just declare draw calls. For RT, they just declare `vkCmdTraceRaysKHR`.
 
 ### Intra-Pass Parallel Recording (Secondary Command Buffers)
 
-For heavy passes (e.g., 12k objects in GBuffer), the pass can request **parallel recording via secondary CBs**. The primary CB handles begin/end rendering; secondaries record draw calls in parallel.
+For heavy passes (e.g., 12k objects in GBuffer), the pass can request **parallel recording via secondary CBs**. The primary CB handles begin/end rendering; secondaries declare draw calls in parallel.
 
 ```rust
 fn execute(&self, ctx: &mut PassContext) {
@@ -350,7 +350,7 @@ To support temporal algorithms (TAA, GI feedback), symbols can declare a **histo
 - **Reference**: Nodes access versions relative to the current frame.
 
 ```rust
-fn record(&mut self, builder: &mut PassBuilder) {
+fn declare(&mut self, builder: &mut PassBuilder) {
     // Read previous frame's result symbol
     let prev_color = builder.read_history("ColorBuffer", -1, ShaderReadOnly);
     // Write current frame's result symbol
@@ -367,10 +367,10 @@ Even if `history_depth` is 0, resources are internally versioned by the engine t
 
 ### Resolution Change
 
-The graph propagates the current render size. Nodes query it during `record()` and compute dimensions.
+The graph propagates the current render size. Nodes query it during `declare()` and compute dimensions.
 
 ```rust
-fn record(&mut self, builder: &mut PassBuilder) {
+fn declare(&mut self, builder: &mut PassBuilder) {
     let (w, h) = builder.render_size();
     builder.publish("InternalRT", ImageDesc::new(w, h, ...));
 }
@@ -378,7 +378,7 @@ fn record(&mut self, builder: &mut PassBuilder) {
 
 **On resize**: 
 1. The system detects a resolution change.
-2. The graph is rebuilt: all nodes have their `record()` method called.
+2. The graph is rebuilt: all nodes have their `declare()` method called.
 3. Persistent symbols detect descriptor changes and reallocate.
 
 `declare()` is the **unique source of truth** for all graph-managed resources. Passes do not need a separate resize hook.
@@ -537,7 +537,7 @@ To ensure the Frame Graph remains **API agnostic**, we enforce a strict separati
 
 ```mermaid
 graph LR
-    User["Engine/Pass Author"] -- "record tree" --> FG["Frame Graph (Agnostic)"]
+    User["Engine/Pass Author"] -- "declare tree" --> FG["Frame Graph (Agnostic)"]
     FG -- "compile & flatten" --> CG["Compiled Graph (Linear Steps)"]
     CG -- "execute (with Symbols)" --> RHI["RenderBackend (Vulkan/DX12)"]
     RHI -- "native calls" --> GPU["GPU"]
@@ -567,7 +567,7 @@ pub trait RenderPass {
     /// This is called whenever the graph needs rebuilding (including resizes).
     fn declare(&mut self, builder: &mut PassBuilder);
 
-    /// Record commands. Logical access via ctx.
+    /// declare commands. Logical access via ctx.
     fn execute(&self, ctx: &mut PassContext);
 }
 ```
@@ -598,7 +598,7 @@ impl FrameGraph {
     fn bind_external<T>(&mut self, name: &str, data: T);
     
     /// Root node recording.
-    fn record(&mut self, setup: impl FnOnce(&mut PassBuilder));
+    fn declare(&mut self, setup: impl FnOnce(&mut PassBuilder));
 }
 ```
 

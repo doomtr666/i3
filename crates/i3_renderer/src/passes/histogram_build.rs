@@ -15,7 +15,7 @@ pub struct HistogramPushConstants {
 pub struct HistogramBuildPass {
     pub hdr_image_name: String,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     hdr_image: ImageHandle,
     histogram_buffer: BufferHandle,
     exposure_buffer: BufferHandle,
@@ -58,7 +58,7 @@ impl RenderPass for HistogramBuildPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

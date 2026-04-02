@@ -16,10 +16,11 @@ impl RenderPass for TrianglePass {
         "MainPass"
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         self.backbuffer = builder.resolve_image("Backbuffer");
         builder.bind_pipeline(PipelineHandle(self.pipeline_id));
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+        builder.present_image(self.backbuffer);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
@@ -44,7 +45,7 @@ impl ExampleApp for TriangleApp {
         let mut graph = FrameGraph::new();
         let window = self.window;
 
-        graph.record(|builder| {
+        graph.declare(|builder| {
             let backbuffer = builder.acquire_backbuffer(window);
             builder.publish("Backbuffer", backbuffer);
             builder.add_pass(&mut self.pass);

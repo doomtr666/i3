@@ -76,7 +76,7 @@ impl UiSystem {
         }
         let full_output = self.ctx.end_pass();
         self.renderer.lock().unwrap().update_textures(backend, &full_output.textures_delta);
-        // Store the output for the record phase
+        // Store the output for the declare phase
         let mut storage = self.stored_output.lock().unwrap();
         *storage = Some(full_output);
     }

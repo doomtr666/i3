@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// A simple pass for testing that calls a closure on execute.
 struct TestPass<R, E> {
     name: String,
-    record: R,
+    declare: R,
     execute: E,
 }
 
@@ -22,8 +22,8 @@ where
         &self.name
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
-        (self.record)(builder);
+    fn declare(&mut self, builder: &mut PassBuilder) {
+        (self.declare)(builder);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
@@ -34,7 +34,7 @@ where
 /// A group node for testing hierarchy.
 struct TestGroup<R> {
     name: String,
-    record: R,
+    declare: R,
 }
 
 impl<R> RenderPass for TestGroup<R>
@@ -45,8 +45,8 @@ where
         &self.name
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
-        (self.record)(builder);
+    fn declare(&mut self, builder: &mut PassBuilder) {
+        (self.declare)(builder);
     }
 }
 
@@ -61,13 +61,13 @@ fn test_triangle_frame_flow() {
     let execution_count = Arc::new(AtomicU32::new(0));
     let exec_count_clone = execution_count.clone();
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let backbuffer = builder.acquire_backbuffer(window);
         builder.publish("SharedHandle", backbuffer);
 
         builder.add_owned_pass(TestPass {
             name: "ClearPass".to_string(),
-            record: |sub: &mut PassBuilder| {
+            declare: |sub: &mut PassBuilder| {
                 let shared = *sub.consume::<ImageHandle>("SharedHandle");
                 sub.write_image(shared, ResourceUsage::COLOR_ATTACHMENT);
             },
@@ -94,7 +94,7 @@ fn test_complex_hierarchical_graph() {
     let gbuffer_exec = Arc::new(AtomicU32::new(0));
     let gbuffer_exec_clone = gbuffer_exec.clone();
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let main_target = builder.declare_image(
             "MainTarget",
             ImageDesc::new(1920, 1080, Format::R8G8B8A8_UNORM),
@@ -105,14 +105,14 @@ fn test_complex_hierarchical_graph() {
 
         builder.add_owned_pass(TestGroup {
             name: "SceneGroup".to_string(),
-            record: move |scene: &mut PassBuilder| {
+            declare: move |scene: &mut PassBuilder| {
                 let settings = scene.consume::<String>("GlobalSettings").clone();
                 tracing::info!("Scene recording with settings: {}", settings);
 
                 let gbuffer_exec_inner = gbuffer_exec_clone.clone();
                 scene.add_owned_pass(TestPass {
                     name: "ConsumerPass".to_string(),
-                    record: move |sub: &mut PassBuilder| {
+                    declare: move |sub: &mut PassBuilder| {
                         sub.write_image(main_target, ResourceUsage::COLOR_ATTACHMENT);
                     },
                     execute: move |_ctx: &mut dyn PassContext| {
@@ -123,7 +123,7 @@ fn test_complex_hierarchical_graph() {
 
                 scene.add_owned_pass(TestPass {
                     name: "LightingPass".to_string(),
-                    record: move |sub: &mut PassBuilder| {
+                    declare: move |sub: &mut PassBuilder| {
                         sub.read_image(main_target, ResourceUsage::SHADER_READ);
                     },
                     execute: move |ctx: &mut dyn PassContext| {
@@ -136,7 +136,7 @@ fn test_complex_hierarchical_graph() {
 
         builder.add_owned_pass(TestPass {
             name: "PostPass".to_string(),
-            record: move |post: &mut PassBuilder| {
+            declare: move |post: &mut PassBuilder| {
                 post.read_image(main_target, ResourceUsage::SHADER_READ);
                 post.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
             },
@@ -158,7 +158,7 @@ fn test_modular_resource_lifecycle() {
     let mut graph = FrameGraph::new();
     let window = WindowHandle(42);
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let backbuffer = builder.acquire_backbuffer(window);
         let scene_texture = builder.declare_image(
             "SceneTex",
@@ -167,10 +167,10 @@ fn test_modular_resource_lifecycle() {
 
         builder.add_owned_pass(TestGroup {
             name: "SceneGroup".to_string(),
-            record: move |scene: &mut PassBuilder| {
+            declare: move |scene: &mut PassBuilder| {
                 scene.add_owned_pass(TestPass {
                     name: "ConsumerPass".to_string(),
-                    record: move |sub: &mut PassBuilder| {
+                    declare: move |sub: &mut PassBuilder| {
                         sub.write_image(scene_texture, ResourceUsage::COLOR_ATTACHMENT);
                     },
                     execute: |_ctx: &mut dyn PassContext| {
@@ -180,7 +180,7 @@ fn test_modular_resource_lifecycle() {
 
                 scene.add_owned_pass(TestPass {
                     name: "LightingPass".to_string(),
-                    record: move |sub: &mut PassBuilder| {
+                    declare: move |sub: &mut PassBuilder| {
                         sub.read_image(scene_texture, ResourceUsage::SHADER_READ);
                     },
                     execute: |ctx: &mut dyn PassContext| {
@@ -192,7 +192,7 @@ fn test_modular_resource_lifecycle() {
 
         builder.add_owned_pass(TestPass {
             name: "FinalBlit".to_string(),
-            record: move |sub: &mut PassBuilder| {
+            declare: move |sub: &mut PassBuilder| {
                 sub.read_image(scene_texture, ResourceUsage::SHADER_READ);
                 sub.write_image(backbuffer, ResourceUsage::COLOR_ATTACHMENT);
             },
@@ -220,7 +220,7 @@ fn make_order_pass(
 > {
     TestPass {
         name: name.to_string(),
-        record: record_fn,
+        declare: record_fn,
         execute: move |_ctx: &mut dyn PassContext| {
             let order = seq.fetch_add(1, Ordering::SeqCst);
             slot.store(order, Ordering::SeqCst);
@@ -250,7 +250,7 @@ fn test_diamond_dependency_ordering() {
         order_d.clone(),
     );
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let img = builder.declare_image("Shared", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
         let img2 = builder.declare_image("Shared2", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
@@ -316,13 +316,13 @@ fn test_independent_passes_both_execute() {
     let ea = exec_a.clone();
     let eb = exec_b.clone();
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let img_a = builder.declare_image("ImgA", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
         let img_b = builder.declare_image("ImgB", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
         builder.add_owned_pass(TestPass {
             name: "PassA".to_string(),
-            record: move |b: &mut PassBuilder| {
+            declare: move |b: &mut PassBuilder| {
                 b.write_image(img_a, ResourceUsage::COLOR_ATTACHMENT);
             },
             execute: move |_: &mut dyn PassContext| {
@@ -331,7 +331,7 @@ fn test_independent_passes_both_execute() {
         });
         builder.add_owned_pass(TestPass {
             name: "PassB".to_string(),
-            record: move |b: &mut PassBuilder| {
+            declare: move |b: &mut PassBuilder| {
                 b.write_image(img_b, ResourceUsage::COLOR_ATTACHMENT);
             },
             execute: move |_: &mut dyn PassContext| {
@@ -360,7 +360,7 @@ fn test_war_dependency() {
     let order_writer = Arc::new(AtomicU32::new(u32::MAX));
     let (s, or, ow) = (seq.clone(), order_reader.clone(), order_writer.clone());
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let buf = builder.declare_buffer(
             "SharedBuf",
             BufferDesc {
@@ -414,7 +414,7 @@ fn test_waw_dependency() {
     let order_w2 = Arc::new(AtomicU32::new(u32::MAX));
     let (s, o1, o2) = (seq.clone(), order_w1.clone(), order_w2.clone());
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let img = builder.declare_image("Target", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
         builder.add_owned_pass(make_order_pass(
@@ -464,7 +464,7 @@ fn test_linear_chain_ordering() {
         order_c.clone(),
     );
 
-    graph.record(move |builder| {
+    graph.declare(move |builder| {
         let img1 = builder.declare_image("Stage1", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
         let img2 = builder.declare_image("Stage2", ImageDesc::new(64, 64, Format::R8G8B8A8_UNORM));
 
@@ -523,7 +523,7 @@ fn test_cpu_data_dependency_ordering() {
     let ob = order_b.clone();
 
     let mut graph = FrameGraph::new();
-    graph.record(|builder| {
+    graph.declare(|builder| {
         // Pass A: CPU-only, publishes data
         builder.add_owned_pass(make_order_pass(
             "ProducerPass",

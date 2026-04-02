@@ -17,7 +17,7 @@ pub struct AverageLuminancePushConstants {
 
 /// Average luminance pass struct implementing the RenderPass trait.
 pub struct AverageLuminancePass {
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     histogram_buffer: BufferHandle,
     exposure_buffer: BufferHandle,
     history_buffer: BufferHandle,
@@ -55,7 +55,7 @@ impl RenderPass for AverageLuminancePass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

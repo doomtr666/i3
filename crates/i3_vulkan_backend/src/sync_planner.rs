@@ -220,6 +220,34 @@ pub fn translate_plan(
             }
         }
 
+        for transition in &abstract_pass.post_transitions {
+            if let abstract_sync::ResourceKind::Image = transition.resource_kind {
+                let physical_id = backend.external_to_physical.get(&transition.resource_id).copied();
+                if let Some(physical_id) = physical_id {
+                    if let Some(img) = backend.images.get(physical_id) {
+                        let barrier = vk::ImageMemoryBarrier2::default()
+                            .image(img.image)
+                            .old_layout(translate_layout_from_abstract(transition.old_state.layout))
+                            .new_layout(translate_layout_from_abstract(transition.new_state.layout))
+                            .src_access_mask(translate_access_from_abstract(transition.old_state.access))
+                            .dst_access_mask(translate_access_from_abstract(transition.new_state.access))
+                            .src_stage_mask(translate_stages_from_abstract(transition.old_state.stage))
+                            .dst_stage_mask(translate_stages_from_abstract(transition.new_state.stage))
+                            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .subresource_range(vk::ImageSubresourceRange {
+                                aspect_mask: if img.format == vk::Format::D32_SFLOAT { vk::ImageAspectFlags::DEPTH } else { vk::ImageAspectFlags::COLOR },
+                                base_mip_level: 0,
+                                level_count: img.desc.mip_levels.max(1),
+                                base_array_layer: 0,
+                                layer_count: img.desc.array_layers.max(1),
+                            });
+                        vk_plan.pass_sync[i].post_barriers.push(Barrier::Image(barrier));
+                    }
+                }
+            }
+        }
+
         for (virtual_id, op) in &abstract_pass.load_ops {
             if let Some(&physical_id) = backend.external_to_physical.get(virtual_id) {
                 if let Some(img) = backend.images.get(physical_id) {

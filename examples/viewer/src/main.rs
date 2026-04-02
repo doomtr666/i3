@@ -317,7 +317,7 @@ impl ExampleApp for DeferredGltfApp {
         self.smoothed_dt = smoothed_delta.as_secs_f32();
         self.time += self.dt;
 
-        // Accumulate for temporal graph stability (record max dt over 20ms interval)
+        // Accumulate for temporal graph stability (declare max dt over 20ms interval)
         self.sample_accum_time += self.dt;
         self.sample_max_dt = self.sample_max_dt.max(self.dt);
 
@@ -478,7 +478,7 @@ impl ExampleApp for DeferredGltfApp {
         graph.publish("UiSystem", self.ui.clone());
         graph.publish("AssetLoader", self.loader.clone());
 
-        self.render_graph.record(
+        self.render_graph.declare(
             &mut graph,
             self.window,
             &self.scene,

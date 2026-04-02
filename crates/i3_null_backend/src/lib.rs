@@ -387,10 +387,6 @@ impl RenderBackendInternal for NullBackend {
         (Some(0), None, None)
     }
 
-    fn mark_image_as_presented(&mut self, _handle: ImageHandle) {
-        // No-op
-    }
-
     fn allocate_descriptor_set(
         &mut self,
         _pipeline: i3_gfx::graph::types::PipelineHandle,

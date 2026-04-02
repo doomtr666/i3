@@ -15,7 +15,7 @@ pub struct LightCullPass {
     pub push_constants: LightCullPushConstants,
     pub light_buffer_name: String,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     cluster_aabbs: BufferHandle,
     lights: BufferHandle,
     cluster_grid: BufferHandle,
@@ -59,7 +59,7 @@ impl RenderPass for LightCullPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

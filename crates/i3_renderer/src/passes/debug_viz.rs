@@ -35,7 +35,7 @@ pub struct DebugVizPass {
     pub channel: DebugChannel,
     pub backbuffer_name: String,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     backbuffer: ImageHandle,
     gbuffer_albedo: ImageHandle,
     gbuffer_normal: ImageHandle,
@@ -82,7 +82,7 @@ impl RenderPass for DebugVizPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }
@@ -116,8 +116,9 @@ impl RenderPass for DebugVizPass {
         builder.read_image(self.gbuffer_emissive, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_depth, ResourceUsage::SHADER_READ);
 
-        // Write to backbuffer
+        // Write to backbuffer, then transition to PresentSrc
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+        builder.present_image(self.backbuffer);
 
         // Bind GBuffer textures via push descriptors
         builder.bind_descriptor_set(

@@ -17,7 +17,7 @@ pub struct SkyPushConstants {
 
 /// Sky pass struct implementing the RenderPass trait.
 pub struct SkyPass {
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     hdr_target: ImageHandle,
     depth_buffer: ImageHandle,
 
@@ -55,7 +55,7 @@ impl RenderPass for SkyPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

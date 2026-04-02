@@ -23,7 +23,6 @@ impl<T> Copy for SyncPtr<T> {}
 unsafe impl<T> Send for SyncPtr<T> {}
 unsafe impl<T> Sync for SyncPtr<T> {}
 
-
 /// Metadata and data for an entry in the symbol table.
 pub struct Symbol {
     pub name: String,
@@ -102,6 +101,11 @@ pub struct NodeStorage {
     pub swapchain_requests: Vec<(ImageHandle, WindowHandle)>,
     pub descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
     pub prefer_async: bool,
+    /// Images that must be transitioned to PresentSrc AFTER this pass executes.
+    /// Tracked separately from image_writes so the planner can emit a post-transition
+    /// rather than merging PRESENT with the pass's main usage (which would lose the
+    /// correct target layout/stage via priority ordering in get_image_state).
+    pub present_images: Vec<ImageHandle>,
 }
 
 impl std::fmt::Debug for NodeStorage {
@@ -177,6 +181,17 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
 
     fn write_image(&mut self, handle: ImageHandle, usage: ResourceUsage) {
         self.storage.image_writes.push((handle, usage));
+    }
+
+    fn declare_present_image(&mut self, handle: ImageHandle) {
+        // Register in present_images for post-transition barrier generation.
+        self.storage.present_images.push(handle);
+        // Also register as a read dependency so the DAG correctly orders this pass
+        // after any pass that writes to the image. PRESENT is filtered out of the
+        // normal scratch loop in simulate_pass (handled by the post_transitions block).
+        self.storage
+            .image_reads
+            .push((handle, ResourceUsage::PRESENT));
     }
 
     fn bind_pipeline(&mut self, handle: PipelineHandle) {
@@ -362,6 +377,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             swapchain_requests: Vec::new(),
             descriptor_sets: Vec::new(),
             prefer_async,
+            present_images: Vec::new(),
         };
 
         // Put it back but we need to record first
@@ -379,7 +395,7 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             let mut builder = PassBuilder {
                 inner: &mut sub_recorder,
             };
-            pass.record(&mut builder);
+            pass.declare(&mut builder);
         }
 
         // Put the real pass back
@@ -425,6 +441,7 @@ impl FrameGraph {
                 swapchain_requests: Vec::new(),
                 descriptor_sets: Vec::new(),
                 prefer_async: false,
+                present_images: Vec::new(),
             },
             outputs: HashMap::new(),
         }
@@ -436,7 +453,7 @@ impl FrameGraph {
         self.outputs.insert(handle.into(), kind);
     }
 
-    pub fn record<F>(&mut self, setup: F)
+    pub fn declare<F>(&mut self, setup: F)
     where
         F: FnOnce(&mut PassBuilder),
     {
@@ -484,9 +501,12 @@ impl FrameGraph {
 
     /// Resolve a typed symbol from the global blackboard. Panics if not found.
     pub fn consume<T: 'static + Send + Sync>(&self, name: &str) -> &T {
-        let id = self.globals.resolve(name)
+        let id = self
+            .globals
+            .resolve(name)
             .unwrap_or_else(|| panic!("Global symbol '{}' not found", name));
-        self.globals.get_data(id)
+        self.globals
+            .get_data(id)
             .and_then(|any| any.downcast_ref::<T>())
             .unwrap_or_else(|| panic!("Type mismatch for global symbol '{}'", name))
     }
@@ -494,8 +514,7 @@ impl FrameGraph {
     /// Resolve a typed symbol from the global blackboard. Returns None if not found.
     pub fn try_consume<T: 'static + Send + Sync>(&self, name: &str) -> Option<&T> {
         let id = self.globals.resolve(name)?;
-        self.globals.get_data(id)?
-            .downcast_ref::<T>()
+        self.globals.get_data(id)?.downcast_ref::<T>()
     }
 
     /// Initializes all registered passes using the Global Scope.
@@ -576,7 +595,11 @@ impl FrameGraph {
                         let dst_queue = pass.queue;
                         if src_queue != dst_queue {
                             let value = *next_sync_value.get(&src_queue).unwrap_or(&0);
-                            if value > *last_signaled_value.get(&(src_queue, dst_queue)).unwrap_or(&0) {
+                            if value
+                                > *last_signaled_value
+                                    .get(&(src_queue, dst_queue))
+                                    .unwrap_or(&0)
+                            {
                                 pending_waits.push(ExecutionStep::Wait {
                                     queue: dst_queue,
                                     on: src_queue,
@@ -594,7 +617,18 @@ impl FrameGraph {
                 _ => unreachable!(),
             });
             pending_waits.dedup_by(|a, b| match (a, b) {
-                (ExecutionStep::Wait { queue: q1, on: o1, value: v1 }, ExecutionStep::Wait { queue: q2, on: o2, value: v2 }) => q1 == q2 && o1 == o2 && v1 == v2,
+                (
+                    ExecutionStep::Wait {
+                        queue: q1,
+                        on: o1,
+                        value: v1,
+                    },
+                    ExecutionStep::Wait {
+                        queue: q2,
+                        on: o2,
+                        value: v2,
+                    },
+                ) => q1 == q2 && o1 == o2 && v1 == v2,
                 _ => false,
             });
             steps.extend(pending_waits);
@@ -716,6 +750,7 @@ impl FrameGraph {
                 queue: QueueType::Graphics, // Assigned during compilation
                 releases: Vec::new(),
                 acquires: Vec::new(),
+                present_images: node.present_images.clone(),
             });
         }
 
@@ -758,19 +793,25 @@ impl FrameGraph {
 
                     // RAW: j reads what i writes
                     for (h, usage_i) in &passes[i].image_writes {
-                        if let Some((_, usage_j)) = passes[j].image_reads.iter().find(|(rh, _)| rh.0 == h.0) {
+                        if let Some((_, usage_j)) =
+                            passes[j].image_reads.iter().find(|(rh, _)| rh.0 == h.0)
+                        {
                             shared_images.push((*h, *usage_i, *usage_j));
                         }
                     }
                     // WAW: j writes what i writes
                     for (h, usage_i) in &passes[i].image_writes {
-                        if let Some((_, usage_j)) = passes[j].image_writes.iter().find(|(wh, _)| wh.0 == h.0) {
+                        if let Some((_, usage_j)) =
+                            passes[j].image_writes.iter().find(|(wh, _)| wh.0 == h.0)
+                        {
                             shared_images.push((*h, *usage_i, *usage_j));
                         }
                     }
                     // WAR: j writes what i reads
                     for (h, usage_i) in &passes[i].image_reads {
-                        if let Some((_, usage_j)) = passes[j].image_writes.iter().find(|(wh, _)| wh.0 == h.0) {
+                        if let Some((_, usage_j)) =
+                            passes[j].image_writes.iter().find(|(wh, _)| wh.0 == h.0)
+                        {
                             shared_images.push((*h, *usage_i, *usage_j));
                         }
                     }
@@ -786,15 +827,22 @@ impl FrameGraph {
                         };
 
                         // Add to source pass if not already there
-                        if !passes[i].releases.iter().any(|r| r.image == Some(h) && r.dst_queue == dst_queue) {
+                        if !passes[i]
+                            .releases
+                            .iter()
+                            .any(|r| r.image == Some(h) && r.dst_queue == dst_queue)
+                        {
                             passes[i].releases.push(transfer);
                         }
                         // Add to destination pass if not already there
-                        if !passes[j].acquires.iter().any(|r| r.image == Some(h) && r.src_queue == src_queue) {
+                        if !passes[j]
+                            .acquires
+                            .iter()
+                            .any(|r| r.image == Some(h) && r.src_queue == src_queue)
+                        {
                             passes[j].acquires.push(transfer);
                         }
                     }
-
                 }
             }
         }
@@ -912,8 +960,6 @@ impl FrameGraph {
         (order, levels)
     }
 }
-
-
 
 /// A discrete step in the compiled execution plan.
 #[derive(Debug)]
@@ -1037,10 +1083,17 @@ impl CompiledGraph {
         for step in &self.steps {
             match step {
                 ExecutionStep::Signal { queue, value } => {
-                    batch.steps.push(BatchStep::Signal { queue: *queue, value: *value });
+                    batch.steps.push(BatchStep::Signal {
+                        queue: *queue,
+                        value: *value,
+                    });
                 }
                 ExecutionStep::Wait { queue, on, value } => {
-                    batch.steps.push(BatchStep::Wait { queue: *queue, on: *on, value: *value });
+                    batch.steps.push(BatchStep::Wait {
+                        queue: *queue,
+                        on: *on,
+                        value: *value,
+                    });
                 }
                 ExecutionStep::Barriers(pass_indices) => {
                     let mut graphics_refs = Vec::new();
@@ -1079,13 +1132,10 @@ impl CompiledGraph {
                         if let Some(node_ptr) = node_map.get(&flat.node_id) {
                             let node = unsafe { &mut *node_ptr.0 };
                             tracing::debug!(pass = %flat.name, domain = ?flat.domain, queue = ?flat.queue, "Executing pass");
-                            let (_sem, cb, present_req) =
+                            let (_sem, cb, _present_req) =
                                 backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
                             if let Some(c) = cb {
                                 push_cb(&mut batch, flat.queue, c);
-                            }
-                            if let Some(h) = present_req {
-                                backend.mark_image_as_presented(h);
                             }
                         }
                     }
@@ -1098,8 +1148,10 @@ impl CompiledGraph {
                                 let flat = &self.flat_passes[pass_idx];
                                 if let Some(node_ptr) = node_map.get(&flat.node_id) {
                                     let node = unsafe { &mut *node_ptr.0 };
-                                    let (_sem, cb, present_req) = backend
-                                        .record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
+                                    let (_sem, cb, present_req) = backend.record_pass(
+                                        prepared,
+                                        node.pass.as_ref().unwrap().as_ref(),
+                                    );
                                     return Some((cb, present_req, flat.queue));
                                 }
                             }
@@ -1107,12 +1159,9 @@ impl CompiledGraph {
                         })
                         .collect();
 
-                    for (cb, present_req, queue) in parallel_results {
+                    for (cb, _present_req, queue) in parallel_results {
                         if let Some(c) = cb {
                             push_cb(&mut batch, queue, c);
-                        }
-                        if let Some(h) = present_req {
-                            backend.mark_image_as_presented(h);
                         }
                     }
                 }

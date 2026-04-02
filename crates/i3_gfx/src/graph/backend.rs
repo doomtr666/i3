@@ -19,11 +19,21 @@ pub struct BackendCommandBuffer(pub u64);
 /// separate vkQueueSubmit calls, preventing cross-queue deadlocks.
 #[derive(Debug, Clone)]
 pub enum BatchStep {
-    Command { queue: crate::graph::types::QueueType, cb: BackendCommandBuffer },
+    Command {
+        queue: crate::graph::types::QueueType,
+        cb: BackendCommandBuffer,
+    },
     /// Target queue waits for `on` queue to reach `value` before executing.
-    Wait { queue: crate::graph::types::QueueType, on: crate::graph::types::QueueType, value: u64 },
+    Wait {
+        queue: crate::graph::types::QueueType,
+        on: crate::graph::types::QueueType,
+        value: u64,
+    },
     /// Queue signals its timeline — closes the current sub-batch for that queue.
-    Signal { queue: crate::graph::types::QueueType, value: u64 },
+    Signal {
+        queue: crate::graph::types::QueueType,
+        value: u64,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,7 +54,6 @@ pub struct WindowDesc {
     pub width: u32,
     pub height: u32,
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
@@ -102,9 +111,9 @@ pub struct SwapchainConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BackendAccelerationStructure(pub u64);
 
-use bitflags::bitflags;
-use crate::prelude::Format;
 use crate::graph::pipeline::IndexType;
+use crate::prelude::Format;
+use bitflags::bitflags;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -171,7 +180,7 @@ pub struct PassDescriptor<'a> {
     pub acquires: &'a [CrossQueueTransfer],
 }
 
-/// Hardware-specific context used to record commands during a pass.
+/// Hardware-specific context used to declare commands during a pass.
 pub trait PassContext {
     // Pipeline & Binding (Logical interfaces)
     fn bind_pipeline(&mut self, pipeline: crate::graph::types::PipelineHandle);
@@ -234,19 +243,19 @@ pub trait PassContext {
         &mut self,
         indirect_buffer: BufferHandle,
         indirect_offset: u64,
-        count_buffer:    BufferHandle,
-        count_offset:    u64,
-        max_draw_count:  u32,
-        stride:          u32,
+        count_buffer: BufferHandle,
+        count_offset: u64,
+        max_draw_count: u32,
+        stride: u32,
     );
     fn draw_indirect_count(
         &mut self,
         indirect_buffer: BufferHandle,
         indirect_offset: u64,
-        count_buffer:    BufferHandle,
-        count_offset:    u64,
-        max_draw_count:  u32,
-        stride:          u32,
+        count_buffer: BufferHandle,
+        count_offset: u64,
+        max_draw_count: u32,
+        stride: u32,
     );
     fn clear_buffer(&mut self, buffer: crate::graph::types::BufferHandle, clear_value: u32);
     fn present(&mut self, image: crate::graph::types::ImageHandle);
@@ -291,10 +300,10 @@ pub struct DescriptorSetHandle(pub u64);
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DrawIndexedIndirectCommand {
-    pub index_count:    u32,
+    pub index_count: u32,
     pub instance_count: u32,
-    pub first_index:    u32,
-    pub vertex_offset:  i32,
+    pub first_index: u32,
+    pub vertex_offset: i32,
     pub first_instance: u32,
 }
 
@@ -303,9 +312,9 @@ pub struct DrawIndexedIndirectCommand {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DrawIndirectCommand {
-    pub vertex_count:   u32,
+    pub vertex_count: u32,
     pub instance_count: u32,
-    pub first_vertex:   u32,
+    pub first_vertex: u32,
     pub first_instance: u32,
 }
 
@@ -333,8 +342,6 @@ pub trait RenderBackend {
     /// Initialize the backend with a specific device.
     /// Should be called before any other operation.
     fn initialize(&mut self, device_id: u32) -> Result<(), String>;
-
-
 
     // --- Windowing & Events (Managed by Backend) ---
 
@@ -420,7 +427,6 @@ pub trait RenderBackend {
     /// Returns the handle ID of the global bindless descriptor set.
     fn get_bindless_set_handle(&self) -> u64;
 
-
     // --- Resource Resolution ---
     fn resolve_image(&self, handle: crate::graph::types::ImageHandle) -> BackendImage;
     fn resolve_buffer(&self, handle: crate::graph::types::BufferHandle) -> BackendBuffer;
@@ -469,12 +475,7 @@ pub trait RenderBackend {
     );
 
     /// Updates a specific binding in a bindless descriptor set with a sampler.
-    fn update_bindless_sampler(
-        &mut self,
-        sampler: SamplerHandle,
-        set: u64,
-        binding: u32,
-    );
+    fn update_bindless_sampler(&mut self, sampler: SamplerHandle, set: u64, binding: u32);
 
     // --- Debug Utilities ---
     /// Nests a name for an image (no-op in release).
@@ -533,7 +534,10 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
 
     /// Statelessly analyzes the frame's pass list to generate a synchronization plan.
     /// This must be called before any pass preparation or recording.
-    fn analyze_frame(&mut self, passes: &[crate::graph::types::FlatPass]) -> crate::graph::sync::SyncPlan;
+    fn analyze_frame(
+        &mut self,
+        passes: &[crate::graph::types::FlatPass],
+    ) -> crate::graph::sync::SyncPlan;
 
     /// Acquire the next available image from the swapchain associated with the window.
     fn acquire_swapchain_image(
@@ -544,22 +548,21 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
     // --- Execution & Sync ---
 
     /// Submit a batch of commands to the GPU.
-    fn submit(
-        &mut self,
-        batch: CommandBatch,
-    ) -> Result<u64, String>;
+    fn submit(&mut self, batch: CommandBatch) -> Result<u64, String>;
 
     type PreparedPass: Send + Sync;
     fn prepare_pass(&mut self, pass_index: usize, desc: PassDescriptor) -> Self::PreparedPass;
-    
 
     /// Get the queue assigned to a prepared pass.
-    fn get_prepared_pass_queue(&self, prepared: &Self::PreparedPass) -> crate::graph::types::QueueType;
+    fn get_prepared_pass_queue(
+        &self,
+        prepared: &Self::PreparedPass,
+    ) -> crate::graph::types::QueueType;
 
-    /// Record barriers for a batch of prepared passes into a command buffer.
+    /// declare barriers for a batch of prepared passes into a command buffer.
     fn record_barriers(&mut self, passes: &[&Self::PreparedPass]) -> Option<BackendCommandBuffer>;
 
-    /// Record a pass into a command buffer.
+    /// declare a pass into a command buffer.
     fn record_pass(
         &self,
         prepared: &Self::PreparedPass,
@@ -569,10 +572,6 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
         Option<BackendCommandBuffer>,
         Option<crate::graph::types::ImageHandle>,
     );
-
-    /// Forcefully updates an image state to PRESENT_SRC_KHR.
-    /// Used after parallel recording to synchronize backend state.
-    fn mark_image_as_presented(&mut self, handle: crate::graph::types::ImageHandle);
 
     // --- Descriptor Management (Internal) ---
     fn allocate_descriptor_set(

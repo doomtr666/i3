@@ -16,7 +16,7 @@ pub struct TonemapPass {
     pub backbuffer_name: String,
     pub hdr_image_name: String,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     backbuffer: ImageHandle,
     hdr_target: ImageHandle,
     exposure_buffer: BufferHandle,
@@ -59,7 +59,7 @@ impl RenderPass for TonemapPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

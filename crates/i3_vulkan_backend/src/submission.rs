@@ -24,7 +24,7 @@
 //! ## Frame-in-Flight
 //!
 //! The backend uses multiple frame contexts (typically 2-3) to allow the CPU
-//! to record commands while the GPU is still processing previous frames.
+//! to declare commands while the GPU is still processing previous frames.
 //! Each frame context has its own command pool and descriptor pool.
 
 use ash::vk;
@@ -83,13 +83,13 @@ pub fn wait_for_timeline(
 /// # Frame-in-Flight Pattern
 ///
 /// The backend uses multiple frame contexts (typically 2-3) to allow the CPU
-/// to record commands while the GPU is still processing previous frames.
+/// to declare commands while the GPU is still processing previous frames.
 /// Each frame context has its own command pool and descriptor pool.
 ///
 /// ```text
-/// Frame 0: [Record] → [Submit] → [GPU Process] → [Wait] → [Reset] → [Record] ...
-/// Frame 1:            [Record] → [Submit] → [GPU Process] → [Wait] → [Reset] ...
-/// Frame 2:                       [Record] → [Submit] → [GPU Process] → [Wait] ...
+/// Frame 0: [declare] → [Submit] → [GPU Process] → [Wait] → [Reset] → [declare] ...
+/// Frame 1:            [declare] → [Submit] → [GPU Process] → [Wait] → [Reset] ...
+/// Frame 2:                       [declare] → [Submit] → [GPU Process] → [Wait] ...
 /// ```
 pub fn begin_frame(backend: &mut VulkanBackend) {
     if backend.frame_started {
@@ -97,12 +97,15 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
     }
 
     let device = backend.get_device().clone();
-    
+
     let (num_contexts, timeline_sem) = {
-        let g = backend.graphics.as_ref().expect("Graphics queue not initialized");
+        let g = backend
+            .graphics
+            .as_ref()
+            .expect("Graphics queue not initialized");
         (g.frame_contexts.len(), g.timeline_sem)
     };
-    
+
     backend.global_frame_index = (backend.global_frame_index + 1) % num_contexts;
     backend.frame_count += 1;
 
@@ -157,10 +160,18 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
     // Graphics wait (above) only covers the graphics queue; compute and transfer
     // are independent queues that may still be processing frame N work.
     let frame_index = backend.global_frame_index;
-    let compute_wait = backend.compute.as_ref()
-        .map(|c| (c.timeline_sem, c.frame_contexts[frame_index].last_completion_value));
-    let transfer_wait = backend.transfer.as_ref()
-        .map(|t| (t.timeline_sem, t.frame_contexts[frame_index].last_completion_value));
+    let compute_wait = backend.compute.as_ref().map(|c| {
+        (
+            c.timeline_sem,
+            c.frame_contexts[frame_index].last_completion_value,
+        )
+    });
+    let transfer_wait = backend.transfer.as_ref().map(|t| {
+        (
+            t.timeline_sem,
+            t.frame_contexts[frame_index].last_completion_value,
+        )
+    });
 
     if let Some((sem, value)) = compute_wait {
         if value > 0 {
@@ -170,7 +181,9 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
                 .semaphores(&semaphores)
                 .values(&values);
             unsafe {
-                device.handle.wait_semaphores(&wait_info, u64::MAX)
+                device
+                    .handle
+                    .wait_semaphores(&wait_info, u64::MAX)
                     .expect("Failed to wait for compute frame timeline");
             }
         }
@@ -183,7 +196,9 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
                 .semaphores(&semaphores)
                 .values(&values);
             unsafe {
-                device.handle.wait_semaphores(&wait_info, u64::MAX)
+                device
+                    .handle
+                    .wait_semaphores(&wait_info, u64::MAX)
                     .expect("Failed to wait for transfer frame timeline");
             }
         }
@@ -192,15 +207,29 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
     if let Some(compute) = backend.compute.as_mut() {
         let extra_ctx = &mut compute.frame_contexts[frame_index];
         unsafe {
-            device.handle.reset_command_pool(extra_ctx.command_pool, vk::CommandPoolResetFlags::empty())
+            device
+                .handle
+                .reset_command_pool(extra_ctx.command_pool, vk::CommandPoolResetFlags::empty())
                 .expect("Failed to reset compute command pool");
-            device.handle.reset_descriptor_pool(extra_ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+            device
+                .handle
+                .reset_descriptor_pool(
+                    extra_ctx.descriptor_pool,
+                    vk::DescriptorPoolResetFlags::empty(),
+                )
                 .expect("Failed to reset compute descriptor pool");
             for tp_mutex in &extra_ctx.per_thread_pools {
                 let mut tp = tp_mutex.lock().unwrap();
-                device.handle.reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
+                device
+                    .handle
+                    .reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
                     .expect("Failed to reset compute thread command pool");
-                device.handle.reset_descriptor_pool(tp.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                device
+                    .handle
+                    .reset_descriptor_pool(
+                        tp.descriptor_pool,
+                        vk::DescriptorPoolResetFlags::empty(),
+                    )
                     .expect("Failed to reset compute thread descriptor pool");
                 tp.cursor = 0;
             }
@@ -212,15 +241,29 @@ pub fn begin_frame(backend: &mut VulkanBackend) {
     if let Some(transfer) = backend.transfer.as_mut() {
         let extra_ctx = &mut transfer.frame_contexts[frame_index];
         unsafe {
-            device.handle.reset_command_pool(extra_ctx.command_pool, vk::CommandPoolResetFlags::empty())
+            device
+                .handle
+                .reset_command_pool(extra_ctx.command_pool, vk::CommandPoolResetFlags::empty())
                 .expect("Failed to reset transfer command pool");
-            device.handle.reset_descriptor_pool(extra_ctx.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+            device
+                .handle
+                .reset_descriptor_pool(
+                    extra_ctx.descriptor_pool,
+                    vk::DescriptorPoolResetFlags::empty(),
+                )
                 .expect("Failed to reset transfer descriptor pool");
             for tp_mutex in &extra_ctx.per_thread_pools {
                 let mut tp = tp_mutex.lock().unwrap();
-                device.handle.reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
+                device
+                    .handle
+                    .reset_command_pool(tp.pool, vk::CommandPoolResetFlags::empty())
                     .expect("Failed to reset transfer thread command pool");
-                device.handle.reset_descriptor_pool(tp.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                device
+                    .handle
+                    .reset_descriptor_pool(
+                        tp.descriptor_pool,
+                        vk::DescriptorPoolResetFlags::empty(),
+                    )
                     .expect("Failed to reset transfer thread descriptor pool");
                 tp.cursor = 0;
             }
@@ -295,13 +338,8 @@ pub fn acquire_swapchain_image(
             }
 
             if let Some((surface, w, h, config)) = sc_to_init {
-                let sc_res = crate::swapchain::VulkanSwapchain::new(
-                    device.clone(),
-                    surface,
-                    w,
-                    h,
-                    config,
-                );
+                let sc_res =
+                    crate::swapchain::VulkanSwapchain::new(device.clone(), surface, w, h, config);
 
                 match sc_res {
                     Ok(sc) => {
@@ -317,7 +355,7 @@ pub fn acquire_swapchain_image(
 
                         let ctx = backend.windows.get_mut(&window.0).unwrap();
                         ctx.swapchain = Some(sc);
-                        
+
                         let old_ids: Vec<_> = ctx.present_semaphore_ids.drain(..).collect();
                         for id in old_ids {
                             if let Some(sem) = backend.semaphores.remove(id) {
@@ -354,9 +392,16 @@ pub fn acquire_swapchain_image(
                     }
 
                     let (old_id, images_to_remove) = {
-                        let ctx = backend.windows.get_mut(&window.0).expect("Window context missing");
-                        let sc = ctx.swapchain.take().expect("Swapchain missing in suboptimal state");
-                        let old_id = ctx.acquire_semaphore_ids[frame_slot % ctx.acquire_semaphore_ids.len()];
+                        let ctx = backend
+                            .windows
+                            .get_mut(&window.0)
+                            .expect("Window context missing");
+                        let sc = ctx
+                            .swapchain
+                            .take()
+                            .expect("Swapchain missing in suboptimal state");
+                        let old_id =
+                            ctx.acquire_semaphore_ids[frame_slot % ctx.acquire_semaphore_ids.len()];
                         (old_id, sc.images.clone())
                     };
 
@@ -386,7 +431,7 @@ pub fn acquire_swapchain_image(
                     if let Some(img) = backend.images.get_mut(id) {
                         img.last_layout = vk::ImageLayout::UNDEFINED;
                         img.last_access = vk::AccessFlags2::empty();
-                        img.last_stage = vk::PipelineStageFlags2::TOP_OF_PIPE;
+                        img.last_stage = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
                     }
                     id
                 } else {
@@ -403,7 +448,7 @@ pub fn acquire_swapchain_image(
                         format: swapchain.format,
                         last_layout: vk::ImageLayout::UNDEFINED,
                         last_access: vk::AccessFlags2::empty(),
-                        last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        last_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                         last_write_frame: 0,
                         last_queue_family: backend.graphics_family,
                         is_swapchain: true,
@@ -463,9 +508,7 @@ impl SubBatch {
     }
 
     fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-            && self.wait_sems.is_empty()
-            && self.signal_sems.is_empty()
+        self.commands.is_empty() && self.wait_sems.is_empty() && self.signal_sems.is_empty()
     }
 }
 
@@ -475,52 +518,78 @@ impl SubBatch {
 /// Signal boundary. This prevents cross-queue deadlocks when Graphics → Compute
 /// → Graphics dependency chains exist — each "phase" of a queue gets its own
 /// submission with only the waits that apply to that phase.
-pub fn submit(
-    backend: &mut VulkanBackend,
-    batch: CommandBatch,
-) -> Result<u64, String> {
+pub fn submit(backend: &mut VulkanBackend, batch: CommandBatch) -> Result<u64, String> {
     let device = backend.get_device().clone();
 
     // 1. Snapshot base timeline values (before any signals this frame)
-    let graphics_base = backend.graphics.as_ref().map(|q| q.cpu_timeline).unwrap_or(0);
-    let compute_base  = backend.compute.as_ref().map(|q| q.cpu_timeline).unwrap_or(0);
-    let transfer_base = backend.transfer.as_ref().map(|q| q.cpu_timeline).unwrap_or(0);
+    let graphics_base = backend
+        .graphics
+        .as_ref()
+        .map(|q| q.cpu_timeline)
+        .unwrap_or(0);
+    let compute_base = backend
+        .compute
+        .as_ref()
+        .map(|q| q.cpu_timeline)
+        .unwrap_or(0);
+    let transfer_base = backend
+        .transfer
+        .as_ref()
+        .map(|q| q.cpu_timeline)
+        .unwrap_or(0);
 
-    let (graphics_timeline, graphics_family) = backend.graphics.as_ref()
-        .map(|q| (q.timeline_sem, q.family)).unwrap_or((vk::Semaphore::null(), 0));
-    let (compute_timeline,  compute_family)  = backend.compute.as_ref()
-        .map(|q| (q.timeline_sem, q.family)).unwrap_or((vk::Semaphore::null(), 0));
-    let (transfer_timeline, transfer_family) = backend.transfer.as_ref()
-        .map(|q| (q.timeline_sem, q.family)).unwrap_or((vk::Semaphore::null(), 0));
+    let (graphics_timeline, graphics_family) = backend
+        .graphics
+        .as_ref()
+        .map(|q| (q.timeline_sem, q.family))
+        .unwrap_or((vk::Semaphore::null(), 0));
+    let (compute_timeline, compute_family) = backend
+        .compute
+        .as_ref()
+        .map(|q| (q.timeline_sem, q.family))
+        .unwrap_or((vk::Semaphore::null(), 0));
+    let (transfer_timeline, transfer_family) = backend
+        .transfer
+        .as_ref()
+        .map(|q| (q.timeline_sem, q.family))
+        .unwrap_or((vk::Semaphore::null(), 0));
 
     let base_for = |q: QueueType| match q {
-        QueueType::Graphics    => graphics_base,
+        QueueType::Graphics => graphics_base,
         QueueType::AsyncCompute => compute_base,
-        QueueType::Transfer    => transfer_base,
+        QueueType::Transfer => transfer_base,
     };
     let timeline_sem_for = |q: QueueType| match q {
-        QueueType::Graphics    => graphics_timeline,
+        QueueType::Graphics => graphics_timeline,
         QueueType::AsyncCompute => compute_timeline,
-        QueueType::Transfer    => transfer_timeline,
+        QueueType::Transfer => transfer_timeline,
     };
     let _family_for = |q: QueueType| match q {
-        QueueType::Graphics    => graphics_family,
+        QueueType::Graphics => graphics_family,
         QueueType::AsyncCompute => compute_family,
-        QueueType::Transfer    => transfer_family,
+        QueueType::Transfer => transfer_family,
     };
     let queue_handle_for = |backend: &VulkanBackend, q: QueueType| match q {
-        QueueType::Graphics    => backend.graphics.as_ref().unwrap().queue,
+        QueueType::Graphics => backend.graphics.as_ref().unwrap().queue,
         QueueType::AsyncCompute => backend.compute.as_ref().unwrap().queue,
-        QueueType::Transfer    => backend.transfer.as_ref().unwrap().queue,
+        QueueType::Transfer => backend.transfer.as_ref().unwrap().queue,
     };
 
     // 2. Collect swapchain binary semaphores
     let mut active_windows = Vec::with_capacity(2);
     for ctx in backend.windows.values_mut() {
-        if let (Some(a_id), Some(i)) = (ctx.current_acquire_sem_id.take(), ctx.current_image_index.take()) {
+        if let (Some(a_id), Some(i)) = (
+            ctx.current_acquire_sem_id.take(),
+            ctx.current_image_index.take(),
+        ) {
             let release_sem = ctx.present_semaphores[i as usize];
             let acquire_sem = backend.semaphores.get(a_id).cloned().unwrap();
-            active_windows.push((ctx.swapchain.as_ref().unwrap().handle, i, acquire_sem, release_sem));
+            active_windows.push((
+                ctx.swapchain.as_ref().unwrap().handle,
+                i,
+                acquire_sem,
+                release_sem,
+            ));
         }
     }
 
@@ -545,7 +614,8 @@ pub fn submit(
         match step {
             BatchStep::Command { queue, cb } => {
                 let sub = open.entry(*queue).or_insert_with(SubBatch::new);
-                sub.commands.push(unsafe { std::mem::transmute::<u64, vk::CommandBuffer>(cb.0) });
+                sub.commands
+                    .push(unsafe { std::mem::transmute::<u64, vk::CommandBuffer>(cb.0) });
             }
             BatchStep::Wait { queue, on, value } => {
                 let sub = open.entry(*queue).or_insert_with(SubBatch::new);
@@ -559,7 +629,8 @@ pub fn submit(
                 let sub = open.entry(*queue).or_insert_with(SubBatch::new);
                 sub.signal_sems.push(timeline_sem_for(*queue));
                 sub.signal_values.push(abs);
-                *max_signal.entry(*queue).or_insert(0) = (*max_signal.get(queue).unwrap_or(&0)).max(abs);
+                *max_signal.entry(*queue).or_insert(0) =
+                    (*max_signal.get(queue).unwrap_or(&0)).max(abs);
 
                 // Close this sub-batch and start fresh for the next phase
                 let closed = open.remove(queue).unwrap();
@@ -582,7 +653,9 @@ pub fn submit(
 
         // Find or create the last Graphics open sub-batch and append legacy commands
         if !legacy.is_empty() {
-            let sub = open.entry(QueueType::Graphics).or_insert_with(SubBatch::new);
+            let sub = open
+                .entry(QueueType::Graphics)
+                .or_insert_with(SubBatch::new);
             sub.commands.extend(legacy);
         }
     }
@@ -603,9 +676,15 @@ pub fn submit(
     // Release binary → last sub-batch overall (the last submitted work before present,
     // regardless of queue). Using finalized.last() is always correct because inter-queue
     // timeline semaphores enforce ordering, so the last entry finishes last on the GPU.
-    let acquire_target_idx = finalized.iter().position(|(q, _)| *q == QueueType::Graphics)
+    let acquire_target_idx = finalized
+        .iter()
+        .position(|(q, _)| *q == QueueType::Graphics)
         .or_else(|| if finalized.is_empty() { None } else { Some(0) });
-    let release_target_idx = if finalized.is_empty() { None } else { Some(finalized.len() - 1) };
+    let release_target_idx = if finalized.is_empty() {
+        None
+    } else {
+        Some(finalized.len() - 1)
+    };
 
     if let Some(idx) = acquire_target_idx {
         let wait_stage = if finalized[idx].0 == QueueType::Graphics {
@@ -660,7 +739,9 @@ pub fn submit(
                 gfx.cpu_timeline = gfx.cpu_timeline.max(v);
             }
             gfx.cpu_timeline
-        } else { 0 }
+        } else {
+            0
+        }
     };
     if let Some(compute) = backend.compute.as_mut() {
         if let Some(&v) = max_signal.get(&QueueType::AsyncCompute) {
@@ -686,11 +767,13 @@ pub fn submit(
             .wait_semaphores(&sems)
             .swapchains(&scs)
             .image_indices(&idxs);
-        unsafe { fp.queue_present(graphics_queue, &pi).ok(); }
+        unsafe {
+            fp.queue_present(graphics_queue, &pi).ok();
+        }
     }
 
     // 8. Update frame completion value for next-frame wait.
-    // Only record the value if graphics work was actually submitted this frame.
+    // Only declare the value if graphics work was actually submitted this frame.
     // cpu_timeline is incremented in begin_frame *before* submission, so if no
     // graphics Signal step was emitted the timeline semaphore was never advanced
     // to that value. Recording it would cause begin_frame to wait forever on a

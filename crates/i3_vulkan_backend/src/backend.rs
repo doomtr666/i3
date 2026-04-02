@@ -1216,45 +1216,16 @@ impl RenderBackendInternal for VulkanBackend {
             }
         }
 
-        // Handle explicit transition for Present if requested
-        if let Some(handle) = ctx.present_request {
-            let pid = self.resolve_image(handle).0;
-            if let Some(img) = self.images.get(pid) {
-                let aspect_mask = if img.format == vk::Format::D32_SFLOAT {
-                    vk::ImageAspectFlags::DEPTH
-                } else {
-                    vk::ImageAspectFlags::COLOR
-                };
-
-                let barrier = vk::ImageMemoryBarrier2::default()
-                    .src_stage_mask(img.last_stage)
-                    .src_access_mask(img.last_access)
-                    .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
-                    .dst_access_mask(vk::AccessFlags2::empty())
-                    .old_layout(img.last_layout)
-                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                    .image(img.image)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    });
-
-                let sanitized_barrier = crate::sync::sanitize_image_barrier(
-                    barrier,
-                    self.graphics_family,
-                    self.compute_family,
-                    self.transfer_family,
-                    prepared.queue,
-                );
-                let barriers = [sanitized_barrier];
-                let dependency_info =
-                    vk::DependencyInfo::default().image_memory_barriers(&barriers);
-                unsafe {
-                    device.handle.cmd_pipeline_barrier2(cmd, &dependency_info);
-                }
+        // Emit post-barriers (e.g. present transition: final layout → PresentSrc).
+        // These run after execute() so they see the image in its post-write state.
+        if !prepared.sync.post_barriers.is_empty() {
+            let mut img_barriers: Vec<vk::ImageMemoryBarrier2> = Vec::new();
+            for b in &prepared.sync.post_barriers {
+                if let crate::sync::Barrier::Image(b) = b { img_barriers.push(b.clone()); }
+            }
+            if !img_barriers.is_empty() {
+                let dep = vk::DependencyInfo::default().image_memory_barriers(&img_barriers);
+                unsafe { device.handle.cmd_pipeline_barrier2(cmd, &dep); }
             }
         }
 
@@ -1272,10 +1243,6 @@ impl RenderBackendInternal for VulkanBackend {
             })),
             ctx.present_request,
         )
-    }
-
-    fn mark_image_as_presented(&mut self, handle: ImageHandle) {
-        crate::commands::mark_image_as_presented(self, handle)
     }
 
     fn allocate_descriptor_set(

@@ -127,7 +127,7 @@ impl RenderPass for EguiPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         let renderer = self.renderer.lock().unwrap();
         if renderer.pipeline.is_none() {
             return;

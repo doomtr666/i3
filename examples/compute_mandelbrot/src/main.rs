@@ -72,10 +72,11 @@ impl RenderPass for MandelbrotPass {
         false
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         self.backbuffer = builder.resolve_image("Backbuffer");
         builder.bind_pipeline(self.pipeline);
         builder.write_image(self.backbuffer, ResourceUsage::SHADER_WRITE);
+        builder.present_image(self.backbuffer);
         builder.bind_descriptor_set(
             0,
             vec![DescriptorWrite {
@@ -189,7 +190,7 @@ impl ExampleApp for MandelbrotApp {
         let mut graph = FrameGraph::new();
         let window = self.window;
 
-        graph.record(|builder| {
+        graph.declare(|builder| {
             let backbuffer = builder.acquire_backbuffer(window);
             builder.publish("Backbuffer", backbuffer);
             builder.add_pass(&mut self.pass);

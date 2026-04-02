@@ -37,7 +37,7 @@ impl Default for GBufferPushConstants {
 pub struct GBufferPass {
     pub bindless_set: u64,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     depth_buffer:           ImageHandle,
     gbuffer_albedo:         ImageHandle,
     gbuffer_normal:         ImageHandle,
@@ -95,7 +95,7 @@ impl RenderPass for GBufferPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

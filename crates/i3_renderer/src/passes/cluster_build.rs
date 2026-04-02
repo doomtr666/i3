@@ -17,7 +17,7 @@ pub struct ClusterBuildPushConstants {
 pub struct ClusterBuildPass {
     pub push_constants: ClusterBuildPushConstants,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     cluster_aabbs: BufferHandle,
 
     // Persistence
@@ -57,7 +57,7 @@ impl RenderPass for ClusterBuildPass {
         }
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

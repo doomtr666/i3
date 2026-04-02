@@ -408,6 +408,8 @@ pub struct FlatPass {
     pub queue: QueueType,
     pub releases: Vec<CrossQueueTransfer>,
     pub acquires: Vec<CrossQueueTransfer>,
+    /// Images to transition to PresentSrc after this pass executes (post-transition).
+    pub present_images: Vec<ImageHandle>,
 }
 
 impl FlatPass {
@@ -422,11 +424,8 @@ impl FlatPass {
         let has_raster = image_writes.iter().any(|(_, u)| {
             u.intersects(ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL)
         });
-        let has_present = image_reads
-            .iter()
-            .any(|(_, u)| u.intersects(ResourceUsage::PRESENT));
 
-        if has_raster || has_present {
+        if has_raster {
             return PassDomain::Graphics;
         }
 

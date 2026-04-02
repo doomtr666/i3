@@ -52,7 +52,7 @@ impl RenderPass for BlasUpdatePass {
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }
@@ -100,7 +100,7 @@ impl RenderPass for TlasRebuildPass {
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

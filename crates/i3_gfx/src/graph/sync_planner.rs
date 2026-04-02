@@ -78,12 +78,16 @@ impl SyncPlanner {
 
         // --- Process Images ---
         // Linear dedup into a scratch Vec — passes touch < 8 images, O(n²) beats HashMap here.
+        // PRESENT is excluded: it is declared in image_reads only for DAG dependency ordering;
+        // the actual layout transition is handled separately in the post_transitions block below.
         self.scratch_images.clear();
         for (handle, usage) in pass.image_reads.iter().chain(pass.image_writes.iter()) {
+            let usage = usage.difference(ResourceUsage::PRESENT);
+            if usage.is_empty() { continue; }
             if let Some(existing) = self.scratch_images.iter_mut().find(|(h, _)| h == handle) {
-                existing.1 |= *usage;
+                existing.1 |= usage;
             } else {
-                self.scratch_images.push((*handle, *usage));
+                self.scratch_images.push((*handle, usage));
             }
         }
 
@@ -206,6 +210,58 @@ impl SyncPlanner {
             if usage.intersects(ResourceUsage::WRITE) {
                 flow.last_write_pass_idx = Some(pass_idx);
             }
+        }
+
+        // --- Process Present Images (post-transitions) ---
+        // These run AFTER the pass executes: transition from whatever state the image
+        // ended up in (post-write) to PresentSrc/BOTTOM_OF_PIPE.
+        for &handle in &pass.present_images {
+            let id = handle.0.0;
+            let old_flow = self.image_flow.get(&id).cloned().unwrap_or(ResourceFlowState {
+                state: ResourceState {
+                    layout: ImageLayout::Undefined,
+                    access: AccessFlags::NONE,
+                    stage: StageFlags::TOP_OF_PIPE,
+                    queue_family: current_family,
+                },
+                last_write_pass_idx: None,
+            });
+            let old_state = old_flow.state;
+            let present_state = ResourceState {
+                layout: ImageLayout::PresentSrc,
+                access: AccessFlags::NONE,
+                stage: StageFlags::BOTTOM_OF_PIPE,
+                queue_family: current_family,
+            };
+
+            // The barrier source must synchronize with the prior write on this queue.
+            // Cross-queue normalization applies here too if the image was previously
+            // on a different queue family.
+            let effective_old = if old_state.queue_family != current_family {
+                ResourceState {
+                    layout: old_state.layout,
+                    access: AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
+                    stage: StageFlags::ALL_COMMANDS,
+                    queue_family: old_state.queue_family,
+                }
+            } else {
+                old_state
+            };
+
+            plan.passes[pass_idx].post_transitions.push(AbstractTransition {
+                resource_id: id,
+                resource_kind: ResourceKind::Image,
+                old_state: effective_old,
+                new_state: present_state,
+                kind: TransitionKind::Regular,
+            });
+
+            // Update flow so subsequent passes see PresentSrc as the starting state.
+            let flow = self.image_flow.entry(id).or_insert(ResourceFlowState {
+                state: present_state,
+                last_write_pass_idx: None,
+            });
+            flow.state = present_state;
         }
     }
 }

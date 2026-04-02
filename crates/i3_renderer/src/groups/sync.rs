@@ -29,7 +29,7 @@ impl RenderPass for SyncGroup {
         self.material_sync.init(backend, globals);
     }
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         builder.add_pass(&mut self.mesh_registry_sync);
         builder.add_pass(&mut self.instance_sync);
         builder.add_pass(&mut self.material_sync);

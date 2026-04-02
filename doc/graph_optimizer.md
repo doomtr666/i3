@@ -510,9 +510,9 @@ The SyncPlanner automatically generates the correct final barrier for each outpu
 
 ---
 
-## 7. Backend Record Contract
+## 7. Backend declare Contract
 
-Once `analyze_frame` has run and the `SyncPlan` is translated into `FrameBarriers`, the backend record phase is purely mechanical. **No sync decisions are made during recording.** The sequence per pass is fixed:
+Once `analyze_frame` has run and the `SyncPlan` is translated into `FrameBarriers`, the backend declare phase is purely mechanical. **No sync decisions are made during recording.** The sequence per pass is fixed:
 
 ```
 record_pass(pass_index, pass_sync_data, user_pass):
@@ -544,7 +544,7 @@ record_pass(pass_index, pass_sync_data, user_pass):
 - If a barriers list is empty, the `vkCmdPipelineBarrier2` call is skipped — no empty submissions.
 - `load_ops` (CLEAR vs LOAD) come from `PassSyncData` — no runtime decision in `vkCmdBeginRendering`.
 
-**What the backend no longer does during record:**
+**What the backend no longer does during declare:**
 - ~~Compute whether a barrier is needed~~
 - ~~Read or write resource sync state (`img.sync`, `buf.sync`)~~
 - ~~Decide load_op~~

@@ -28,7 +28,7 @@ impl RenderPass for MeshRegistrySyncPass {
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }
@@ -139,7 +139,7 @@ impl RenderPass for InstanceSyncPass {
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }
@@ -203,7 +203,7 @@ impl RenderPass for InstanceSyncPass {
 pub struct MaterialSyncPass {
     pub max_materials: usize,
 
-    // Resolved handles (updated in record)
+    // Resolved handles (updated in declare)
     material_buffer: BufferHandle,
     staging_buffer: Option<BufferHandle>,
     materials: Vec<(u32, MaterialData)>,
@@ -231,7 +231,7 @@ impl RenderPass for MaterialSyncPass {
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         if builder.is_setup() {
             return;
         }

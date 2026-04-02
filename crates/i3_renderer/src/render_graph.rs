@@ -38,7 +38,7 @@ impl RenderPass for ClearBufferPass {
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
-    fn record(&mut self, builder: &mut PassBuilder) {
+    fn declare(&mut self, builder: &mut PassBuilder) {
         builder.write_buffer(self.buffer, ResourceUsage::TRANSFER_WRITE);
     }
 
@@ -59,8 +59,8 @@ impl RenderPass for PresentPass {
 
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
-    fn record(&mut self, builder: &mut PassBuilder) {
-        builder.read_image(self.backbuffer, ResourceUsage::PRESENT);
+    fn declare(&mut self, builder: &mut PassBuilder) {
+        builder.present_image(self.backbuffer);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext) {
@@ -94,7 +94,7 @@ pub struct DefaultRenderGraph {
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
 
-    // Scene data cached during sync() for record()
+    // Scene data cached during sync() for declare()
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
     pub pending_blas: Vec<BackendAccelerationStructure>,
     pub tlas_instances: Vec<TlasInstanceDesc>,
@@ -502,7 +502,7 @@ impl DefaultRenderGraph {
     /// Records the full render graph for one frame.
     ///
     /// Extracts draw commands from the scene, then records GBuffer + debug viz passes.
-    pub fn record(
+    pub fn declare(
         &mut self,
         graph: &mut FrameGraph,
         window: WindowHandle,
@@ -558,7 +558,7 @@ impl DefaultRenderGraph {
             .map(|(id, data)| (id.0, data.clone()))
             .collect();
 
-        graph.record(|builder| {
+        graph.declare(|builder| {
             builder.publish("Common", common);
             builder.publish("BindlessSet", self.bindless_manager.bindless_set);
             builder.publish("SceneMeshDescriptors", scene_mesh_descriptors);
