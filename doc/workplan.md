@@ -51,7 +51,7 @@ graph TD
 
 | ID | Component | Severity | Description |
 |---|---|---|---|
-| GFX-03 | i3_gfx | High | `compiler.rs` is too large (~1200 LOC). Split into symbol_table, node_storage, etc. |
+| GFX-03 | i3_gfx | **DONE** | ~~`compiler.rs` too large.~~ Split into `symbol_table.rs` (Symbol, SymbolTable, FrameBlackboard), `node.rs` (NodeStorage, PassRecorder), `compiled.rs` (CompiledGraph, ExecutionStep). `compiler.rs` now only holds `FrameGraph` + compile pipeline (~300 LOC). |
 | GFX-04 | i3_gfx | Medium | `consume_erased` panics on missing symbol; should return Result. |
 | GFX-06 | i3_gfx | Medium | Memory aliasing (AliasingPlan) described in design but not implemented. |
 | GFX-08 | i3_gfx | Low | Dead node elimination not implemented. `is_output` + `PresentPass` terminal are already in place as foundation. |
@@ -114,7 +114,7 @@ graph TD
 - **[DONE]** Fix GFX-MQ-03: log warn in `sanitize_stages` on fallback.
 - **[DONE]** Refactor `AssetHandle` accessors to return `Arc<T>` (IO-01).
 - **[DONE]** Clean up unsafe casts in `texture.rs` (IO-03).
-- **[TODO]** Split `compiler.rs` (GFX-03).
+- **[DONE]** Split `compiler.rs` (GFX-03).
 
 ### Phase 2: Advanced Rendering Features
 - **P2.1: Normal Mapping**: Update GBuffer to include tangent/bitangent and sample normal maps in deferred resolve. (Unblocks RN-02, BK-05)

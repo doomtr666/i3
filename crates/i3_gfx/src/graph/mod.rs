@@ -1,7 +1,10 @@
 pub mod backend;
+pub mod compiled;
 pub mod compiler;
+pub mod node;
 pub mod pass;
 pub mod pipeline;
+pub mod symbol_table;
 pub mod sync;
 pub mod sync_planner;
 pub mod temporal;
