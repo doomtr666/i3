@@ -196,7 +196,7 @@ impl ExampleApp for MandelbrotApp {
             builder.add_pass(&mut self.pass);
         });
 
-        let compiled = graph.compile(&self.backend.capabilities());
+        let mut compiled = graph.compile(&self.backend.capabilities());
         if let Err(e) = compiled.execute(&mut self.backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None) {
             if e == GraphError::WindowMinimized {
                 std::thread::sleep(Duration::from_millis(100));

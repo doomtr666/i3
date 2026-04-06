@@ -90,12 +90,24 @@ pub struct DefaultRenderGraph {
     pub bindless_manager: crate::bindless::BindlessManager,
     pub ui: Option<Arc<i3_egui::UiSystem>>,
 
+    // GFX-10: compiled topology cache — rebuilt only on structural events.
+    compiled: Option<i3_gfx::graph::compiler::CompiledGraph>,
+    last_screen_size: (u32, u32),
+    last_compiled_debug_channel: DebugChannel,
+    graph_dirty: bool,
+    // True if the current compiled graph was built while sync passes were dirty
+    // (i.e. it contains transient staging buffer nodes). Force one extra recompile
+    // on the first clean frame so the compiled graph has no staging buffers.
+    compiled_had_staging: bool,
+
     pub accel_struct_system: crate::passes::accel_struct::AccelStructSystem,
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
 
-    // Scene data cached during sync() for declare()
+    // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
+    pub cached_instances: Vec<crate::scene::GpuInstanceData>,
+    pub cached_materials: Vec<(u32, crate::scene::MaterialData)>,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -198,6 +210,13 @@ impl DefaultRenderGraph {
             blas_update_pass,
             tlas_rebuild_pass,
             scene_mesh_descriptors: Vec::new(),
+            cached_instances: Vec::new(),
+            cached_materials: Vec::new(),
+            compiled: None,
+            last_screen_size: (0, 0),
+            last_compiled_debug_channel: DebugChannel::Lit,
+            graph_dirty: true,
+            compiled_had_staging: false,
         }
     }
 
@@ -208,6 +227,10 @@ impl DefaultRenderGraph {
         self.tlas_rebuild_pass.reset();
         self.bindless_manager.clear();
         self.scene_mesh_descriptors.clear();
+        // Force recompile: new scene may have different BLAS/mesh counts
+        self.graph_dirty = true;
+        self.compiled = None;
+        self.compiled_had_staging = false;
     }
 
     /// Initializes the render graph: handles cooperative asset loading and pipeline binding.
@@ -279,6 +302,13 @@ impl DefaultRenderGraph {
         if let Some(mut egui_pass) = egui_dummy {
             self.graph.init_pass_direct(&mut egui_pass, backend);
         }
+    }
+
+    /// Forces a full redeclare + recompile on the next render() call.
+    /// Call this after any structural change not auto-detected by render()
+    /// (e.g. UiSystem attach/detach, RT enablement toggle).
+    pub fn mark_dirty(&mut self) {
+        self.graph_dirty = true;
     }
 
     /// Proxy for publishing a service to the global blackboard.
@@ -387,6 +417,13 @@ impl DefaultRenderGraph {
         if !gpu_lights.is_empty() {
             let _ = backend.upload_buffer_slice(self.light_buffer, &gpu_lights, 0);
         }
+
+        // Cache scene data for declare() and dirty-check access in render()
+        self.cached_instances = scene.iter_instances().collect();
+        self.cached_materials = scene
+            .iter_materials()
+            .map(|(id, data)| (id.0, data.clone()))
+            .collect();
     }
 
     /// All-in-one per-frame entry point.
@@ -448,20 +485,80 @@ impl DefaultRenderGraph {
         frame_data.publish("DebugChannel", self.debug_channel as u32);
         frame_data.publish("BindlessSet",  self.bindless_manager.bindless_set);
 
-        // 4. Declare graph (symbol-table path stays for resource declarations)
-        let mut graph = FrameGraph::new();
-        // Forward global services already published on self.graph
-        if let Some(loader) = self.graph.try_consume::<std::sync::Arc<i3_io::asset::AssetLoader>>("AssetLoader").cloned() {
-            graph.publish("AssetLoader", loader);
+        // 4. Detect structural changes that require recompilation.
+        let new_size = (screen_width, screen_height);
+        if new_size != self.last_screen_size {
+            self.last_screen_size = new_size;
+            self.graph_dirty = true;
         }
-        if let Some(ui) = self.graph.try_consume::<std::sync::Arc<i3_egui::UiSystem>>("UiSystem").cloned() {
-            graph.publish("UiSystem", ui);
+        if self.debug_channel != self.last_compiled_debug_channel {
+            self.last_compiled_debug_channel = self.debug_channel;
+            self.graph_dirty = true;
         }
-        self.declare(&mut graph, window, scene, view, projection, near_plane, far_plane, screen_width, screen_height, dt);
 
-        // 5. Compile + execute
-        let compiled = graph.compile(&backend.capabilities());
-        compiled.execute(backend, &frame_data, Some(&mut self.temporal_registry))
+        // 5. Dirty-check sync passes against cached scene data — no declare() side effects.
+        // Sync passes add/remove transient staging buffers when dirty, changing graph topology.
+        let mesh_dirty = self.scene_mesh_descriptors.len()
+            != self.sync_group.mesh_registry_sync.mesh_descriptors_cache.len()
+            || self.scene_mesh_descriptors.iter().zip(
+                self.sync_group.mesh_registry_sync.mesh_descriptors_cache.iter()
+            ).any(|(a, b)| a != b);
+
+        let inst_dirty = self.cached_instances.len()
+            != self.sync_group.instance_sync.instances_cache.len()
+            || self.cached_instances.iter().zip(
+                self.sync_group.instance_sync.instances_cache.iter()
+            ).any(|(a, b)| a != b);
+
+        let mat_dirty = self.cached_materials.len()
+            != self.sync_group.material_sync.materials_cache.len()
+            || self.cached_materials.iter().zip(
+                self.sync_group.material_sync.materials_cache.iter()
+            ).any(|(a, b)| a != b);
+
+        let sync_dirty = mesh_dirty || inst_dirty || mat_dirty;
+
+        // 6. Declare + compile only when topology must change.
+        // Also recompile once on the first clean frame after a staging-dirty compile,
+        // so the cached graph no longer contains transient staging buffer nodes.
+        // Egui primitives are captured inside EguiPass at declare() time (VB/IB sizing).
+        // When there's pending output, declare() must run again to get fresh primitives.
+        let egui_dirty = self.graph
+            .try_consume::<Arc<i3_egui::UiSystem>>("UiSystem")
+            .map(|ui| ui.has_pending_output())
+            .unwrap_or(false);
+
+        let need_compile = self.graph_dirty
+            || sync_dirty
+            || egui_dirty
+            || self.compiled.is_none()
+            || (!sync_dirty && self.compiled_had_staging);
+
+        if need_compile {
+            tracing::debug!(
+                graph_dirty = self.graph_dirty,
+                sync_dirty,
+                had_staging = self.compiled_had_staging,
+                "Recompiling render graph"
+            );
+            let mut graph = FrameGraph::new();
+            if let Some(loader) = self.graph.try_consume::<std::sync::Arc<i3_io::asset::AssetLoader>>("AssetLoader").cloned() {
+                graph.publish("AssetLoader", loader);
+            }
+            if let Some(ui) = self.graph.try_consume::<std::sync::Arc<i3_egui::UiSystem>>("UiSystem").cloned() {
+                graph.publish("UiSystem", ui);
+            }
+            self.declare(&mut graph, window, scene, view, projection, near_plane, far_plane, screen_width, screen_height, dt);
+            self.compiled = Some(graph.compile(&backend.capabilities()));
+            self.graph_dirty = false;
+            self.compiled_had_staging = sync_dirty;
+        }
+
+        // 7. Execute the cached compiled graph.
+        self.compiled
+            .as_mut()
+            .unwrap()
+            .execute(backend, &frame_data, Some(&mut self.temporal_registry))
     }
 
     /// Records the full render graph for one frame.
@@ -517,11 +614,8 @@ impl DefaultRenderGraph {
         let sun_col = sun_light.color;
 
         let scene_mesh_descriptors = self.scene_mesh_descriptors.clone();
-        let scene_instances: Vec<crate::scene::GpuInstanceData> = scene.iter_instances().collect();
-        let scene_materials: Vec<(u32, crate::scene::MaterialData)> = scene
-            .iter_materials()
-            .map(|(id, data)| (id.0, data.clone()))
-            .collect();
+        let scene_instances = self.cached_instances.clone();
+        let scene_materials = self.cached_materials.clone();
 
         graph.declare(|builder| {
             builder.publish("Common", common);

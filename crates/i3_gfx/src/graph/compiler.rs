@@ -1068,7 +1068,7 @@ pub struct CompiledGraph {
 
 impl CompiledGraph {
     pub fn execute<B: RenderBackendInternal>(
-        mut self,
+        &mut self,
         backend: &mut B,
         frame_data: &FrameBlackboard,
         temporal_registry: Option<&mut crate::graph::temporal::TemporalRegistry>,

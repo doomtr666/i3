@@ -51,7 +51,7 @@ impl ExampleApp for TriangleApp {
             builder.add_pass(&mut self.pass);
         });
 
-        let compiler = graph.compile(&self.backend.capabilities());
+        let mut compiler = graph.compile(&self.backend.capabilities());
         match compiler.execute(&mut self.backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None) {
             Ok(_) => {}
             Err(e) if e == GraphError::WindowMinimized => {

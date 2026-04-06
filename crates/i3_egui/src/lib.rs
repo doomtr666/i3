@@ -81,6 +81,10 @@ impl UiSystem {
         *storage = Some(full_output);
     }
 
+    pub fn has_pending_output(&self) -> bool {
+        self.stored_output.lock().unwrap().is_some()
+    }
+
     pub fn create_pass(&self, backbuffer: i3_gfx::graph::types::ImageHandle) -> Option<renderer::EguiPass> {
         let (width, height) = *self.screen_size.lock().unwrap();
         let mut storage = self.stored_output.lock().unwrap();

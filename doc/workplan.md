@@ -56,7 +56,7 @@ graph TD
 | GFX-06 | i3_gfx | Medium | Memory aliasing (AliasingPlan) described in design but not implemented. |
 | GFX-08 | i3_gfx | Low | Dead node elimination not implemented. `is_output` + `PresentPass` terminal are already in place as foundation. |
 | GFX-09 | i3_gfx + i3_renderer | **DONE** | ~~Phase-aware RenderPass + symbol outputs + resource relocalisation.~~ Implemented. See §3 for remaining follow-ups. |
-| GFX-10 | i3_gfx + i3_renderer | Medium | **Stable compiled topology**: `render()` still recompiles the graph every frame. Add `compiled: Option<CompiledGraph>` to `DefaultRenderGraph`, introduce `mark_dirty()`, rebuild only on structural events (resize, debug mode switch). |
+| GFX-10 | i3_gfx + i3_renderer | **DONE** | ~~Stable compiled topology.~~ `compiled: Option<CompiledGraph>` cached; `mark_dirty()` added; recompile only on resize, debug channel change, or sync-pass dirty. `CompiledGraph::execute` now takes `&mut self`. |
 | SYNC-01 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Cross-queue stage/access normalization.~~ |
 | SYNC-02 | i3_gfx | Low | `queue_family: u32` in `ResourceState` leaks Vulkan indices into the abstract layer. Should be `queue_type: QueueType`; translation to `vk::QueueFamily` index belongs in the backend. |
 | SYNC-03 | i3_gfx | Low | `load_ops: HashMap<u64, LoadOp>` in `PassSyncData` is a renderpass concern mixed into the sync plan. Consider splitting into a separate `PassRenderInfo` or at minimum document the coupling. |
@@ -108,7 +108,7 @@ graph TD
 - **[DONE]** SYNC-01: Cross-queue stage/access normalization in abstract sync planner.
 - **[DONE]** SYNC-06: Present barrier fully managed by sync planner; `builder.present_image()` API.
 - **[DONE]** GFX-09: Phase-aware RenderPass + symbol outputs + resource relocalisation + FrameBlackboard.
-- **[TODO]** GFX-10: Stable compiled topology — `mark_dirty()` + per-frame `CompiledGraph` cache.
+- **[DONE]** GFX-10: Stable compiled topology — `mark_dirty()` + per-frame `CompiledGraph` cache.
 - **[DONE]** Fix GFX-MQ-01: per-queue `last_completion_value` and wait in `begin_frame`.
 - **[TODO]** Fix GFX-MQ-02: safe `get_queue_family()` with fallback.
 - **[TODO]** Fix GFX-MQ-03: log warn in `sanitize_stages` on fallback.
