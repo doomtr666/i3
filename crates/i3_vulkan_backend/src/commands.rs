@@ -569,6 +569,7 @@ impl PassContext for VulkanPassContext {
             }
         }
     }
+
 }
 
 /// Prepare a pass for recording by resolving resources and building barriers.
@@ -868,6 +869,7 @@ pub fn record_pass(
     backend: &VulkanBackend,
     prepared: &VulkanPreparedPass,
     pass: &dyn RenderPass,
+    frame_data: &i3_gfx::graph::compiler::FrameBlackboard,
 ) -> (
     Option<u64>,
     Option<BackendCommandBuffer>,
@@ -985,7 +987,7 @@ pub fn record_pass(
         }
     }
 
-    pass.execute(&mut ctx);
+    pass.execute(&mut ctx, frame_data);
 
     if !is_compute {
         if let PreparedDomain::Graphics {

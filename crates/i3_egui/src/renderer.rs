@@ -181,7 +181,7 @@ impl RenderPass for EguiPass {
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let renderer = self.renderer.lock().unwrap();
         let pipeline = if let Some(p) = renderer.pipeline { p } else { return };
         

@@ -57,11 +57,8 @@ impl ExampleApp for DeferredStressApp {
             200.0,
         );
 
-        self.render_graph.sync(&mut self.backend, &self.scene);
-
-        let mut graph = FrameGraph::new();
-        self.render_graph.declare(
-            &mut graph,
+        if let Err(e) = self.render_graph.render(
+            &mut self.backend,
             self.window,
             &self.scene,
             view,
@@ -71,12 +68,6 @@ impl ExampleApp for DeferredStressApp {
             width,
             height,
             self.dt,
-        );
-
-        let compiler = graph.compile(&self.backend.capabilities());
-        if let Err(e) = compiler.execute(
-            &mut self.backend,
-            Some(&mut self.render_graph.temporal_registry),
         ) {
             warn!("Graph execution failed: {}", e);
         }

@@ -369,6 +369,7 @@ impl RenderBackendInternal for NullBackend {
         &self,
         prepared: &Self::PreparedPass,
         pass: &dyn RenderPass,
+        frame_data: &i3_gfx::graph::compiler::FrameBlackboard,
     ) -> (
         Option<u64>,
         Option<i3_gfx::graph::backend::BackendCommandBuffer>,
@@ -381,9 +382,9 @@ impl RenderBackendInternal for NullBackend {
             &self.allocated_buffers,
             &self.allocated_pipelines,
             &self.image_map,
-            self.next_handle, // Pass this to allow context to allocate handles if needed
+            self.next_handle,
         );
-        pass.execute(&mut ctx);
+        pass.execute(&mut ctx, frame_data);
         (Some(0), None, None)
     }
 

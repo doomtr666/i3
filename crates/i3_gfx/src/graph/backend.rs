@@ -6,6 +6,10 @@ pub struct BackendImage(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendBuffer(pub u64);
 
+impl BackendBuffer {
+    pub const INVALID: Self = Self(0);
+}
+
 /// Handle representing a physically allocated pipeline in the backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendPipeline(pub u64);
@@ -567,6 +571,7 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
         &self,
         prepared: &Self::PreparedPass,
         pass: &dyn crate::graph::pass::RenderPass,
+        frame_data: &crate::graph::compiler::FrameBlackboard,
     ) -> (
         Option<u64>,
         Option<BackendCommandBuffer>,

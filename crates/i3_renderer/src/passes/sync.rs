@@ -2,11 +2,12 @@ use crate::scene::{MaterialData, GpuMeshDescriptor, GpuInstanceData};
 use i3_gfx::prelude::*;
 
 pub struct MeshRegistrySyncPass {
-    mesh_descriptors:       Vec<(u32, GpuMeshDescriptor)>,
-    mesh_descriptors_cache: Vec<(u32, GpuMeshDescriptor)>, // Cache for dirty check
-    mesh_descriptor_buffer: BufferHandle,
-    staging_buffer:         Option<BufferHandle>,
-    is_dirty:               bool,
+    mesh_descriptors:        Vec<(u32, GpuMeshDescriptor)>,
+    mesh_descriptors_cache:  Vec<(u32, GpuMeshDescriptor)>,
+    mesh_descriptor_buffer:  BufferHandle,
+    physical_buffer:         BackendBuffer,
+    staging_buffer:          Option<BufferHandle>,
+    is_dirty:                bool,
 }
 
 impl MeshRegistrySyncPass {
@@ -15,6 +16,7 @@ impl MeshRegistrySyncPass {
             mesh_descriptors:       Vec::new(),
             mesh_descriptors_cache: Vec::new(),
             mesh_descriptor_buffer: BufferHandle::INVALID,
+            physical_buffer:        BackendBuffer::INVALID,
             staging_buffer:         None,
             is_dirty:               false,
         }
@@ -26,14 +28,19 @@ impl RenderPass for MeshRegistrySyncPass {
         "MeshRegistrySyncPass"
     }
 
-    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+    fn init(&mut self, backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {
+        let max_meshes: u64 = 16384;
+        self.physical_buffer = backend.create_buffer(&BufferDesc {
+            size: max_meshes * std::mem::size_of::<GpuMeshDescriptor>() as u64,
+            usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+            memory: MemoryType::CpuToGpu,
+        });
+        #[cfg(debug_assertions)]
+        backend.set_buffer_name(self.physical_buffer, "MeshDescriptorBuffer");
+    }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
-
-        self.mesh_descriptor_buffer = builder.resolve_buffer("MeshDescriptorBuffer");
+        self.mesh_descriptor_buffer = builder.import_buffer("MeshDescriptorBuffer", self.physical_buffer);
 
         let mesh_descriptors = builder.consume::<Vec<(u32, GpuMeshDescriptor)>>("SceneMeshDescriptors");
         
@@ -67,7 +74,7 @@ impl RenderPass for MeshRegistrySyncPass {
         }
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         if let Some(staging) = self.staging_buffer {
             let count = self.mesh_descriptors.len();
             if count == 0 { return; }
@@ -113,11 +120,12 @@ impl RenderPass for MeshRegistrySyncPass {
 }
 
 pub struct InstanceSyncPass {
-    instances:       Vec<GpuInstanceData>,
-    instances_cache: Vec<GpuInstanceData>,
-    instance_buffer: BufferHandle,
-    staging_buffer:  Option<BufferHandle>,
-    is_dirty:        bool,
+    instances:        Vec<GpuInstanceData>,
+    instances_cache:  Vec<GpuInstanceData>,
+    instance_buffer:  BufferHandle,
+    physical_buffer:  BackendBuffer,
+    staging_buffer:   Option<BufferHandle>,
+    is_dirty:         bool,
 }
 
 impl InstanceSyncPass {
@@ -126,6 +134,7 @@ impl InstanceSyncPass {
             instances:       Vec::new(),
             instances_cache: Vec::new(),
             instance_buffer: BufferHandle::INVALID,
+            physical_buffer: BackendBuffer::INVALID,
             staging_buffer:  None,
             is_dirty:        false,
         }
@@ -137,14 +146,19 @@ impl RenderPass for InstanceSyncPass {
         "InstanceSyncPass"
     }
 
-    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+    fn init(&mut self, backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {
+        let max_instances: u64 = 262144;
+        self.physical_buffer = backend.create_buffer(&BufferDesc {
+            size: max_instances * std::mem::size_of::<GpuInstanceData>() as u64,
+            usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+            memory: MemoryType::CpuToGpu,
+        });
+        #[cfg(debug_assertions)]
+        backend.set_buffer_name(self.physical_buffer, "InstanceBuffer");
+    }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
-
-        self.instance_buffer = builder.resolve_buffer("InstanceBuffer");
+        self.instance_buffer = builder.import_buffer("InstanceBuffer", self.physical_buffer);
 
         let instances = builder.consume::<Vec<GpuInstanceData>>("SceneInstances");
         
@@ -177,7 +191,7 @@ impl RenderPass for InstanceSyncPass {
         }
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         if let Some(staging) = self.staging_buffer {
             let count = self.instances.len();
             if count == 0 { return; }
@@ -204,22 +218,24 @@ pub struct MaterialSyncPass {
     pub max_materials: usize,
 
     // Resolved handles (updated in declare)
-    material_buffer: BufferHandle,
-    staging_buffer: Option<BufferHandle>,
-    materials: Vec<(u32, MaterialData)>,
-    materials_cache: Vec<(u32, MaterialData)>,
-    is_dirty: bool,
+    material_buffer:  BufferHandle,
+    physical_buffer:  BackendBuffer,
+    staging_buffer:   Option<BufferHandle>,
+    materials:        Vec<(u32, MaterialData)>,
+    materials_cache:  Vec<(u32, MaterialData)>,
+    is_dirty:         bool,
 }
 
 impl MaterialSyncPass {
     pub fn new(max_materials: usize) -> Self {
         Self {
             material_buffer: BufferHandle::INVALID,
+            physical_buffer: BackendBuffer::INVALID,
             max_materials,
-            staging_buffer: None,
-            materials: Vec::new(),
+            staging_buffer:  None,
+            materials:       Vec::new(),
             materials_cache: Vec::new(),
-            is_dirty: false,
+            is_dirty:        false,
         }
     }
 }
@@ -229,13 +245,18 @@ impl RenderPass for MaterialSyncPass {
         "MaterialSyncPass"
     }
 
-    fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
+    fn init(&mut self, backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {
+        self.physical_buffer = backend.create_buffer(&BufferDesc {
+            size: 1024 * 1024, // 1MB for ~16k materials
+            usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+            memory: MemoryType::CpuToGpu,
+        });
+        #[cfg(debug_assertions)]
+        backend.set_buffer_name(self.physical_buffer, "MaterialBuffer");
+    }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
-        self.material_buffer = builder.resolve_buffer("MaterialBuffer");
+        self.material_buffer = builder.import_buffer("MaterialBuffer", self.physical_buffer);
 
         let materials = builder.consume::<Vec<(u32, MaterialData)>>("SceneMaterials");
         
@@ -269,7 +290,7 @@ impl RenderPass for MaterialSyncPass {
         }
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         if let Some(staging) = self.staging_buffer {
             let mut max_id = 0;
             for (id, _) in &self.materials {

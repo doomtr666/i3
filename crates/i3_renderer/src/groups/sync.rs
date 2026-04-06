@@ -35,5 +35,5 @@ impl RenderPass for SyncGroup {
         builder.add_pass(&mut self.material_sync);
     }
 
-    fn execute(&self, _ctx: &mut dyn PassContext) {}
+    fn execute(&self, _ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {}
 }

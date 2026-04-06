@@ -24,7 +24,6 @@ pub struct AverageLuminancePass {
 
     // Persistence
     pipeline: Option<BackendPipeline>,
-    push_constants: Option<AverageLuminancePushConstants>,
 }
 
 impl AverageLuminancePass {
@@ -34,10 +33,8 @@ impl AverageLuminancePass {
             exposure_buffer: BufferHandle::INVALID,
             history_buffer: BufferHandle::INVALID,
             pipeline: None,
-            push_constants: None,
         }
     }
-
 }
 
 impl RenderPass for AverageLuminancePass {
@@ -56,27 +53,9 @@ impl RenderPass for AverageLuminancePass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
-        // Resolve target handles by name
         self.histogram_buffer = builder.resolve_buffer("HistogramBuffer");
         self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
         self.history_buffer = builder.read_buffer_history("ExposureBuffer");
-
-        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
-        let dt = *builder.consume::<f32>("TimeDelta");
-
-        self.push_constants = Some(AverageLuminancePushConstants {
-            min_log_lum: -10.0,
-            max_log_lum: 10.0,
-            time_delta: dt,
-            adaptation_rate: 2.0,
-            pixel_count: (common.screen_width * common.screen_height) as f32,
-            pad0: 0,
-            pad1: 0,
-            pad2: 0,
-        });
 
         // Read histogram, read history, write exposure
         builder.read_buffer(self.histogram_buffer, ResourceUsage::SHADER_READ);
@@ -123,17 +102,26 @@ impl RenderPass for AverageLuminancePass {
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let Some(pipeline) = self.pipeline else {
             tracing::error!("AverageLuminancePass::execute: pipeline not initialized!");
             return;
         };
+        let common = frame.consume::<crate::render_graph::CommonData>("Common");
+        let dt = *frame.consume::<f32>("TimeDelta");
+        let push_constants = AverageLuminancePushConstants {
+            min_log_lum: -10.0,
+            max_log_lum: 10.0,
+            time_delta: dt,
+            adaptation_rate: 2.0,
+            pixel_count: (common.screen_width * common.screen_height) as f32,
+            pad0: 0,
+            pad1: 0,
+            pad2: 0,
+        };
         ctx.bind_pipeline_raw(pipeline);
-        if let Some(constants) = self.push_constants {
-            ctx.push_constant_data(ShaderStageFlags::Compute, 0, &constants);
-
-            // Only 1 workgroup needed to process the 256-bin histogram
-            ctx.dispatch(1, 1, 1);
-        }
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &push_constants);
+        // Only 1 workgroup needed to process the 256-bin histogram
+        ctx.dispatch(1, 1, 1);
     }
 }

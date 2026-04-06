@@ -1071,6 +1071,7 @@ impl RenderBackendInternal for VulkanBackend {
         &self,
         prepared: &Self::PreparedPass,
         pass: &dyn RenderPass,
+        frame_data: &i3_gfx::graph::compiler::FrameBlackboard,
     ) -> (
         Option<u64>,
         Option<BackendCommandBuffer>,
@@ -1199,7 +1200,7 @@ impl RenderBackendInternal for VulkanBackend {
             }
         }
 
-        pass.execute(&mut ctx);
+        pass.execute(&mut ctx, frame_data);
 
         if !is_compute {
             if let PreparedDomain::Graphics {

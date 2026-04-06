@@ -15,8 +15,6 @@ pub struct ClusterBuildPushConstants {
 }
 
 pub struct ClusterBuildPass {
-    pub push_constants: ClusterBuildPushConstants,
-
     // Resolved handles (updated in declare)
     cluster_aabbs: BufferHandle,
 
@@ -28,18 +26,9 @@ impl ClusterBuildPass {
     pub fn new() -> Self {
         Self {
             cluster_aabbs: BufferHandle::INVALID,
-            push_constants: ClusterBuildPushConstants {
-                inv_projection: nalgebra_glm::identity(),
-                grid_size: [0, 0, 0],
-                near_plane: 0.0,
-                far_plane: 0.0,
-                screen_dimensions: [0.0, 0.0],
-                pad: 0,
-            },
             pipeline: None,
         }
     }
-
 }
 
 impl RenderPass for ClusterBuildPass {
@@ -58,25 +47,7 @@ impl RenderPass for ClusterBuildPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
         self.cluster_aabbs = builder.resolve_buffer("ClusterAABBs");
-
-        // Consume CommonData to compute push constants
-        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
-        let grid_x = (common.screen_width + 63) / 64;
-        let grid_y = (common.screen_height + 63) / 64;
-        let grid_z: u32 = 16;
-
-        self.push_constants = ClusterBuildPushConstants {
-            inv_projection: common.inv_projection,
-            grid_size: [grid_x, grid_y, grid_z],
-            near_plane: common.near_plane,
-            far_plane: common.far_plane,
-            screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
-            pad: 0,
-        };
 
         builder.write_buffer(self.cluster_aabbs, ResourceUsage::SHADER_WRITE);
         builder.bind_descriptor_set(
@@ -95,17 +66,25 @@ impl RenderPass for ClusterBuildPass {
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
-        if let Some(pipeline) = self.pipeline {
-            ctx.bind_pipeline_raw(pipeline);
-            ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_constants);
-            ctx.dispatch(
-                self.push_constants.grid_size[0],
-                self.push_constants.grid_size[1],
-                self.push_constants.grid_size[2],
-            );
-        } else {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {
+        let Some(pipeline) = self.pipeline else {
             tracing::error!("ClusterBuildPass::execute: pipeline not initialized!");
-        }
+            return;
+        };
+        let common = frame.consume::<crate::render_graph::CommonData>("Common");
+        let grid_x = (common.screen_width + 63) / 64;
+        let grid_y = (common.screen_height + 63) / 64;
+        let grid_z: u32 = 16;
+        let push_constants = ClusterBuildPushConstants {
+            inv_projection: common.inv_projection,
+            grid_size: [grid_x, grid_y, grid_z],
+            near_plane: common.near_plane,
+            far_plane: common.far_plane,
+            screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
+            pad: 0,
+        };
+        ctx.bind_pipeline_raw(pipeline);
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &push_constants);
+        ctx.dispatch(grid_x, grid_y, grid_z);
     }
 }

@@ -22,9 +22,6 @@ pub struct HistogramBuildPass {
 
     // Persistence
     pipeline: Option<BackendPipeline>,
-    width: u32,
-    height: u32,
-    push_constants: Option<HistogramPushConstants>,
 }
 
 impl HistogramBuildPass {
@@ -35,12 +32,8 @@ impl HistogramBuildPass {
             exposure_buffer: BufferHandle::INVALID,
             hdr_image_name: "HDR_Target".to_string(),
             pipeline: None,
-            width: 0,
-            height: 0,
-            push_constants: None,
         }
     }
-
 }
 
 impl RenderPass for HistogramBuildPass {
@@ -59,24 +52,9 @@ impl RenderPass for HistogramBuildPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
-        // Resolve target handles by name
         self.hdr_image = builder.resolve_image(&self.hdr_image_name);
         self.histogram_buffer = builder.resolve_buffer("HistogramBuffer");
         self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
-
-        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
-        self.width = common.screen_width;
-        self.height = common.screen_height;
-
-        self.push_constants = Some(HistogramPushConstants {
-            min_log_lum: -10.0,
-            max_log_lum: 10.0,
-            time_delta: *builder.consume::<f32>("TimeDelta"),
-            pad: 0,
-        });
 
         // Read HDR image and exposure buffer
         builder.read_image(self.hdr_image, ResourceUsage::SHADER_READ);
@@ -125,19 +103,24 @@ impl RenderPass for HistogramBuildPass {
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let Some(pipeline) = self.pipeline else {
             tracing::error!("HistogramBuildPass::execute: pipeline not initialized!");
             return;
         };
+        let common = frame.consume::<crate::render_graph::CommonData>("Common");
+        let dt = *frame.consume::<f32>("TimeDelta");
+        let push_constants = HistogramPushConstants {
+            min_log_lum: -10.0,
+            max_log_lum: 10.0,
+            time_delta: dt,
+            pad: 0,
+        };
         ctx.bind_pipeline_raw(pipeline);
-        if let Some(constants) = self.push_constants {
-            ctx.push_constant_data(ShaderStageFlags::Compute, 0, &constants);
-
-            // Assuming GROUP_SIZE = 16
-            let group_count_x = (self.width + 15) / 16;
-            let group_count_y = (self.height + 15) / 16;
-            ctx.dispatch(group_count_x, group_count_y, 1);
-        }
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &push_constants);
+        // Assuming GROUP_SIZE = 16
+        let group_count_x = (common.screen_width + 15) / 16;
+        let group_count_y = (common.screen_height + 15) / 16;
+        ctx.dispatch(group_count_x, group_count_y, 1);
     }
 }

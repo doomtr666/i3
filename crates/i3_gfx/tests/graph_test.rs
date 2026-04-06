@@ -26,7 +26,7 @@ where
         (self.declare)(builder);
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         (self.execute)(ctx);
     }
 }
@@ -78,8 +78,8 @@ fn test_triangle_frame_flow() {
         });
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 
     assert_eq!(execution_count.load(Ordering::SeqCst), 1);
 }
@@ -146,8 +146,8 @@ fn test_complex_hierarchical_graph() {
         });
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
     assert_eq!(gbuffer_exec.load(Ordering::SeqCst), 1);
 }
 
@@ -200,8 +200,8 @@ fn test_modular_resource_lifecycle() {
         });
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 }
 
 // ============================================================
@@ -290,8 +290,8 @@ fn test_diamond_dependency_ordering() {
         ));
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 
     let a = order_a.load(Ordering::SeqCst);
     let b = order_b.load(Ordering::SeqCst);
@@ -340,8 +340,8 @@ fn test_independent_passes_both_execute() {
         });
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 
     assert_eq!(exec_a.load(Ordering::SeqCst), 1, "PassA must execute");
     assert_eq!(exec_b.load(Ordering::SeqCst), 1, "PassB must execute");
@@ -390,8 +390,8 @@ fn test_war_dependency() {
         ));
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 
     let r = order_reader.load(Ordering::SeqCst);
     let w = order_writer.load(Ordering::SeqCst);
@@ -435,8 +435,8 @@ fn test_waw_dependency() {
         ));
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 
     let w1 = order_w1.load(Ordering::SeqCst);
     let w2 = order_w2.load(Ordering::SeqCst);
@@ -495,8 +495,8 @@ fn test_linear_chain_ordering() {
         ));
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 
     let a = order_a.load(Ordering::SeqCst);
     let b = order_b.load(Ordering::SeqCst);
@@ -545,8 +545,8 @@ fn test_cpu_data_dependency_ordering() {
         ));
     });
 
-    let compiled = graph.compile();
-    compiled.execute(&mut backend, None).unwrap();
+    let compiled = graph.compile(&i3_gfx::graph::backend::DeviceCapabilities::default());
+    compiled.execute(&mut backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None).unwrap();
 
     let a = order_a.load(Ordering::SeqCst);
     let b = order_b.load(Ordering::SeqCst);

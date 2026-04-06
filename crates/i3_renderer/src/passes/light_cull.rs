@@ -12,7 +12,6 @@ pub struct LightCullPushConstants {
 }
 
 pub struct LightCullPass {
-    pub push_constants: LightCullPushConstants,
     pub light_buffer_name: String,
 
     // Resolved handles (updated in declare)
@@ -32,16 +31,10 @@ impl LightCullPass {
             lights: BufferHandle::INVALID,
             cluster_grid: BufferHandle::INVALID,
             cluster_light_indices: BufferHandle::INVALID,
-            push_constants: LightCullPushConstants {
-                view_matrix: nalgebra_glm::identity(),
-                grid_size: [0, 0, 0],
-                light_count: 0,
-            },
             light_buffer_name: "LightBuffer".to_string(),
             pipeline: None,
         }
     }
-
 }
 
 impl RenderPass for LightCullPass {
@@ -60,25 +53,10 @@ impl RenderPass for LightCullPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
         self.cluster_aabbs = builder.resolve_buffer("ClusterAABBs");
         self.lights = builder.resolve_buffer(&self.light_buffer_name);
         self.cluster_grid = builder.resolve_buffer("ClusterGrid");
         self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
-
-        // Consume CommonData to compute push constants
-        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
-        let grid_x = (common.screen_width + 63) / 64;
-        let grid_y = (common.screen_height + 63) / 64;
-        let grid_z: u32 = 16;
-
-        self.push_constants = LightCullPushConstants {
-            view_matrix: common.view,
-            grid_size: [grid_x, grid_y, grid_z],
-            light_count: common.light_count,
-        };
 
         builder.read_buffer(self.cluster_aabbs, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.lights, ResourceUsage::SHADER_READ);
@@ -136,23 +114,26 @@ impl RenderPass for LightCullPass {
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let Some(pipeline) = self.pipeline else {
             tracing::error!("LightCullPass::execute: pipeline not initialized!");
             return;
         };
+        let common = frame.consume::<crate::render_graph::CommonData>("Common");
+        let grid_x = (common.screen_width + 63) / 64;
+        let grid_y = (common.screen_height + 63) / 64;
+        let grid_z: u32 = 16;
+        let push_constants = LightCullPushConstants {
+            view_matrix: common.view,
+            grid_size: [grid_x, grid_y, grid_z],
+            light_count: common.light_count,
+        };
         ctx.bind_pipeline_raw(pipeline);
-
         ctx.push_constant_data(
             i3_gfx::graph::pipeline::ShaderStageFlags::Compute,
             0,
-            &self.push_constants,
+            &push_constants,
         );
-
-        ctx.dispatch(
-            self.push_constants.grid_size[0],
-            self.push_constants.grid_size[1],
-            self.push_constants.grid_size[2],
-        );
+        ctx.dispatch(grid_x, grid_y, grid_z);
     }
 }

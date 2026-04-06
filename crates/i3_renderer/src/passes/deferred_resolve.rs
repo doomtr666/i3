@@ -34,7 +34,6 @@ pub struct DeferredResolvePass {
 
     // Persistence
     pipeline: Option<BackendPipeline>,
-    push_constants: Option<DeferredResolvePushConstants>,
 }
 
 impl DeferredResolvePass {
@@ -52,10 +51,8 @@ impl DeferredResolvePass {
             cluster_light_indices: BufferHandle::INVALID,
             exposure_buffer: BufferHandle::INVALID,
             pipeline: None,
-            push_constants: None,
         }
     }
-
 }
 
 impl RenderPass for DeferredResolvePass {
@@ -76,9 +73,6 @@ impl RenderPass for DeferredResolvePass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
         // Resolve target handles by name
         self.hdr_target = builder.resolve_image("HDR_Target");
         self.gbuffer_albedo = builder.resolve_image("GBuffer_Albedo");
@@ -91,25 +85,6 @@ impl RenderPass for DeferredResolvePass {
         self.cluster_grid = builder.resolve_buffer("ClusterGrid");
         self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
         self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
-
-        let (common, grid_size, debug_mode) = {
-            let c = *builder.consume::<crate::render_graph::CommonData>("Common");
-            let g = *builder.consume::<[u32; 3]>("ClusterGridSize");
-            let d = *builder.consume::<u32>("DebugChannel");
-            (c, g, d)
-        };
-
-        self.push_constants = Some(DeferredResolvePushConstants {
-            inv_view_proj: common.inv_view_projection,
-            inv_projection: common.inv_projection,
-            camera_pos: common.camera_pos,
-            near_plane: common.near_plane,
-            grid_size,
-            far_plane: common.far_plane,
-            screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
-            debug_mode,
-            _pad: 0,
-        });
 
         // Read GBuffers and buffers
         builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
@@ -232,20 +207,33 @@ impl RenderPass for DeferredResolvePass {
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let Some(pipeline) = self.pipeline else {
             tracing::error!("DeferredResolvePass::execute: pipeline not initialized!");
             return;
         };
+        let common = frame.consume::<crate::render_graph::CommonData>("Common");
+        let debug_mode = *frame.consume::<u32>("DebugChannel");
+        let grid_x = (common.screen_width + 63) / 64;
+        let grid_y = (common.screen_height + 63) / 64;
+        let grid_size = [grid_x, grid_y, 16u32];
+        let push_constants = DeferredResolvePushConstants {
+            inv_view_proj: common.inv_view_projection,
+            inv_projection: common.inv_projection,
+            camera_pos: common.camera_pos,
+            near_plane: common.near_plane,
+            grid_size,
+            far_plane: common.far_plane,
+            screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
+            debug_mode,
+            _pad: 0,
+        };
         ctx.bind_pipeline_raw(pipeline);
-
-        if let Some(constants) = self.push_constants {
-            ctx.push_constant_data(
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                &constants,
-            );
-            ctx.draw(3, 0); // Fullscreen triangle
-        }
+        ctx.push_constant_data(
+            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+            0,
+            &push_constants,
+        );
+        ctx.draw(3, 0); // Fullscreen triangle
     }
 }

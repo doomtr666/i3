@@ -12,11 +12,11 @@ The i3 engine is a Rust 2024 workspace targeting high-end desktop rendering with
 
 | Crate | Role | LOC approx | Maturity |
 |---|---|---|---|
-| `i3_gfx` | Frame Graph core, HRI abstraction | ~2500 | Functional |
+| `i3_gfx` | Frame Graph core, HRI abstraction | ~2800 | Functional |
 | `i3_vulkan_backend` | Vulkan 1.3 implementation | ~5500 | Functional |
 | `i3_null_backend` | Validation oracle | ~550 | Basic |
 | `i3_slang` | Slang shader compiler wrapper | ~560 | Functional |
-| `i3_renderer` | Deferred clustered shading | ~4000 | Functional but incomplete |
+| `i3_renderer` | Deferred clustered shading | ~4500 | Functional |
 | `i3_io` | VFS, binary formats, asset loading | ~1200 | Functional |
 | `i3_baker` | Asset baking pipeline | ~1600 | Functional |
 | `i3_egui` | Egui UI integration layer | ~350 | MVP |
@@ -51,23 +51,24 @@ graph TD
 
 | ID | Component | Severity | Description |
 |---|---|---|---|
-| GFX-03 | i3_gfx | High | `compiler.rs` is too large (~1000 LOC). Split into symbol_table, node_storage, etc. |
+| GFX-03 | i3_gfx | High | `compiler.rs` is too large (~1200 LOC). Split into symbol_table, node_storage, etc. |
 | GFX-04 | i3_gfx | Medium | `consume_erased` panics on missing symbol; should return Result. |
-| GFX-09 | i3_gfx | Medium | `RenderPass::declare()` is called in two distinct contexts — `graph.setup()` (init, `is_setup=true`) and `graph.declare()` (per-frame, `is_setup=false`) — but the trait only exposes one `declare()` method. Passes that need setup-only logic use `if builder.is_setup() { return; }` guards, which is implicit and error-prone. **Proposed fix**: (1) add a `fn setup(&mut self, builder: &mut PassBuilder)` method to the trait (default no-op) for setup-phase resource/pipeline declarations, (2) rename existing `declare()` to be strictly per-frame with no `is_setup` context, (3) document all phases clearly: `init()` = pipeline/shader loading (once), `setup()` = resource declaration in graph.setup() (once or on resize), `declare()` = per-frame resource usage declaration, `execute()` = GPU command recording. Remove all `is_setup()` guard patterns from passes. |
 | GFX-06 | i3_gfx | Medium | Memory aliasing (AliasingPlan) described in design but not implemented. |
-| SYNC-01 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Cross-queue stage/access normalization.~~ Implemented: when `old_state.queue_family != current_family`, the abstract planner normalizes `old_state` to `(ALL_COMMANDS, MEMORY_READ\|MEMORY_WRITE)` for both images and buffers. Removed `clamp_stage_to_queue` / `clamp_access_to_queue` hacks from `i3_vulkan_backend::sync_planner`; `translate_plan` no longer needs `flat_passes`. Validation clean. Proper Release/Acquire pairs (for configs with separate queue families) remain a future improvement. |
-| SYNC-02 | i3_gfx | Low | `queue_family: u32` in abstract `ResourceState` (`sync.rs:95`) leaks Vulkan queue family indices into the API-agnostic layer. The planner hardcodes `Graphics=0, AsyncCompute=1, Transfer=2`. Should be `queue_type: QueueType`; translation to `vk::QueueFamily` index belongs in the backend. SYNC-01 prerequisite met. |
-| SYNC-03 | i3_gfx | Low | **Abstraction pollution in `PassSyncData`**: `load_ops: HashMap<u64, LoadOp>` is a renderpass concern (VkAttachmentLoadOp), not a synchronization concern. Mixing it into the sync plan couples the planner to rasterization concepts. Consider splitting into a separate `PassRenderInfo` struct returned alongside `PassSyncData`, or at minimum adding a comment documenting the intentional coupling. |
-| SYNC-04 | i3_gfx | Low | **`SyncPlanner::image_seed` / `buffer_seed` are `pub`**, exposing the internal seeding mechanism and coupling the backend directly to the planner's implementation. Replace with explicit `fn seed_image(id, state)` / `fn seed_buffer(id, state)` / `fn clear_seeds()` methods so the internal representation can change without breaking callers. |
-| SYNC-05 | i3_gfx | Low | **`layout` field in `ResourceState` is meaningless for buffers** (always `Undefined`). Either introduce separate `ImageState` / `BufferState` types, or add a `#[doc]` comment explicitly stating the field is ignored for buffers. |
-| SYNC-06 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Present barrier generated out-of-band by the backend, bypassing the sync planner.~~ Implemented: `builder.present_image(handle)` declared in `declare()` registers `ResourceUsage::PRESENT` on the image. The sync planner emits a **post-transition** barrier (working layout → `PresentSrc`) via `PassSyncData::post_transitions`, translated by `translate_plan` into `post_barriers`. The backend emits `post_barriers` after `execute()`. Manual present barriers removed from `prepare_pass`. Swapchain image seed stage restored to `COLOR_ATTACHMENT_OUTPUT` (correct Vulkan semaphore signal stage); cross-queue normalization in `simulate_pass` handles AsyncCompute (replaces with `ALL_COMMANDS`). `PRESENT` filtered from the scratch loop to avoid interfering with normal barrier generation. DAG ordering preserved via `(handle, PRESENT)` pushed to `image_reads`. No validation errors (WAR/WRITE_RACING_WRITE) on graphics, compute, or mixed-queue graphs. |
-| GFX-07 | i3_gfx | **DONE** | ~~Multi-queue support (async compute/transfer) not implemented.~~ Implemented: `QueueType`, `prefer_async`, `BatchStep`-based sub-batch splitting, timeline semaphore cross-queue sync, queue family ownership transfers. Working with 3 queues visible in Nsight, no validation errors. |
-| GFX-08 | i3_gfx | Low | Dead node elimination not implemented. |
-| GFX-MQ-01 | i3_vulkan_backend | High | `begin_frame` waits only on the **graphics** timeline semaphore before resetting all frame contexts. Compute and transfer pools are reset without waiting for those queues to finish — command buffers in flight can be invalidated. Fix: add `last_completion_value` per `QueueContext` and wait on each queue's timeline in `begin_frame`. (`submission.rs:114-196`) |
-| GFX-MQ-02 | i3_vulkan_backend | Medium | `get_queue_family()` calls `.unwrap()` on `backend.compute` / `backend.transfer` unconditionally. Safe today only because `assign_queues` never routes to AsyncCompute when `capabilities.async_compute=false` — a fragile implicit invariant. Fix: return `Option<u32>` or fall back to `graphics_family`. (`sync.rs:34-40`) |
-| GFX-MQ-03 | i3_vulkan_backend | Medium | `sanitize_stages` silently converts unsupported graphics stages (e.g. `FRAGMENT_SHADER`) to `TOP_OF_PIPE` on compute/transfer queues without logging. Weakens synchronization invisibly. Fix: add `tracing::warn!` when the fallback fires. (`sync.rs:327-342`) |
-| IO-01 | i3_io | High | `AssetHandle::get()`/`wait_loaded()` return refs that may outlive the lock (potential UB). Use Arc<T>. |
-| IO-03 | i3_io | Medium | Manual unsafe pointer cast in `texture.rs` load. Use match `bytemuck` patterns. |
+| GFX-08 | i3_gfx | Low | Dead node elimination not implemented. `is_output` + `PresentPass` terminal are already in place as foundation. |
+| GFX-09 | i3_gfx + i3_renderer | **DONE** | ~~Phase-aware RenderPass + symbol outputs + resource relocalisation.~~ Implemented. See §3 for remaining follow-ups. |
+| GFX-10 | i3_gfx + i3_renderer | Medium | **Stable compiled topology**: `render()` still recompiles the graph every frame. Add `compiled: Option<CompiledGraph>` to `DefaultRenderGraph`, introduce `mark_dirty()`, rebuild only on structural events (resize, debug mode switch). |
+| SYNC-01 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Cross-queue stage/access normalization.~~ |
+| SYNC-02 | i3_gfx | Low | `queue_family: u32` in `ResourceState` leaks Vulkan indices into the abstract layer. Should be `queue_type: QueueType`; translation to `vk::QueueFamily` index belongs in the backend. |
+| SYNC-03 | i3_gfx | Low | `load_ops: HashMap<u64, LoadOp>` in `PassSyncData` is a renderpass concern mixed into the sync plan. Consider splitting into a separate `PassRenderInfo` or at minimum document the coupling. |
+| SYNC-04 | i3_gfx | Low | `SyncPlanner::image_seed` / `buffer_seed` are `pub`. Replace with explicit `fn seed_image()` / `fn seed_buffer()` / `fn clear_seeds()` methods. |
+| SYNC-05 | i3_gfx | Low | `layout` field in `ResourceState` is meaningless for buffers. Either introduce separate `ImageState`/`BufferState` types or document the field as image-only. |
+| SYNC-06 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Present barrier managed by sync planner via `builder.present_image()`.~~ |
+| GFX-07 | i3_gfx | **DONE** | ~~Multi-queue async compute/transfer.~~ Working, no validation errors. |
+| GFX-MQ-01 | i3_vulkan_backend | High | `begin_frame` waits only on the graphics timeline semaphore before resetting all frame contexts. Compute and transfer pools are reset without waiting — command buffers in flight can be invalidated. Fix: add `last_completion_value` per `QueueContext` and wait on each queue's timeline. (`submission.rs:114-196`) |
+| GFX-MQ-02 | i3_vulkan_backend | Medium | `get_queue_family()` calls `.unwrap()` on `backend.compute` / `backend.transfer` unconditionally. Fix: return `Option<u32>` or fall back to `graphics_family`. (`sync.rs:34-40`) |
+| GFX-MQ-03 | i3_vulkan_backend | Medium | `sanitize_stages` silently converts unsupported stages to `TOP_OF_PIPE` on compute/transfer queues without logging. Fix: add `tracing::warn!` when the fallback fires. (`sync.rs:327-342`) |
+| IO-01 | i3_io | High | `AssetHandle::get()`/`wait_loaded()` return refs that may outlive the lock. Use `Arc<T>`. |
+| IO-03 | i3_io | Medium | Manual unsafe pointer cast in `texture.rs`. Use `bytemuck` patterns. |
 | VK-03 | i3_vulkan_backend | Low | Format conversion audit needed for recent Vulkan additions. |
 
 ### 2.2 Renderer & Shading (i3_renderer)
@@ -75,12 +76,15 @@ graph TD
 | ID | Severity | Description |
 |---|---|---|
 | RN-02 | High | Normal mapping not utilized in deferred resolve. GBuffer normal lacks tangent-space map sampling. |
-| RN-03 | Medium | Buffer sizes in `gpu_buffers.rs` are magic numbers. Derive from constants. |
+| RN-03 | Medium | Magic numbers (`grid_z=16`, `max_instances=262144`, `max_meshes=16384`) still duplicated across `groups/mod.rs`, `passes/cull.rs`, `passes/cluster_build.rs`, `passes/light_cull.rs`, `passes/sync.rs`. Extract to named constants in a shared `renderer_constants.rs`. |
 | RN-04 | High | No GPU culling pass (GPUCull). Currently uses CPU-side draw commands. |
 | RN-05 | High | No ZPrePass implemented. |
 | RN-06 | Medium | No forward transparency pass. |
 | RN-07 | Info | No RT support (BLAS/TLAS). Planned for future phases. |
-| RN-09 | Low | `LightData` in `scene.rs` needs `repr(C)` padding check for GPU compatibility. |
+| RN-08 | Medium | `sync.rs` dirty-check logic is broken: `zip()` stops at shortest iterator, so shrinking the scene isn't detected as dirty. Fix: compare lengths first, then compare full slices. |
+| RN-09 | Low | `LightData` in `scene.rs` needs `repr(C)` padding audit for GPU compatibility. |
+| RN-10 | Medium | `Arc<Mutex<AccelStructSystem>>` in `render_graph.rs` is unnecessary — the renderer is single-threaded. Replace with direct field ownership. (`passes/accel_struct.rs:35,80`) |
+| RN-11 | Low | `unsafe ptr::copy_nonoverlapping` in `sync.rs` lacks bounds checking and casts through `*const u8`. Audit and tighten. |
 
 ### 2.3 Tools (i3_baker, i3_bundle, i3_egui)
 
@@ -102,35 +106,36 @@ graph TD
 - **[DONE]** Multi-queue async compute + transfer (GFX-07).
 - **[DONE]** SYNC-01: Cross-queue stage/access normalization in abstract sync planner.
 - **[DONE]** SYNC-06: Present barrier fully managed by sync planner; `builder.present_image()` API.
+- **[DONE]** GFX-09: Phase-aware RenderPass + symbol outputs + resource relocalisation + FrameBlackboard.
+- **[TODO]** GFX-10: Stable compiled topology — `mark_dirty()` + per-frame `CompiledGraph` cache.
 - **[TODO]** Fix GFX-MQ-01: per-queue `last_completion_value` and wait in `begin_frame`.
 - **[TODO]** Fix GFX-MQ-02: safe `get_queue_family()` with fallback.
 - **[TODO]** Fix GFX-MQ-03: log warn in `sanitize_stages` on fallback.
-- Refactor `AssetHandle` accessors to return `Arc<T>` (Fix IO-01/IO-02).
-- Clean up unsafe casts in `texture.rs`.
-- Split large files (`compiler.rs`).
-- Implement disk-based `VkPipelineCache` for faster cold starts.
+- **[TODO]** Refactor `AssetHandle` accessors to return `Arc<T>` (IO-01).
+- **[TODO]** Clean up unsafe casts in `texture.rs` (IO-03).
+- **[TODO]** Split `compiler.rs` (GFX-03).
 
 ### Phase 2: Advanced Rendering Features
-- **P2.1: Normal Mapping**: Update GBuffer to include tangent/bitangent and sample normal maps in deferred resolve.
-- **P2.2: ZPrePass**: Implement depth-only pass for early Z optimization.
-- **P2.3: GPU-Driven Pipeline**: Implement compute-based frustum culling and `draw_indexed_indirect` support.
-- **P2.4: Forward Transparency**: Add forward pass group for transparent objects.
+- **P2.1: Normal Mapping**: Update GBuffer to include tangent/bitangent and sample normal maps in deferred resolve. (Unblocks RN-02, BK-05)
+- **P2.2: ZPrePass**: Implement depth-only pass for early Z optimization. (RN-05)
+- **P2.3: GPU-Driven Pipeline**: Compute-based frustum culling and `draw_indexed_indirect`. (RN-04)
+- **P2.4: Forward Transparency**: Add forward pass group for transparent objects. (RN-06)
+- **P2.5: Cleanup**: RN-03 constants, RN-08 dirty-check fix, RN-10 AccelStructSystem, RN-11 unsafe audit.
 
 ### Phase 3: Hardware Evolution
-- **P3.1: Ray Tracing Support**: Add BLAS/TLAS types to i3_gfx and implement backend logic for RT shadows/queries.
-- **P3.2: Multi-GPU Selection**: Implement explicit GPU selection via config and CLI flags.
+- **P3.1: Ray Tracing Support**: Add BLAS/TLAS types to i3_gfx and implement backend logic for RT shadows/queries. (RN-07)
+- **P3.2: Multi-GPU Selection**: Explicit GPU selection via config and CLI flags.
 
 ### Phase 4: Ergonomics & Polish
 - **P4.1: Shading DSL**: High-level material description language that compiles to `.i3p` assets.
-- **P4.2: Baker Progress**: Real-time progress reporting during long bakes (e.g., Sponza).
-- **P4.3: Egui Polish**: Scissoring, DPI support, and multi-texture management.
+- **P4.2: Baker Progress**: Real-time progress reporting during long bakes.
+- **P4.3: Egui Polish**: Scissoring (EG-I02), DPI support, multi-texture (EG-I01), persistent VB/IB (EG-I03).
 
 ---
 
 ## 4. Documentation & Quality
 - Update `engine_hld.md` to reflect current workspace structure.
-- Annotate all design documents with current implementation status.
-- Reconcile testing conventions between documentation and code.
+- Update `frame_graph_design.md` — many sections are now outdated (see §5).
 - Implement VFS unit tests and renderer-level NullBackend integration tests.
 
 ---
@@ -138,16 +143,17 @@ graph TD
 ## 5. Documentation Gaps (frame_graph_design.md vs Code)
 
 `doc/frame_graph_design.md` was written before the implementation and is partially outdated.
-The following table summarizes the delta — a doc update pass is needed.
 
 | Topic | Doc says | Code reality |
 |---|---|---|
-| `RenderPass::domain()` | Required method returning `PassDomain` | Removed — domain is auto-inferred by compiler from resource declarations |
-| `RenderPass::declare()` | Method name | Renamed to `declare()` in code |
+| `RenderPass::domain()` | Required method returning `PassDomain` | Removed — domain auto-inferred from resource declarations |
 | `RenderPass::prefer_async()` | Not mentioned | Present in trait; default = `true`; controls async queue routing |
 | `CommandBatch` / `BatchStep` | Not mentioned | Core submission primitive; `BatchStep::{Command,Wait,Signal}` drives sub-batch splitting |
 | Multi-queue sync | Timeline semaphores described abstractly | Concrete: ordered `BatchStep` steps, sub-batch splitting at `Signal` boundaries, per-queue `cpu_timeline` |
-| Memory aliasing | Described as "from day one" | **Not yet implemented** (see GFX-06) |
+| Memory aliasing | Described as "from day one" | **Not yet implemented** (GFX-06) |
 | `PassContext` | Enum with `Gpu`/`Cpu` variants | Implemented as a trait |
 | `PassBuilder::add_node()` | FnOnce closure API | Actual API: `add_pass(&mut dyn RenderPass)` / `add_owned_pass<P: RenderPass>` |
-| GFX-07 status | "Multi-queue not implemented" | Fully implemented and working |
+| `graph.setup()` / `is_setup` | Present | **Removed** (GFX-09 done): `declare()` is per-frame; `FrameBlackboard` handles per-frame data |
+| `FrameBlackboard` | Not mentioned | **Implemented** (GFX-09): `frame.consume::<T>("key")` in `execute()` |
+| Symbol outputs | Not mentioned | **Implemented** (GFX-09): `declare_image_output` / `declare_buffer_output` / `import_buffer` promote symbols to parent scope |
+| `DefaultRenderGraph` topology | Not mentioned | `render()` still rebuilds each frame; `mark_dirty()` + cached `CompiledGraph` is GFX-10 |

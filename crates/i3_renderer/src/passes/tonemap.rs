@@ -23,7 +23,6 @@ pub struct TonemapPass {
 
     // Persistence
     pipeline: Option<BackendPipeline>,
-    push_constants: Option<ToneMapPushConstants>,
 }
 
 impl TonemapPass {
@@ -36,7 +35,6 @@ impl TonemapPass {
             backbuffer_name: "Backbuffer".to_string(),
             hdr_image_name: "HDR_Target".to_string(),
             pipeline: None,
-            push_constants: None,
         }
     }
 
@@ -60,20 +58,10 @@ impl RenderPass for TonemapPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
         // Resolve target handles by name
         self.backbuffer = builder.resolve_image(&self.backbuffer_name);
         self.hdr_target = builder.resolve_image(&self.hdr_image_name);
         self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
-
-        self.push_constants = Some(ToneMapPushConstants {
-            debug_mode: 0,
-            pad0: 0,
-            pad1: 0,
-            pad2: 0,
-        });
 
         // Read HDR target & ExposureBuffer
         builder.read_image(self.hdr_target, ResourceUsage::SHADER_READ);
@@ -111,23 +99,17 @@ impl RenderPass for TonemapPass {
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let Some(pipeline) = self.pipeline else {
             tracing::error!("TonemapPass::execute: pipeline not initialized!");
             return;
         };
         ctx.bind_pipeline_raw(pipeline);
-
-        if let Some(constants) = self.push_constants {
-            ctx.push_constant_data(
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                &constants,
-            );
-            ctx.draw(3, 0); // Fullscreen triangle
-
-            // This is NO LONGER the final pass because of Egui/Debug UI.
-            // Present is now handled by a dedicated PresentPass.
-        }
+        ctx.push_constant_data(
+            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+            0,
+            &ToneMapPushConstants { debug_mode: 0, pad0: 0, pad1: 0, pad2: 0 },
+        );
+        ctx.draw(3, 0); // Fullscreen triangle
     }
 }

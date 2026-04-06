@@ -23,7 +23,7 @@ impl RenderPass for TrianglePass {
         builder.present_image(self.backbuffer);
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         ctx.draw(3, 0);
         ctx.present(self.backbuffer);
     }
@@ -52,7 +52,7 @@ impl ExampleApp for TriangleApp {
         });
 
         let compiler = graph.compile(&self.backend.capabilities());
-        match compiler.execute(&mut self.backend, None) {
+        match compiler.execute(&mut self.backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None) {
             Ok(_) => {}
             Err(e) if e == GraphError::WindowMinimized => {
                 std::thread::sleep(Duration::from_millis(100));

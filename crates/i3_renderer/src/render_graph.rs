@@ -26,7 +26,7 @@ pub struct CommonData {
 }
 
 /// Helper pass to clear a buffer.
-struct ClearBufferPass {
+pub struct ClearBufferPass {
     pub name: String,
     pub buffer: BufferHandle,
 }
@@ -42,7 +42,7 @@ impl RenderPass for ClearBufferPass {
         builder.write_buffer(self.buffer, ResourceUsage::TRANSFER_WRITE);
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         ctx.clear_buffer(self.buffer, 0);
     }
 }
@@ -63,7 +63,7 @@ impl RenderPass for PresentPass {
         builder.present_image(self.backbuffer);
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         ctx.present(self.backbuffer);
     }
 }
@@ -85,7 +85,7 @@ pub struct DefaultRenderGraph {
     pub linear_sampler: SamplerHandle,
     pub material_sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
-    pub gpu_buffers: crate::gpu_buffers::GpuBuffers,
+    pub light_buffer: i3_gfx::graph::backend::BackendBuffer,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
     pub bindless_manager: crate::bindless::BindlessManager,
     pub ui: Option<Arc<i3_egui::UiSystem>>,
@@ -136,7 +136,15 @@ impl DefaultRenderGraph {
         let debug_viz_pass = DebugVizPass::new(linear_sampler, DebugChannel::Lit);
 
         let graph = FrameGraph::new();
-        let gpu_buffers = crate::gpu_buffers::GpuBuffers::allocate(_backend);
+
+        let max_lights: u64 = 1024;
+        let light_buffer = _backend.create_buffer(&BufferDesc {
+            size: max_lights * std::mem::size_of::<crate::scene::LightData>() as u64,
+            usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+            memory: MemoryType::CpuToGpu,
+        });
+        #[cfg(debug_assertions)]
+        _backend.set_buffer_name(light_buffer, "LightBuffer");
 
         let sync_group = SyncGroup::new();
 
@@ -184,7 +192,7 @@ impl DefaultRenderGraph {
             linear_sampler,
             material_sampler,
             debug_channel: DebugChannel::Lit,
-            gpu_buffers,
+            light_buffer,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
             ui: None,
@@ -253,40 +261,29 @@ impl DefaultRenderGraph {
             }
         }
 
-        // 1. Setup Phase: Register all potential passes
-        let gbuffer_pass = &mut self.gbuffer_pass;
-        let draw_call_gen_pass = &mut self.draw_call_gen_pass;
-        let sky_pass = &mut self.sky_pass;
-        let sync_group = &mut self.sync_group;
-        let clustering_group = &mut self.clustering_group;
-        let deferred_resolve_pass = &mut self.deferred_resolve_pass;
-        let post_process_group = &mut self.post_process_group;
-        let debug_viz_pass = &mut self.debug_viz_pass;
-        let blas_update_pass = &mut self.blas_update_pass;
-        let tlas_rebuild_pass = &mut self.tlas_rebuild_pass;
+        // Initialize all passes directly — no declare() needed, avoids per-frame symbol requirements.
+        // Each group's init() recursively calls init() on its children.
+        self.graph.init_pass_direct(&mut self.sync_group,            backend);
+        self.graph.init_pass_direct(&mut self.blas_update_pass,      backend);
+        self.graph.init_pass_direct(&mut self.gbuffer_pass,          backend);
+        self.graph.init_pass_direct(&mut self.draw_call_gen_pass,    backend);
+        self.graph.init_pass_direct(&mut self.sky_pass,              backend);
+        self.graph.init_pass_direct(&mut self.clustering_group,      backend);
+        self.graph.init_pass_direct(&mut self.tlas_rebuild_pass,     backend);
+        self.graph.init_pass_direct(&mut self.deferred_resolve_pass, backend);
+        self.graph.init_pass_direct(&mut self.post_process_group,    backend);
+        self.graph.init_pass_direct(&mut self.debug_viz_pass,        backend);
 
-        self.graph.setup(|builder| {
-            builder.add_pass(sync_group);
-            builder.add_pass(blas_update_pass);
-            builder.add_pass(gbuffer_pass);
-            builder.add_pass(draw_call_gen_pass);
-            builder.add_pass(sky_pass);
-            builder.add_pass(clustering_group);
-            builder.add_pass(tlas_rebuild_pass);
-            builder.add_pass(deferred_resolve_pass);
-            builder.add_pass(post_process_group);
-            builder.add_pass(debug_viz_pass);
-
-            // Add a dummy egui pass for initialization
-            if let Some(ui) = builder.try_consume::<Arc<UiSystem>>("UiSystem") {
-                if let Some(egui_pass) = ui.create_pass(ImageHandle::INVALID) {
-                    builder.add_owned_pass(egui_pass);
-                }
-            }
-        });
-
-        // 2. Initialization Phase: Load shaders/pipelines
-        self.graph.init_all(backend);
+        // Egui pipeline lives in an Arc<Mutex<EguiRenderer>> shared across all per-frame passes.
+        // Call init() once on a dummy pass so the pipeline gets loaded into that shared renderer.
+        // Resolve ui first (read-only), drop the borrow, then mutably use self.graph.
+        let egui_dummy = self.graph
+            .try_consume::<Arc<i3_egui::UiSystem>>("UiSystem")
+            .cloned()
+            .and_then(|ui| ui.create_pass(i3_gfx::graph::types::ImageHandle::INVALID));
+        if let Some(mut egui_pass) = egui_dummy {
+            self.graph.init_pass_direct(&mut egui_pass, backend);
+        }
     }
 
     /// Proxy for publishing a service to the global blackboard.
@@ -396,107 +393,83 @@ impl DefaultRenderGraph {
         }
 
         if !gpu_lights.is_empty() {
-            let _ = backend.upload_buffer_slice(self.gpu_buffers.light_buffer, &gpu_lights, 0);
+            let _ = backend.upload_buffer_slice(self.light_buffer, &gpu_lights, 0);
         }
     }
 
-    fn record_clustering(&mut self, builder: &mut PassBuilder) -> (u32, u32, u32) {
-        let common = *builder.consume::<CommonData>("Common");
+    /// All-in-one per-frame entry point.
+    ///
+    /// Syncs GPU data, builds a `FrameBlackboard` with per-frame CPU data, declares and
+    /// executes the render graph. Replaces the caller-side sync/declare/compile/execute loop.
+    pub fn render<B: i3_gfx::graph::backend::RenderBackendInternal>(
+        &mut self,
+        backend: &mut B,
+        window: WindowHandle,
+        scene: &dyn SceneProvider,
+        view: nalgebra_glm::Mat4,
+        projection: nalgebra_glm::Mat4,
+        near_plane: f32,
+        far_plane: f32,
+        screen_width: u32,
+        screen_height: u32,
+        dt: f32,
+    ) -> Result<Option<u64>, i3_gfx::graph::types::GraphError> {
+        // 1. GPU sync
+        self.sync(backend, scene);
 
-        // Cluster Build Pass
-        let grid_x = (common.screen_width + 63) / 64;
-        let grid_y = (common.screen_height + 63) / 64;
-        let grid_z = 16;
+        // 2. Build CommonData
+        let view_projection = projection * view;
+        let inv_projection = projection
+            .try_inverse()
+            .unwrap_or_else(nalgebra_glm::identity);
+        let inv_view_projection = view_projection
+            .try_inverse()
+            .unwrap_or_else(nalgebra_glm::identity);
+        let light_count = scene.light_count().min(1024) as u32;
+        let camera_pos = view
+            .try_inverse()
+            .map(|v| v.column(3).xyz())
+            .unwrap_or_else(|| nalgebra_glm::vec3(0.0, 0.0, 0.0));
+        let common = CommonData {
+            view,
+            projection,
+            view_projection,
+            inv_projection,
+            inv_view_projection,
+            near_plane,
+            far_plane,
+            screen_width,
+            screen_height,
+            camera_pos,
+            light_count,
+        };
 
-        let max_clusters = (grid_x * grid_y * grid_z) as u64;
-        builder.declare_buffer(
-            "ClusterAABBs",
-            BufferDesc {
-                size: max_clusters * 32,
-                usage: BufferUsageFlags::STORAGE_BUFFER,
-                memory: MemoryType::GpuOnly,
-            },
-        );
-        builder.declare_buffer(
-            "ClusterGrid",
-            BufferDesc {
-                size: max_clusters * 8,
-                usage: BufferUsageFlags::STORAGE_BUFFER,
-                memory: MemoryType::GpuOnly,
-            },
-        );
-        let cluster_light_indices = builder.declare_buffer(
-            "ClusterLightIndices",
-            BufferDesc {
-                size: max_clusters * 256 * 4,
-                usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
-                memory: MemoryType::GpuOnly,
-            },
-        );
+        let sun_light = scene.sun();
 
-        // Clear the first u32 of cluster_light_indices
-        builder.add_owned_pass(ClearBufferPass {
-            name: "ClearClusterIndices".to_string(),
-            buffer: cluster_light_indices,
-        });
+        // 3. Populate FrameBlackboard for execute() access
+        let mut frame_data = i3_gfx::graph::compiler::FrameBlackboard::new();
+        frame_data.publish("Common",       common);
+        frame_data.publish("SunDirection", sun_light.direction);
+        frame_data.publish("SunIntensity", sun_light.intensity);
+        frame_data.publish("SunColor",     sun_light.color);
+        frame_data.publish("TimeDelta",    dt);
+        frame_data.publish("DebugChannel", self.debug_channel as u32);
+        frame_data.publish("BindlessSet",  self.bindless_manager.bindless_set);
 
-        builder.add_pass(&mut self.clustering_group);
+        // 4. Declare graph (symbol-table path stays for resource declarations)
+        let mut graph = FrameGraph::new();
+        // Forward global services already published on self.graph
+        if let Some(loader) = self.graph.try_consume::<std::sync::Arc<i3_io::asset::AssetLoader>>("AssetLoader").cloned() {
+            graph.publish("AssetLoader", loader);
+        }
+        if let Some(ui) = self.graph.try_consume::<std::sync::Arc<i3_egui::UiSystem>>("UiSystem").cloned() {
+            graph.publish("UiSystem", ui);
+        }
+        self.declare(&mut graph, window, scene, view, projection, near_plane, far_plane, screen_width, screen_height, dt);
 
-        (grid_x, grid_y, grid_z)
-    }
-
-    fn record_gbuffer(&mut self, builder: &mut PassBuilder) {
-        let common = *builder.consume::<CommonData>("Common");
-
-        builder.declare_image(
-            "GBuffer_Albedo",
-            ImageDesc::new(
-                common.screen_width,
-                common.screen_height,
-                Format::R8G8B8A8_SRGB,
-            ),
-        );
-        builder.declare_image(
-            "GBuffer_Normal",
-            ImageDesc::new(
-                common.screen_width,
-                common.screen_height,
-                Format::R16G16_SFLOAT,
-            ),
-        );
-        builder.declare_image(
-            "GBuffer_RoughMetal",
-            ImageDesc::new(
-                common.screen_width,
-                common.screen_height,
-                Format::R8G8_UNORM,
-            ),
-        );
-        builder.declare_image(
-            "GBuffer_Emissive",
-            ImageDesc::new(
-                common.screen_width,
-                common.screen_height,
-                Format::R11G11B10_UFLOAT,
-            ),
-        );
-        builder.declare_image(
-            "DepthBuffer",
-            ImageDesc {
-                width: common.screen_width,
-                height: common.screen_height,
-                depth: 1,
-                format: Format::D32_FLOAT,
-                mip_levels: 1,
-                array_layers: 1,
-                usage: ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | ImageUsageFlags::SAMPLED,
-                view_type: ImageViewType::Type2D,
-                swizzle: ComponentMapping::default(),
-                clear_value: None,
-            },
-        );
-
-        builder.add_pass(&mut self.gbuffer_pass);
+        // 5. Compile + execute
+        let compiled = graph.compile(&backend.capabilities());
+        compiled.execute(backend, &frame_data, Some(&mut self.temporal_registry))
     }
 
     /// Records the full render graph for one frame.
@@ -544,7 +517,7 @@ impl DefaultRenderGraph {
         };
 
         let channel = self.debug_channel;
-        let light_buffer_physical = self.gpu_buffers.light_buffer;
+        let light_buffer_physical = self.light_buffer;
 
         let sun_light = scene.sun();
         let sun_dir = sun_light.direction;
@@ -573,54 +546,28 @@ impl DefaultRenderGraph {
 
             let backbuffer = builder.acquire_backbuffer(window);
             builder.publish("Backbuffer", backbuffer);
+            // LightBuffer is owned here; mesh/instance/material/draw buffers are imported by their passes
             builder.import_buffer("LightBuffer", light_buffer_physical);
 
-            let mesh_descriptor_buffer_physical = self.gpu_buffers.mesh_descriptor_buffer;
-            builder.import_buffer("MeshDescriptorBuffer", mesh_descriptor_buffer_physical);
-
-            let instance_buffer_physical = self.gpu_buffers.instance_buffer;
-            builder.import_buffer("InstanceBuffer", instance_buffer_physical);
-
-            let draw_call_buffer_physical = self.gpu_buffers.draw_call_buffer;
-            builder.import_buffer("DrawCallBuffer", draw_call_buffer_physical);
-
-            let draw_count_buffer_physical = self.gpu_buffers.draw_count_buffer;
-            let draw_count_buffer_handle =
-                builder.import_buffer("DrawCountBuffer", draw_count_buffer_physical);
-
-            let material_buffer_physical = self.gpu_buffers.material_buffer;
-            builder.import_buffer("MaterialBuffer", material_buffer_physical);
-
-            // 0. Sync CPU scene delta to GPU
+            // 0. Sync CPU scene delta to GPU (imports MeshDescriptorBuffer, InstanceBuffer, MaterialBuffer)
             builder.add_pass(&mut self.sync_group);
             builder.add_pass(&mut self.blas_update_pass);
 
-            // 1a. Clear draw count to 0 before GPU culling (InterlockedAdd accumulates across frames)
-            builder.add_owned_pass(ClearBufferPass {
-                name: "ClearDrawCount".to_string(),
-                buffer: draw_count_buffer_handle,
-            });
-
-            // 1b. Draw Call Generation & Culling
+            // 1. Draw Call Generation (imports DrawCallBuffer + DrawCountBuffer, adds ClearDrawCount child)
             builder.add_pass(&mut self.draw_call_gen_pass);
 
             // 1c. TLAS Rebuild
             builder.add_pass(&mut self.tlas_rebuild_pass);
 
-            // 1. Clustering & Culling
-            let (grid_x, grid_y, grid_z) = self.record_clustering(builder);
-
-            builder.publish("ClusterGridSize", [grid_x, grid_y, grid_z]);
             builder.publish("DebugChannel", channel as u32);
 
-            // 2. GBuffer Generation
-            self.record_gbuffer(builder);
+            // 1. Clustering (buffers declared as outputs inside ClusteringGroup)
+            builder.add_pass(&mut self.clustering_group);
 
-            builder.declare_image(
-                "HDR_Target",
-                ImageDesc::new(screen_width, screen_height, Format::R16G16B16A16_SFLOAT),
-            );
+            // 2. GBuffer (images declared as outputs inside GBufferPass)
+            builder.add_pass(&mut self.gbuffer_pass);
 
+            // 3. Sky (HDR_Target declared as output inside SkyPass)
             builder.add_pass(&mut self.sky_pass);
 
             builder.declare_buffer_history(
@@ -632,15 +579,6 @@ impl DefaultRenderGraph {
                 },
             );
 
-            builder.declare_buffer(
-                "HistogramBuffer",
-                BufferDesc {
-                    size: 256 * 4,
-                    usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
-                    memory: MemoryType::GpuOnly,
-                },
-            );
-
             if channel == DebugChannel::Lit
                 || channel == DebugChannel::LightDensity
                 || channel == DebugChannel::ClusterGrid
@@ -648,7 +586,7 @@ impl DefaultRenderGraph {
                 // 4. Deferred Lighting
                 self.record_lighting(builder);
 
-                // 5. Post Processing
+                // 5. Post Processing (HistogramBuffer declared as output inside PostProcessGroup)
                 self.record_post_process(builder);
             } else {
                 builder.add_pass(&mut self.debug_viz_pass);
@@ -672,12 +610,7 @@ impl DefaultRenderGraph {
     }
 
     fn record_post_process(&mut self, builder: &mut PassBuilder) {
-        let histogram_buffer = builder.resolve_buffer("HistogramBuffer");
-        builder.add_owned_pass(ClearBufferPass {
-            name: "ClearHistogram".to_string(),
-            buffer: histogram_buffer,
-        });
-
+        // HistogramBuffer declared as output (with clear) inside PostProcessGroup
         builder.add_pass(&mut self.post_process_group);
     }
 }

@@ -83,24 +83,6 @@ impl RenderPass for DebugVizPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
-        // Resolve configuration from blackboard
-        let channel_u32 = builder.consume::<u32>("DebugChannel");
-        self.channel = match *channel_u32 {
-            0 => DebugChannel::Albedo,
-            1 => DebugChannel::Normal,
-            2 => DebugChannel::Roughness,
-            3 => DebugChannel::Metallic,
-            4 => DebugChannel::Emissive,
-            5 => DebugChannel::Depth,
-            10 => DebugChannel::Lit,
-            11 => DebugChannel::LightDensity,
-            12 => DebugChannel::ClusterGrid,
-            _ => DebugChannel::Lit,
-        };
-
         // Resolve target handles by name
         self.gbuffer_albedo = builder.resolve_image("GBuffer_Albedo");
         self.gbuffer_normal = builder.resolve_image("GBuffer_Normal");
@@ -183,14 +165,15 @@ impl RenderPass for DebugVizPass {
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let Some(pipeline) = self.pipeline else {
             tracing::error!("DebugVizPass::execute: pipeline not initialized!");
             return;
         };
         ctx.bind_pipeline_raw(pipeline);
+        let channel = *frame.consume::<u32>("DebugChannel");
         let push = DebugVizPushConstants {
-            channel: self.channel as u32,
+            channel,
             _pad: [0; 3],
         };
         ctx.push_constant_data(

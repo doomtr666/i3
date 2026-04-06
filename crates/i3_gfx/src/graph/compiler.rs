@@ -7,9 +7,48 @@ use crate::graph::types::*;
 use rayon::prelude::*;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FrameBlackboard — per-frame CPU data passed to execute() via consume_frame()
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Type-keyed map for per-frame CPU data.
+/// Published by the caller of `CompiledGraph::execute()` and consumed by
+/// `PassContext::consume_frame()` inside `RenderPass::execute()`.
+pub struct FrameBlackboard {
+    data: HashMap<(&'static str, TypeId), Arc<dyn Any + Send + Sync>>,
+}
+
+impl FrameBlackboard {
+    pub fn new() -> Self {
+        Self { data: HashMap::new() }
+    }
+
+    /// Publish a typed value under `name` for this frame.
+    pub fn publish<T: 'static + Send + Sync>(&mut self, name: &'static str, data: T) {
+        self.data.insert((name, TypeId::of::<T>()), Arc::new(data));
+    }
+
+    /// Retrieve a reference to the value. Panics if not found.
+    pub fn consume<T: 'static + Send + Sync>(&self, name: &'static str) -> &T {
+        self.try_consume::<T>(name)
+            .unwrap_or_else(|| panic!("FrameBlackboard: '{}' not found", name))
+    }
+
+    /// Retrieve a reference to the value. Returns None if not found.
+    pub fn try_consume<T: 'static + Send + Sync>(&self, name: &'static str) -> Option<&T> {
+        self.data
+            .get(&(name, TypeId::of::<T>()))
+            .and_then(|arc| arc.downcast_ref::<T>())
+    }
+}
+
+impl Default for FrameBlackboard {
+    fn default() -> Self { Self::new() }
+}
 
 struct SyncPtr<T>(*mut T);
 
@@ -28,7 +67,11 @@ pub struct Symbol {
     pub name: String,
     pub symbol_type: SymbolType,
     pub lifetime: SymbolLifetime,
-    pub data: Option<Box<dyn Any + Send + Sync>>,
+    /// Arc so that output symbols can be cloned into the parent scope cheaply.
+    pub data: Option<Arc<dyn Any + Send + Sync>>,
+    /// If true, this symbol is promoted to the parent scope after declare() completes.
+    /// Used by passes acting as groups to export transient resources to siblings.
+    pub is_output: bool,
 }
 
 impl std::fmt::Debug for Symbol {
@@ -38,6 +81,7 @@ impl std::fmt::Debug for Symbol {
             .field("symbol_type", &self.symbol_type)
             .field("lifetime", &self.lifetime)
             .field("has_data", &self.data.is_some())
+            .field("is_output", &self.is_output)
             .finish()
     }
 }
@@ -129,7 +173,44 @@ impl std::fmt::Debug for NodeStorage {
 pub struct PassRecorder<'a> {
     storage: &'a mut NodeStorage,
     ancestor_symbols: Vec<&'a SymbolTable>,
-    is_setup: bool,
+}
+
+impl<'a> PassRecorder<'a> {
+    fn declare_image_impl(&mut self, name: &str, desc: ImageDesc, is_output: bool) -> ImageHandle {
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        let actual_handle = ImageHandle(id);
+        self.storage.symbols.publish(
+            name,
+            Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::Image(desc),
+                lifetime: SymbolLifetime::Transient,
+                data: Some(Arc::new(actual_handle)),
+                is_output,
+            },
+            id,
+        );
+        actual_handle
+    }
+
+    fn declare_buffer_impl(&mut self, name: &str, desc: BufferDesc, lifetime: SymbolLifetime, is_output: bool) -> BufferHandle {
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        let actual_handle = BufferHandle(id);
+        self.storage.symbols.publish(
+            name,
+            Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::Buffer(desc),
+                lifetime,
+                data: Some(Arc::new(actual_handle)),
+                is_output,
+            },
+            id,
+        );
+        actual_handle
+    }
 }
 
 impl<'a> InternalPassBuilder for PassRecorder<'a> {
@@ -143,7 +224,8 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 name: name.to_string(),
                 symbol_type: SymbolType::CpuData(_type_id),
                 lifetime: SymbolLifetime::Transient,
-                data: Some(data),
+                data: Some(Arc::from(data)),
+                is_output: false,
             },
             id,
         );
@@ -219,85 +301,47 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
     }
 
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
-        let index = self.storage.symbols.symbols.len() as u64;
-        let id = SymbolId((self.storage.node_id << 32) | index);
-        self.storage.symbols.publish(
-            name,
-            Symbol {
-                name: name.to_string(),
-                symbol_type: SymbolType::Image(desc),
-                lifetime: SymbolLifetime::Transient,
-                data: None, // Will update below
-            },
-            id,
-        );
-        let actual_handle = ImageHandle(id);
-        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
-        actual_handle
+        self.declare_image_impl(name, desc, false)
+    }
+
+    fn declare_image_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
+        self.declare_image_impl(name, desc, true)
     }
 
     fn declare_buffer(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
-        let index = self.storage.symbols.symbols.len() as u64;
-        let id = SymbolId((self.storage.node_id << 32) | index);
-        self.storage.symbols.publish(
-            name,
-            Symbol {
-                name: name.to_string(),
-                symbol_type: SymbolType::Buffer(desc),
-                lifetime: SymbolLifetime::Transient,
-                data: None,
-            },
-            id,
-        );
-        let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
-        actual_handle
+        self.declare_buffer_impl(name, desc, SymbolLifetime::Transient, false)
+    }
+
+    fn declare_buffer_output(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
+        self.declare_buffer_impl(name, desc, SymbolLifetime::Transient, true)
     }
 
     fn declare_buffer_history(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
-        let index = self.storage.symbols.symbols.len() as u64;
-        let id = SymbolId((self.storage.node_id << 32) | index);
-        self.storage.symbols.publish(
-            name,
-            Symbol {
-                name: name.to_string(),
-                symbol_type: SymbolType::Buffer(desc),
-                lifetime: SymbolLifetime::TemporalHistory,
-                data: None,
-            },
-            id,
-        );
-        let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
-        actual_handle
+        self.declare_buffer_impl(name, desc, SymbolLifetime::TemporalHistory, false)
+    }
+
+    fn declare_buffer_history_output(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {
+        self.declare_buffer_impl(name, desc, SymbolLifetime::TemporalHistory, true)
     }
 
     fn read_buffer_history(&mut self, name: &str) -> BufferHandle {
         let history_name = format!("{}_History", name);
-        let index = self.storage.symbols.symbols.len() as u64;
-        let id = SymbolId((self.storage.node_id << 32) | index);
-        self.storage.symbols.publish(
+        self.declare_buffer_impl(
             &history_name,
-            Symbol {
-                name: history_name.clone(),
-                symbol_type: SymbolType::Buffer(BufferDesc {
-                    size: 0,
-                    usage: crate::graph::types::BufferUsageFlags::empty(),
-                    memory: crate::graph::types::MemoryType::GpuOnly,
-                }), // Size ignored since it refers to an existing external-like buffer
-                lifetime: SymbolLifetime::TemporalHistory,
-                data: None,
+            BufferDesc {
+                size: 0,
+                usage: crate::graph::types::BufferUsageFlags::empty(),
+                memory: crate::graph::types::MemoryType::GpuOnly,
             },
-            id,
-        );
-        let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
-        actual_handle
+            SymbolLifetime::TemporalHistory,
+            false,
+        )
     }
 
     fn import_buffer(&mut self, name: &str, physical: BackendBuffer) -> BufferHandle {
         let index = self.storage.symbols.symbols.len() as u64;
         let id = SymbolId((self.storage.node_id << 32) | index);
+        let actual_handle = BufferHandle(id);
         self.storage.symbols.publish(
             name,
             Symbol {
@@ -306,14 +350,13 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                     size: 0,
                     usage: crate::graph::types::BufferUsageFlags::empty(),
                     memory: crate::graph::types::MemoryType::GpuOnly,
-                }), // Size/Usage ignored for external buffers
+                }),
                 lifetime: SymbolLifetime::External,
-                data: None,
+                data: Some(Arc::new(actual_handle)),
+                is_output: true,  // imported buffer promotes to parent scope like declare_buffer_output
             },
             id,
         );
-        let actual_handle = BufferHandle(id);
-        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
         self.register_external_buffer(actual_handle, physical);
         actual_handle
     }
@@ -340,11 +383,12 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
                 }),
                 lifetime: SymbolLifetime::External,
                 data: None,
+                is_output: false,
             },
             id,
         );
         let actual_handle = ImageHandle(id);
-        self.storage.symbols.symbols[index as usize].data = Some(Box::new(actual_handle));
+        self.storage.symbols.symbols[index as usize].data = Some(Arc::new(actual_handle));
 
         // Record the request
         self.storage
@@ -390,7 +434,6 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             let mut sub_recorder = PassRecorder {
                 storage: &mut child_storage,
                 ancestor_symbols: ancestors,
-                is_setup: self.is_setup,
             };
             let mut builder = PassBuilder {
                 inner: &mut sub_recorder,
@@ -398,14 +441,32 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             pass.declare(&mut builder);
         }
 
+        // Propagate output symbols into the parent scope.
+        // Any symbol marked `is_output` is cloned (Arc::clone) into the parent's symbol table
+        // so that sibling passes can resolve it by name.
+        for symbol in &child_storage.symbols.symbols {
+            if symbol.is_output {
+                let index = self.storage.symbols.symbols.len() as u64;
+                let id = SymbolId((self.storage.node_id << 32) | index);
+                self.storage.symbols.publish(
+                    &symbol.name,
+                    Symbol {
+                        name: symbol.name.clone(),
+                        symbol_type: symbol.symbol_type.clone(),
+                        lifetime: symbol.lifetime,
+                        data: symbol.data.clone(), // Arc::clone — no memory copy
+                        is_output: symbol.is_output, // preserve so symbols bubble through all nesting levels
+                    },
+                    id,
+                );
+            }
+        }
+
         // Put the real pass back
         child_storage.pass = Some(pass);
         self.storage.children.push(child_storage);
     }
 
-    fn is_setup(&self) -> bool {
-        self.is_setup
-    }
 }
 
 /// Root of the Frame Graph recording.
@@ -460,27 +521,12 @@ impl FrameGraph {
         let mut recorder = PassRecorder {
             storage: &mut self.root,
             ancestor_symbols: vec![&self.globals],
-            is_setup: false,
         };
 
         let mut builder = PassBuilder {
             inner: &mut recorder,
         };
         setup(&mut builder);
-    }
-
-    /// Records the persistent parts of the graph (long-lived passes).
-    pub fn setup<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut PassBuilder),
-    {
-        let mut recorder = PassRecorder {
-            storage: &mut self.root,
-            ancestor_symbols: vec![&self.globals],
-            is_setup: true,
-        };
-        let mut builder = PassBuilder::new(&mut recorder);
-        f(&mut builder);
     }
 
     /// Registers a long-lived service in the global scope.
@@ -493,7 +539,8 @@ impl FrameGraph {
                 name: name.to_string(),
                 symbol_type: SymbolType::CpuData(TypeId::of::<T>()),
                 lifetime: SymbolLifetime::Persistent,
-                data: Some(Box::new(data)),
+                data: Some(Arc::new(data) as Arc<dyn Any + Send + Sync>),
+                is_output: false,
             },
             id,
         );
@@ -524,6 +571,40 @@ impl FrameGraph {
         Self::init_recursive(&mut self.root, backend, &self.globals);
     }
 
+    /// Initializes a single pass directly using the global scope as context.
+    ///
+    /// Use this instead of `declare()` + `init_all()` when passes own their own
+    /// GPU buffers (created in `init()`) and you don't want to run `declare()` yet.
+    /// Recursively calls `init()` on child passes via the group pattern.
+    pub fn init_pass_direct(&mut self, pass: &mut dyn crate::graph::pass::RenderPass, backend: &mut dyn RenderBackend) {
+        let mut dummy = NodeStorage {
+            node_id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
+            name: pass.name().to_string(),
+            symbols: SymbolTable::new(),
+            children: Vec::new(),
+            pass: None,
+            pipeline: None,
+            image_reads: Vec::new(),
+            image_writes: Vec::new(),
+            buffer_reads: Vec::new(),
+            buffer_writes: Vec::new(),
+            data_writes: Vec::new(),
+            data_reads: Vec::new(),
+            external_images: Vec::new(),
+            external_buffers: Vec::new(),
+            swapchain_requests: Vec::new(),
+            descriptor_sets: Vec::new(),
+            prefer_async: false,
+            present_images: Vec::new(),
+        };
+        let mut recorder = PassRecorder {
+            storage: &mut dummy,
+            ancestor_symbols: vec![&self.globals],
+        };
+        let mut builder = PassBuilder::new(&mut recorder);
+        pass.init(backend, &mut builder);
+    }
+
     fn init_recursive(
         node: &mut NodeStorage,
         backend: &mut dyn RenderBackend,
@@ -534,7 +615,6 @@ impl FrameGraph {
                 let mut recorder = PassRecorder {
                     storage: node,
                     ancestor_symbols: vec![globals],
-                    is_setup: true,
                 };
                 let mut builder = PassBuilder::new(&mut recorder);
                 pass.init(backend, &mut builder);
@@ -990,6 +1070,7 @@ impl CompiledGraph {
     pub fn execute<B: RenderBackendInternal>(
         mut self,
         backend: &mut B,
+        frame_data: &FrameBlackboard,
         temporal_registry: Option<&mut crate::graph::temporal::TemporalRegistry>,
     ) -> Result<Option<u64>, GraphError> {
         tracing::debug!(
@@ -1133,7 +1214,7 @@ impl CompiledGraph {
                             let node = unsafe { &mut *node_ptr.0 };
                             tracing::debug!(pass = %flat.name, domain = ?flat.domain, queue = ?flat.queue, "Executing pass");
                             let (_sem, cb, _present_req) =
-                                backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref());
+                                backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref(), frame_data);
                             if let Some(c) = cb {
                                 push_cb(&mut batch, flat.queue, c);
                             }
@@ -1151,6 +1232,7 @@ impl CompiledGraph {
                                     let (_sem, cb, present_req) = backend.record_pass(
                                         prepared,
                                         node.pass.as_ref().unwrap().as_ref(),
+                                        frame_data,
                                     );
                                     return Some((cb, present_req, flat.queue));
                                 }

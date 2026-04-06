@@ -53,9 +53,6 @@ impl RenderPass for BlasUpdatePass {
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
 
         // Consume pending builds from sync()
         if let Some(builds) = builder.try_consume::<Vec<BackendAccelerationStructure>>("PendingBlasBuilds") {
@@ -71,7 +68,7 @@ impl RenderPass for BlasUpdatePass {
         }
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         for &handle in &self.builds {
             ctx.build_blas(handle, false); // Initial build
         }
@@ -101,9 +98,6 @@ impl RenderPass for TlasRebuildPass {
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        if builder.is_setup() {
-            return;
-        }
 
         // Declare TLAS usage
         let system = self.system.lock().unwrap();
@@ -119,7 +113,7 @@ impl RenderPass for TlasRebuildPass {
         }
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
         let system = self.system.lock().unwrap();
         if let Some(tlas) = system.tlas {
             if !self.instances.is_empty() {

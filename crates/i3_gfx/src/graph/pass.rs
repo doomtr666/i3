@@ -1,4 +1,5 @@
 use crate::graph::backend::{DescriptorWrite, PassContext, RenderBackend};
+use crate::graph::compiler::FrameBlackboard;
 use crate::graph::types::{BufferHandle, ImageDesc, ImageHandle, ResourceUsage, WindowHandle};
 use std::any::{Any, TypeId};
 
@@ -11,12 +12,6 @@ pub struct PassBuilder<'a> {
 impl<'a> PassBuilder<'a> {
     pub(crate) fn new(inner: &'a mut dyn InternalPassBuilder) -> Self {
         Self { inner }
-    }
-
-    /// Returns true if this is the registration (setup) phase.
-    /// Passes should skip resource resolution but still declare nodes here.
-    pub fn is_setup(&self) -> bool {
-        self.inner.is_setup()
     }
 
     // --- Scoped Symbol Table ---
@@ -94,6 +89,11 @@ impl<'a> PassBuilder<'a> {
         self.inner.declare_image(name, desc)
     }
 
+    /// Declares a new transient image, publishes it, and promotes it to the parent scope.
+    pub fn declare_image_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
+        self.inner.declare_image_output(name, desc)
+    }
+
     /// Acquires a window-backed image (backbuffer) and publishes it.
     pub fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle {
         self.inner.acquire_backbuffer(window)
@@ -108,6 +108,15 @@ impl<'a> PassBuilder<'a> {
         self.inner.declare_buffer(name, desc)
     }
 
+    /// Declares a new transient buffer, publishes it, and promotes it to the parent scope.
+    pub fn declare_buffer_output(
+        &mut self,
+        name: &str,
+        desc: crate::graph::types::BufferDesc,
+    ) -> BufferHandle {
+        self.inner.declare_buffer_output(name, desc)
+    }
+
     /// Declares a persistent buffer that requires N-1 temporal history support.
     pub fn declare_buffer_history(
         &mut self,
@@ -115,6 +124,15 @@ impl<'a> PassBuilder<'a> {
         desc: crate::graph::types::BufferDesc,
     ) -> crate::graph::types::BufferHandle {
         self.inner.declare_buffer_history(name, desc)
+    }
+
+    /// Declares a persistent buffer with temporal history, promoted to the parent scope.
+    pub fn declare_buffer_history_output(
+        &mut self,
+        name: &str,
+        desc: crate::graph::types::BufferDesc,
+    ) -> crate::graph::types::BufferHandle {
+        self.inner.declare_buffer_history_output(name, desc)
     }
 
     /// Reads the N-1 temporal history of a buffer as an external input.
@@ -197,8 +215,8 @@ impl RenderPass for BoxedRef {
         unsafe { (*self.inner).declare(builder) }
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext) {
-        unsafe { (*self.inner).execute(ctx) }
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
+        unsafe { (*self.inner).execute(ctx, frame) }
     }
 }
 
@@ -222,7 +240,7 @@ pub trait RenderPass: Any + Send + Sync {
     fn declare(&mut self, builder: &mut PassBuilder);
 
     /// Record GPU commands (optional for purely grouping nodes).
-    fn execute(&self, _ctx: &mut dyn PassContext) {}
+    fn execute(&self, _ctx: &mut dyn PassContext, _frame: &FrameBlackboard) {}
 }
 
 /// Internal trait to hide implementation details from the public PassBuilder API.
@@ -238,9 +256,20 @@ pub(crate) trait InternalPassBuilder {
     fn write_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage);
 
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    fn declare_image_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
     fn declare_buffer(&mut self, name: &str, desc: crate::graph::types::BufferDesc)
     -> BufferHandle;
+    fn declare_buffer_output(
+        &mut self,
+        name: &str,
+        desc: crate::graph::types::BufferDesc,
+    ) -> BufferHandle;
     fn declare_buffer_history(
+        &mut self,
+        name: &str,
+        desc: crate::graph::types::BufferDesc,
+    ) -> BufferHandle;
+    fn declare_buffer_history_output(
         &mut self,
         name: &str,
         desc: crate::graph::types::BufferDesc,
@@ -270,5 +299,4 @@ pub(crate) trait InternalPassBuilder {
     );
 
     fn add_node_erased(&mut self, node: Box<dyn RenderPass>);
-    fn is_setup(&self) -> bool;
 }
