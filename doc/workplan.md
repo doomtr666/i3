@@ -65,10 +65,10 @@ graph TD
 | SYNC-06 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Present barrier managed by sync planner via `builder.present_image()`.~~ |
 | GFX-07 | i3_gfx | **DONE** | ~~Multi-queue async compute/transfer.~~ Working, no validation errors. |
 | GFX-MQ-01 | i3_vulkan_backend | **DONE** | ~~`begin_frame` per-queue timeline wait before pool reset.~~ Compute and transfer semaphore waits added at `submission.rs:159-205`. |
-| GFX-MQ-02 | i3_vulkan_backend | Medium | `get_queue_family()` calls `.unwrap()` on `backend.compute` / `backend.transfer` unconditionally. Fix: return `Option<u32>` or fall back to `graphics_family`. (`sync.rs:34-40`) |
-| GFX-MQ-03 | i3_vulkan_backend | Medium | `sanitize_stages` silently converts unsupported stages to `TOP_OF_PIPE` on compute/transfer queues without logging. Fix: add `tracing::warn!` when the fallback fires. (`sync.rs:327-342`) |
-| IO-01 | i3_io | High | `AssetHandle::get()`/`wait_loaded()` return refs that may outlive the lock. Use `Arc<T>`. |
-| IO-03 | i3_io | Medium | Manual unsafe pointer cast in `texture.rs`. Use `bytemuck` patterns. |
+| GFX-MQ-02 | i3_vulkan_backend | **DONE** | ~~`get_queue_family()` unwrap.~~ Already uses `unwrap_or(graphics_family)` fallback in `sync.rs:80-90`. |
+| GFX-MQ-03 | i3_vulkan_backend | **DONE** | ~~`sanitize_stages` silent fallback.~~ Already emits `tracing::warn!` in `sync.rs:438-441,453-457`. |
+| IO-01 | i3_io | **DONE** | ~~`AssetHandle` ref lifetime.~~ `get()` and `wait_loaded()` already return owned `Arc<T>` cloned under the lock. |
+| IO-03 | i3_io | **DONE** | ~~Manual unsafe cast in `texture.rs`.~~ Already uses `bytemuck::pod_read_unaligned`. |
 | VK-03 | i3_vulkan_backend | Low | Format conversion audit needed for recent Vulkan additions. |
 
 ### 2.2 Renderer & Shading (i3_renderer)
@@ -76,7 +76,7 @@ graph TD
 | ID | Severity | Description |
 |---|---|---|
 | RN-02 | High | Normal mapping not utilized in deferred resolve. GBuffer normal lacks tangent-space map sampling. |
-| RN-03 | Medium | Magic numbers (`grid_z=16`, `max_instances=262144`, `max_meshes=16384`) still duplicated across `groups/mod.rs`, `passes/cull.rs`, `passes/cluster_build.rs`, `passes/light_cull.rs`, `passes/sync.rs`. Extract to named constants in a shared `renderer_constants.rs`. |
+| RN-03 | **DONE** | ~~Magic numbers duplicated.~~ Extracted to `constants.rs`: `MAX_MESHES`, `MAX_INSTANCES`, `MAX_LIGHTS`, `CLUSTER_GRID_Z`, `CLUSTER_TILE_SIZE`, `DRAW_INDIRECT_CMD_SIZE`. |
 | RN-04 | High | No GPU culling pass (GPUCull). Currently uses CPU-side draw commands. |
 | RN-05 | High | No ZPrePass implemented. |
 | RN-06 | Medium | No forward transparency pass. |
@@ -110,10 +110,10 @@ graph TD
 - **[DONE]** GFX-09: Phase-aware RenderPass + symbol outputs + resource relocalisation + FrameBlackboard.
 - **[DONE]** GFX-10: Stable compiled topology — `mark_dirty()` + per-frame `CompiledGraph` cache.
 - **[DONE]** Fix GFX-MQ-01: per-queue `last_completion_value` and wait in `begin_frame`.
-- **[TODO]** Fix GFX-MQ-02: safe `get_queue_family()` with fallback.
-- **[TODO]** Fix GFX-MQ-03: log warn in `sanitize_stages` on fallback.
-- **[TODO]** Refactor `AssetHandle` accessors to return `Arc<T>` (IO-01).
-- **[TODO]** Clean up unsafe casts in `texture.rs` (IO-03).
+- **[DONE]** Fix GFX-MQ-02: safe `get_queue_family()` with fallback.
+- **[DONE]** Fix GFX-MQ-03: log warn in `sanitize_stages` on fallback.
+- **[DONE]** Refactor `AssetHandle` accessors to return `Arc<T>` (IO-01).
+- **[DONE]** Clean up unsafe casts in `texture.rs` (IO-03).
 - **[TODO]** Split `compiler.rs` (GFX-03).
 
 ### Phase 2: Advanced Rendering Features

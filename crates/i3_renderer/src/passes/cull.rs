@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use i3_gfx::prelude::*;
+use crate::constants::{MAX_INSTANCES, DRAW_INDIRECT_CMD_SIZE};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -116,7 +117,7 @@ impl RenderPass for DrawCallGenComputePass {
             0,
             &DrawCallGenPushConstants {
                 instance_count: self.instance_count,
-                max_draw_calls: 262144,
+                max_draw_calls: MAX_INSTANCES as u32,
             },
         );
         let group_count = (self.instance_count + 63) / 64;
@@ -163,9 +164,8 @@ impl RenderPass for DrawCallGenPass {
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
-        let max_instances: u64 = 262144;
         self.draw_call_buffer_physical = backend.create_buffer(&BufferDesc {
-            size: max_instances * 16, // DrawIndirectCommand is 16 bytes
+            size: MAX_INSTANCES * DRAW_INDIRECT_CMD_SIZE,
             usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::INDIRECT_BUFFER | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });

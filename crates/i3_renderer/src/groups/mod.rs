@@ -35,9 +35,9 @@ impl RenderPass for ClusteringGroup {
 
     fn declare(&mut self, builder: &mut PassBuilder) {
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
-        let grid_x = (common.screen_width + 63) / 64;
-        let grid_y = (common.screen_height + 63) / 64;
-        let grid_z: u32 = 16;
+        let grid_x = (common.screen_width + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
+        let grid_y = (common.screen_height + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
+        let grid_z: u32 = crate::constants::CLUSTER_GRID_Z;
         let max_clusters = (grid_x * grid_y * grid_z) as u64;
 
         builder.declare_buffer_output("ClusterAABBs", BufferDesc {

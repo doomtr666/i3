@@ -147,9 +147,8 @@ impl DefaultRenderGraph {
 
         let graph = FrameGraph::new();
 
-        let max_lights: u64 = 1024;
         let light_buffer = _backend.create_buffer(&BufferDesc {
-            size: max_lights * std::mem::size_of::<crate::scene::LightData>() as u64,
+            size: crate::constants::MAX_LIGHTS * std::mem::size_of::<crate::scene::LightData>() as u64,
             usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::CpuToGpu,
         });
@@ -340,7 +339,7 @@ impl DefaultRenderGraph {
             // 1. Initialize TLAS if missing
             if self.accel_struct_system.tlas.is_none() {
                 self.accel_struct_system.tlas = Some(backend.create_tlas(&TlasCreateInfo {
-                    max_instances: 262144,
+                    max_instances: crate::constants::MAX_INSTANCES as u32,
                     flags: AccelStructBuildFlags::PREFER_FAST_TRACE,
                 }));
             }
@@ -394,9 +393,9 @@ impl DefaultRenderGraph {
             self.tlas_rebuild_pass.instances = tlas_instances;
         }
 
-        let mut gpu_lights = Vec::with_capacity(1024);
+        let mut gpu_lights = Vec::with_capacity(crate::constants::MAX_LIGHTS as usize);
         for (_, light) in scene.iter_lights() {
-            if gpu_lights.len() >= 1024 {
+            if gpu_lights.len() >= crate::constants::MAX_LIGHTS as usize {
                 break;
             }
             let light_type = match light.light_type {
@@ -454,7 +453,7 @@ impl DefaultRenderGraph {
         let inv_view_projection = view_projection
             .try_inverse()
             .unwrap_or_else(nalgebra_glm::identity);
-        let light_count = scene.light_count().min(1024) as u32;
+        let light_count = scene.light_count().min(crate::constants::MAX_LIGHTS as usize) as u32;
         let camera_pos = view
             .try_inverse()
             .map(|v| v.column(3).xyz())
@@ -585,7 +584,7 @@ impl DefaultRenderGraph {
             .try_inverse()
             .unwrap_or_else(nalgebra_glm::identity);
 
-        let light_count = scene.light_count().min(1024) as u32;
+        let light_count = scene.light_count().min(crate::constants::MAX_LIGHTS as usize) as u32;
         let camera_pos = view
             .try_inverse()
             .map(|v| v.column(3).xyz())

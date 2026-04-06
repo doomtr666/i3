@@ -120,9 +120,9 @@ impl RenderPass for LightCullPass {
             return;
         };
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
-        let grid_x = (common.screen_width + 63) / 64;
-        let grid_y = (common.screen_height + 63) / 64;
-        let grid_z: u32 = 16;
+        let grid_x = (common.screen_width + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
+        let grid_y = (common.screen_height + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
+        let grid_z: u32 = crate::constants::CLUSTER_GRID_Z;
         let push_constants = LightCullPushConstants {
             view_matrix: common.view,
             grid_size: [grid_x, grid_y, grid_z],

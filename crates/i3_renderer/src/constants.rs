@@ -1,0 +1,18 @@
+/// Maximum number of meshes in the mesh descriptor buffer.
+pub const MAX_MESHES: u64 = 16384;
+
+/// Maximum number of instances in the instance buffer and draw call buffer.
+pub const MAX_INSTANCES: u64 = 262144;
+
+/// Maximum number of lights processed per frame.
+pub const MAX_LIGHTS: u64 = 1024;
+
+/// Number of depth slices in the cluster grid (Z axis).
+pub const CLUSTER_GRID_Z: u32 = 16;
+
+/// Tile size in pixels for cluster X/Y grid dimensions.
+pub const CLUSTER_TILE_SIZE: u32 = 64;
+
+/// Size in bytes of a `vkDrawIndexedIndirectCommand` (index_count, instance_count,
+/// first_index, vertex_offset, first_instance — 5 × u32).
+pub const DRAW_INDIRECT_CMD_SIZE: u64 = 20;

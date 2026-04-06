@@ -1,3 +1,4 @@
+use crate::constants::{MAX_MESHES, MAX_INSTANCES};
 use crate::scene::{MaterialData, GpuMeshDescriptor, GpuInstanceData};
 use i3_gfx::prelude::*;
 
@@ -29,9 +30,8 @@ impl RenderPass for MeshRegistrySyncPass {
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {
-        let max_meshes: u64 = 16384;
         self.physical_buffer = backend.create_buffer(&BufferDesc {
-            size: max_meshes * std::mem::size_of::<GpuMeshDescriptor>() as u64,
+            size: MAX_MESHES * std::mem::size_of::<GpuMeshDescriptor>() as u64,
             usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::CpuToGpu,
         });
@@ -147,9 +147,8 @@ impl RenderPass for InstanceSyncPass {
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {
-        let max_instances: u64 = 262144;
         self.physical_buffer = backend.create_buffer(&BufferDesc {
-            size: max_instances * std::mem::size_of::<GpuInstanceData>() as u64,
+            size: MAX_INSTANCES * std::mem::size_of::<GpuInstanceData>() as u64,
             usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::CpuToGpu,
         });
