@@ -1,6 +1,5 @@
 use i3_gfx::prelude::*;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 /// System for managing acceleration structure handles in the renderer.
 /// This persists across frames and caches BLAS objects.
@@ -30,18 +29,22 @@ impl AccelStructSystem {
     }
 }
 
-/// Pass responsible for building/updating BLAS for all meshes.
+// ─────────────────────────────────────────────────────────────────────────────
+// BlasUpdatePass
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pass responsible for building newly created BLAS.
+///
+/// `builds` and `blas_handles` are populated by `DefaultRenderGraph::sync()`
+/// before `declare()` is called, so no blackboard access is needed here.
 pub struct BlasUpdatePass {
-    pub system: Arc<Mutex<AccelStructSystem>>,
+    /// Newly created BLAS to build this frame (populated by sync()).
     pub builds: Vec<BackendAccelerationStructure>,
 }
 
 impl BlasUpdatePass {
-    pub fn new(system: Arc<Mutex<AccelStructSystem>>) -> Self {
-        Self {
-            system,
-            builds: Vec::new(),
-        }
+    pub fn new() -> Self {
+        Self { builds: Vec::new() }
     }
 }
 
@@ -53,17 +56,8 @@ impl RenderPass for BlasUpdatePass {
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-
-        // Consume pending builds from sync()
-        if let Some(builds) = builder.try_consume::<Vec<BackendAccelerationStructure>>("PendingBlasBuilds") {
-            self.builds = builds.clone();
-        } else {
-            self.builds.clear();
-        }
-
-        // Declare usage of all active BLAS
-        let system = self.system.lock().unwrap();
-        for (_, &handle) in &system.blas_cache {
+        // Declare write access only for BLAS that are actually being built this frame.
+        for &handle in &self.builds {
             builder.write_acceleration_structure(handle, ResourceUsage::ACCEL_STRUCT_WRITE);
         }
     }
@@ -75,18 +69,41 @@ impl RenderPass for BlasUpdatePass {
     }
 }
 
-/// Pass responsible for rebuilding the TLAS from visible instances.
+// ─────────────────────────────────────────────────────────────────────────────
+// TlasRebuildPass
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pass responsible for rebuilding the TLAS when the instance list changes.
+///
+/// `tlas` and `instances` are populated by `DefaultRenderGraph::sync()`.
+/// A frame-to-frame dirty check avoids the rebuild when nothing changed.
 pub struct TlasRebuildPass {
-    pub system: Arc<Mutex<AccelStructSystem>>,
+    /// TLAS handle (populated by sync()).
+    pub tlas: Option<BackendAccelerationStructure>,
+    /// Instance list for this frame (populated by sync()).
     pub instances: Vec<TlasInstanceDesc>,
+
+    // Internal dirty-tracking state.
+    instances_cache: Vec<TlasInstanceDesc>,
+    tlas_dirty: bool,
 }
 
 impl TlasRebuildPass {
-    pub fn new(system: Arc<Mutex<AccelStructSystem>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            system,
+            tlas: None,
             instances: Vec::new(),
+            instances_cache: Vec::new(),
+            tlas_dirty: false,
         }
+    }
+
+    /// Clears cached state (e.g. after a scene switch).
+    pub fn reset(&mut self) {
+        self.tlas = None;
+        self.instances.clear();
+        self.instances_cache.clear();
+        self.tlas_dirty = false;
     }
 }
 
@@ -98,26 +115,29 @@ impl RenderPass for TlasRebuildPass {
     fn init(&mut self, _backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {}
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-
-        // Declare TLAS usage
-        let system = self.system.lock().unwrap();
-        if let Some(tlas) = system.tlas {
+        if let Some(tlas) = self.tlas {
             builder.write_acceleration_structure(tlas, ResourceUsage::ACCEL_STRUCT_WRITE);
         }
 
-        // Consume visible instances from culling/scene
-        if let Some(instances) = builder.try_consume::<Vec<TlasInstanceDesc>>("TlasInstances") {
-            self.instances = instances.clone();
-        } else {
-            self.instances.clear();
+        // Dirty check: only rebuild when the instance list changed.
+        self.tlas_dirty = self.instances.len() != self.instances_cache.len()
+            || self.instances
+                .iter()
+                .zip(self.instances_cache.iter())
+                .any(|(a, b)| a != b);
+
+        if self.tlas_dirty {
+            self.instances_cache = self.instances.clone();
         }
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
-        let system = self.system.lock().unwrap();
-        if let Some(tlas) = system.tlas {
+        if !self.tlas_dirty {
+            return;
+        }
+        if let Some(tlas) = self.tlas {
             if !self.instances.is_empty() {
-                ctx.build_tlas(tlas, &self.instances, false); // Full rebuild for now
+                ctx.build_tlas(tlas, &self.instances, false);
             }
         }
     }

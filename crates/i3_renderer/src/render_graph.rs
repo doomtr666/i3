@@ -6,7 +6,7 @@ use crate::passes::gbuffer::GBufferPass;
 use crate::passes::sky::SkyPass;
 use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Shared data published to the FrameGraph blackboard.
 #[repr(C)]
@@ -90,14 +90,12 @@ pub struct DefaultRenderGraph {
     pub bindless_manager: crate::bindless::BindlessManager,
     pub ui: Option<Arc<i3_egui::UiSystem>>,
 
-    pub accel_struct_system: Arc<Mutex<crate::passes::accel_struct::AccelStructSystem>>,
+    pub accel_struct_system: crate::passes::accel_struct::AccelStructSystem,
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
 
     // Scene data cached during sync() for declare()
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
-    pub pending_blas: Vec<BackendAccelerationStructure>,
-    pub tlas_instances: Vec<TlasInstanceDesc>,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -175,9 +173,9 @@ impl DefaultRenderGraph {
             .unwrap();
         bindless_manager.register_physical_texture(_backend, white_image);
 
-        let accel_struct_system = Arc::new(Mutex::new(crate::passes::accel_struct::AccelStructSystem::new()));
-        let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new(accel_struct_system.clone());
-        let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new(accel_struct_system.clone());
+        let accel_struct_system = crate::passes::accel_struct::AccelStructSystem::new();
+        let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
+        let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
 
         Self {
             graph,
@@ -200,19 +198,16 @@ impl DefaultRenderGraph {
             blas_update_pass,
             tlas_rebuild_pass,
             scene_mesh_descriptors: Vec::new(),
-            pending_blas: Vec::new(),
-            tlas_instances: Vec::new(),
         }
     }
 
     /// Resets scene-specific state in the render graph (e.g., for scene switching).
     pub fn clear_scene(&mut self, backend: &mut dyn RenderBackend) {
-        let mut system = self.accel_struct_system.lock().unwrap();
-        system.reset(backend);
+        self.accel_struct_system.reset(backend);
+        self.blas_update_pass.builds.clear();
+        self.tlas_rebuild_pass.reset();
         self.bindless_manager.clear();
         self.scene_mesh_descriptors.clear();
-        self.pending_blas.clear();
-        self.tlas_instances.clear();
     }
 
     /// Initializes the render graph: handles cooperative asset loading and pipeline binding.
@@ -312,20 +307,18 @@ impl DefaultRenderGraph {
 
         // Ray Tracing Synchronization
         if backend.capabilities().ray_tracing {
-            let mut system = self.accel_struct_system.lock().unwrap();
-            
             // 1. Initialize TLAS if missing
-            if system.tlas.is_none() {
-                system.tlas = Some(backend.create_tlas(&TlasCreateInfo {
-                    max_instances: 262144, // Match GpuBuffers::max_instances
+            if self.accel_struct_system.tlas.is_none() {
+                self.accel_struct_system.tlas = Some(backend.create_tlas(&TlasCreateInfo {
+                    max_instances: 262144,
                     flags: AccelStructBuildFlags::PREFER_FAST_TRACE,
                 }));
             }
 
-            // 2. Manage BLAS lifecycle
-            let mut pending_blas = Vec::new();
+            // 2. Manage BLAS lifecycle — create new BLAS for any mesh not yet in cache
+            let mut builds = Vec::new();
             for (id, _) in &self.scene_mesh_descriptors {
-                if !system.blas_cache.contains_key(id) {
+                if !self.accel_struct_system.blas_cache.contains_key(id) {
                     let mesh = scene.mesh(*id);
                     let blas = backend.create_blas(&BlasCreateInfo {
                         geometries: vec![BlasGeometryDesc {
@@ -333,7 +326,7 @@ impl DefaultRenderGraph {
                             vertex_offset: 0,
                             vertex_count: mesh.vertex_count,
                             vertex_stride: mesh.stride,
-                            vertex_format: Format::R32G32B32_SFLOAT, // Standard for i3
+                            vertex_format: Format::R32G32B32_SFLOAT,
                             index_buffer: mesh.index_buffer,
                             index_offset: 0,
                             index_count: mesh.index_count,
@@ -341,35 +334,34 @@ impl DefaultRenderGraph {
                         }],
                         flags: AccelStructBuildFlags::PREFER_FAST_TRACE,
                     });
-                    system.blas_cache.insert(*id, blas);
-                    pending_blas.push(blas);
+                    self.accel_struct_system.blas_cache.insert(*id, blas);
+                    builds.push(blas);
                 }
             }
-            self.pending_blas = pending_blas;
+            self.blas_update_pass.builds = builds;
 
-            // 3. Build TLAS Instance list
+            // 3. Build TLAS instance list and push to the pass
             let mut tlas_instances = Vec::new();
             for inst in scene.iter_instances() {
-                if let Some(&blas) = system.blas_cache.get(&inst.mesh_idx) {
-                    // Extract 3x4 matrix from Mat4
+                if let Some(&blas) = self.accel_struct_system.blas_cache.get(&inst.mesh_idx) {
                     let mut transform = [0.0f32; 12];
                     for i in 0..3 {
                         for j in 0..4 {
-                            transform[i * 4 + j] = inst.world_transform[(i, j)]; // Correct row-major 3x4 layout
+                            transform[i * 4 + j] = inst.world_transform[(i, j)];
                         }
                     }
-
                     tlas_instances.push(TlasInstanceDesc {
                         transform,
                         instance_id: tlas_instances.len() as u32,
                         mask: 0xFF,
                         sbt_offset: 0,
-                        flags: 0, // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR etc
+                        flags: 0,
                         blas,
                     });
                 }
             }
-            self.tlas_instances = tlas_instances;
+            self.tlas_rebuild_pass.tlas = self.accel_struct_system.tlas;
+            self.tlas_rebuild_pass.instances = tlas_instances;
         }
 
         let mut gpu_lights = Vec::with_capacity(1024);
@@ -541,8 +533,6 @@ impl DefaultRenderGraph {
             builder.publish("SunIntensity", sun_int);
             builder.publish("SunColor", sun_col);
             builder.publish("TimeDelta", dt);
-            builder.publish("PendingBlasBuilds", self.pending_blas.clone());
-            builder.publish("TlasInstances", self.tlas_instances.clone());
 
             let backbuffer = builder.acquire_backbuffer(window);
             builder.publish("Backbuffer", backbuffer);

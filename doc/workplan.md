@@ -64,7 +64,7 @@ graph TD
 | SYNC-05 | i3_gfx | Low | `layout` field in `ResourceState` is meaningless for buffers. Either introduce separate `ImageState`/`BufferState` types or document the field as image-only. |
 | SYNC-06 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Present barrier managed by sync planner via `builder.present_image()`.~~ |
 | GFX-07 | i3_gfx | **DONE** | ~~Multi-queue async compute/transfer.~~ Working, no validation errors. |
-| GFX-MQ-01 | i3_vulkan_backend | High | `begin_frame` waits only on the graphics timeline semaphore before resetting all frame contexts. Compute and transfer pools are reset without waiting — command buffers in flight can be invalidated. Fix: add `last_completion_value` per `QueueContext` and wait on each queue's timeline. (`submission.rs:114-196`) |
+| GFX-MQ-01 | i3_vulkan_backend | **DONE** | ~~`begin_frame` per-queue timeline wait before pool reset.~~ Compute and transfer semaphore waits added at `submission.rs:159-205`. |
 | GFX-MQ-02 | i3_vulkan_backend | Medium | `get_queue_family()` calls `.unwrap()` on `backend.compute` / `backend.transfer` unconditionally. Fix: return `Option<u32>` or fall back to `graphics_family`. (`sync.rs:34-40`) |
 | GFX-MQ-03 | i3_vulkan_backend | Medium | `sanitize_stages` silently converts unsupported stages to `TOP_OF_PIPE` on compute/transfer queues without logging. Fix: add `tracing::warn!` when the fallback fires. (`sync.rs:327-342`) |
 | IO-01 | i3_io | High | `AssetHandle::get()`/`wait_loaded()` return refs that may outlive the lock. Use `Arc<T>`. |
@@ -81,10 +81,11 @@ graph TD
 | RN-05 | High | No ZPrePass implemented. |
 | RN-06 | Medium | No forward transparency pass. |
 | RN-07 | Info | No RT support (BLAS/TLAS). Planned for future phases. |
-| RN-08 | Medium | `sync.rs` dirty-check logic is broken: `zip()` stops at shortest iterator, so shrinking the scene isn't detected as dirty. Fix: compare lengths first, then compare full slices. |
+| RN-08 | **DONE** | ~~`sync.rs` dirty-check: length check first, then zip.~~ Already correct in code; marked done. |
 | RN-09 | Low | `LightData` in `scene.rs` needs `repr(C)` padding audit for GPU compatibility. |
-| RN-10 | Medium | `Arc<Mutex<AccelStructSystem>>` in `render_graph.rs` is unnecessary — the renderer is single-threaded. Replace with direct field ownership. (`passes/accel_struct.rs:35,80`) |
+| RN-10 | **DONE** | ~~`Arc<Mutex<AccelStructSystem>>`~~ Replaced with direct field ownership. Passes populated by `sync()`, no blackboard needed. |
 | RN-11 | Low | `unsafe ptr::copy_nonoverlapping` in `sync.rs` lacks bounds checking and casts through `*const u8`. Audit and tighten. |
+| RN-12 | **DONE** | ~~TLAS rebuilt every frame.~~ `TlasRebuildPass` now caches the instance list and skips `build_tlas` when unchanged. |
 
 ### 2.3 Tools (i3_baker, i3_bundle, i3_egui)
 
@@ -108,7 +109,7 @@ graph TD
 - **[DONE]** SYNC-06: Present barrier fully managed by sync planner; `builder.present_image()` API.
 - **[DONE]** GFX-09: Phase-aware RenderPass + symbol outputs + resource relocalisation + FrameBlackboard.
 - **[TODO]** GFX-10: Stable compiled topology — `mark_dirty()` + per-frame `CompiledGraph` cache.
-- **[TODO]** Fix GFX-MQ-01: per-queue `last_completion_value` and wait in `begin_frame`.
+- **[DONE]** Fix GFX-MQ-01: per-queue `last_completion_value` and wait in `begin_frame`.
 - **[TODO]** Fix GFX-MQ-02: safe `get_queue_family()` with fallback.
 - **[TODO]** Fix GFX-MQ-03: log warn in `sanitize_stages` on fallback.
 - **[TODO]** Refactor `AssetHandle` accessors to return `Arc<T>` (IO-01).
