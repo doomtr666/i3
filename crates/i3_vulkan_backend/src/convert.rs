@@ -323,6 +323,7 @@ pub fn convert_binding_type_to_descriptor(binding_type: BindingType) -> vk::Desc
         BindingType::StorageTexture => vk::DescriptorType::STORAGE_IMAGE,
         BindingType::Sampler => vk::DescriptorType::SAMPLER,
         BindingType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        BindingType::AccelerationStructure => vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
         BindingType::Unknown => vk::DescriptorType::UNIFORM_BUFFER, // fallback
     }
 }

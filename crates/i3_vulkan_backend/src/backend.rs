@@ -54,8 +54,9 @@ pub struct VulkanBackend {
     // Resources mapping (Arena based)
     pub images: ResourceArena<PhysicalImage>,
     pub buffers: ResourceArena<PhysicalBuffer>,
-    pub external_to_physical: HashMap<u64, u64>, // Virtual ID -> Physical ID
-    pub external_buffer_to_physical: HashMap<u64, u64>,
+    pub external_to_physical: HashMap<u64, u64>,        // Virtual ImageID -> Physical ID
+    pub external_buffer_to_physical: HashMap<u64, u64>, // Virtual BufferID -> Physical ID
+    pub external_as_to_physical: HashMap<u64, u64>,     // Virtual AccelStructID -> Physical ID
 
     pub frame_count: u64,
     pub dead_images: Vec<(u64, vk::Image, vk::ImageView, vk_mem::Allocation)>, // Frame, Image, View, Alloc
@@ -155,6 +156,7 @@ impl VulkanBackend {
             buffers: ResourceArena::new(),
             external_to_physical: HashMap::new(),
             external_buffer_to_physical: HashMap::new(),
+            external_as_to_physical: HashMap::new(),
             semaphores: ResourceArena::new(),
             samplers: ResourceArena::new(),
             next_semaphore_id: 1,
@@ -296,6 +298,10 @@ impl VulkanBackend {
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
                 descriptor_count: 4096,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                descriptor_count: 64,
             },
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
@@ -702,8 +708,24 @@ impl RenderBackend for VulkanBackend {
     }
 
     fn register_external_buffer(&mut self, handle: BufferHandle, physical: BackendBuffer) {
-        self.external_buffer_to_physical
-            .insert(handle.0.0, physical.0);
+        self.external_buffer_to_physical.insert(handle.0.0, physical.0);
+    }
+
+    fn register_external_accel_struct(
+        &mut self,
+        handle: AccelerationStructureHandle,
+        physical: BackendAccelerationStructure,
+    ) {
+        self.external_as_to_physical.insert(handle.0.0, physical.0);
+    }
+
+    fn resolve_accel_struct(&self, handle: AccelerationStructureHandle) -> BackendAccelerationStructure {
+        if let Some(&physical) = self.external_as_to_physical.get(&handle.0.0) {
+            BackendAccelerationStructure(physical)
+        } else {
+            tracing::warn!("resolve_accel_struct: handle {:?} not found", handle);
+            BackendAccelerationStructure(u64::MAX)
+        }
     }
 
     /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
@@ -941,6 +963,7 @@ impl RenderBackendInternal for VulkanBackend {
         // making analyze_frame's iteration O(all-time resources) instead of O(current frame).
         self.external_to_physical.clear();
         self.external_buffer_to_physical.clear();
+        self.external_as_to_physical.clear();
     }
 
     fn end_frame(&mut self) {

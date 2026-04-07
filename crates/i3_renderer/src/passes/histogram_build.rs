@@ -1,6 +1,5 @@
-use std::sync::Arc;
 use i3_gfx::prelude::*;
-
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -43,11 +42,13 @@ impl RenderPass for HistogramBuildPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("histogram_build").wait_loaded() {
-            self.pipeline = Some(backend.create_compute_pipeline_from_baked(
-                &asset.reflection_data,
-                &asset.bytecode,
-            ));
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("histogram_build")
+            .wait_loaded()
+        {
+            self.pipeline = Some(
+                backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
+            );
         }
     }
 
@@ -76,6 +77,7 @@ impl RenderPass for HistogramBuildPass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: None,
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 1,
@@ -87,6 +89,7 @@ impl RenderPass for HistogramBuildPass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 2,
@@ -98,6 +101,7 @@ impl RenderPass for HistogramBuildPass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
             ],
         );

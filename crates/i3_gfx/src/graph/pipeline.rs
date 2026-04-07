@@ -31,6 +31,7 @@ pub enum BindingType {
     StorageTexture,
     Sampler,
     CombinedImageSampler,
+    AccelerationStructure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -213,6 +213,7 @@ pub fn create_graphics_pipeline(
             BindingType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             BindingType::Sampler => vk::DescriptorType::SAMPLER,
             BindingType::Texture => vk::DescriptorType::SAMPLED_IMAGE,
+            BindingType::AccelerationStructure => vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
             _ => {
                 tracing::warn!(
                     "Unknown binding type for binding {}, defaulting to STORAGE_BUFFER",

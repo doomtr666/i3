@@ -5,7 +5,7 @@ use i3_gfx::graph::backend::{
 };
 use i3_gfx::graph::pass::RenderPass;
 use i3_gfx::graph::pipeline::IndexType;
-use i3_gfx::graph::types::{BufferDesc, BufferHandle, ImageDesc, ImageHandle, WindowHandle};
+use i3_gfx::graph::types::{AccelerationStructureHandle, BufferDesc, BufferHandle, ImageDesc, ImageHandle, WindowHandle};
 use i3_io;
 pub mod prelude;
 use std::collections::HashSet;
@@ -280,8 +280,19 @@ impl RenderBackend for NullBackend {
         self.image_map.insert(handle, physical);
     }
 
-    fn register_external_buffer(&mut self, _handle: BufferHandle, _physical: BackendBuffer) {
-        info!("Registered external buffer in NullBackend");
+    fn register_external_buffer(&mut self, _handle: BufferHandle, _physical: BackendBuffer) {}
+
+    fn register_external_accel_struct(
+        &mut self,
+        _handle: AccelerationStructureHandle,
+        _physical: BackendAccelerationStructure,
+    ) {}
+
+    fn resolve_accel_struct(
+        &self,
+        _handle: AccelerationStructureHandle,
+    ) -> BackendAccelerationStructure {
+        BackendAccelerationStructure(u64::MAX)
     }
 
     fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String> {

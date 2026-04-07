@@ -264,6 +264,9 @@ impl CompiledGraph {
         for (h, p) in &node.external_buffers {
             backend.register_external_buffer(*h, *p);
         }
+        for (h, p) in &node.external_accel_structs {
+            backend.register_external_accel_struct(*h, *p);
+        }
 
         for child in &mut node.children {
             Self::process_externals_recursive(child, backend, inactive_images)?;

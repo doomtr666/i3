@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use i3_gfx::prelude::*;
+use std::sync::Arc;
 
 use nalgebra_glm as glm;
 
@@ -38,11 +38,13 @@ impl RenderPass for ClusterBuildPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build").wait_loaded() {
-            self.pipeline = Some(backend.create_compute_pipeline_from_baked(
-                &asset.reflection_data,
-                &asset.bytecode,
-            ));
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("cluster_build")
+            .wait_loaded()
+        {
+            self.pipeline = Some(
+                backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
+            );
         }
     }
 
@@ -52,16 +54,17 @@ impl RenderPass for ClusterBuildPass {
         builder.write_buffer(self.cluster_aabbs, ResourceUsage::SHADER_WRITE);
         builder.bind_descriptor_set(
             0,
-            vec![i3_gfx::graph::backend::DescriptorWrite {
+            vec![DescriptorWrite {
                 binding: 0,
                 array_element: 0,
                 descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
-                buffer_info: Some(i3_gfx::graph::backend::DescriptorBufferInfo {
+                buffer_info: Some(DescriptorBufferInfo {
                     buffer: self.cluster_aabbs,
                     offset: 0,
                     range: 0,
                 }),
                 image_info: None,
+                accel_struct_info: None,
             }],
         );
     }
@@ -72,8 +75,10 @@ impl RenderPass for ClusterBuildPass {
             return;
         };
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
-        let grid_x = (common.screen_width + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
-        let grid_y = (common.screen_height + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
+        let grid_x = (common.screen_width + crate::constants::CLUSTER_TILE_SIZE - 1)
+            / crate::constants::CLUSTER_TILE_SIZE;
+        let grid_y = (common.screen_height + crate::constants::CLUSTER_TILE_SIZE - 1)
+            / crate::constants::CLUSTER_TILE_SIZE;
         let grid_z: u32 = crate::constants::CLUSTER_GRID_Z;
         let push_constants = ClusterBuildPushConstants {
             inv_projection: common.inv_projection,

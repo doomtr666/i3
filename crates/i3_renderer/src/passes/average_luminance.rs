@@ -1,6 +1,5 @@
-use std::sync::Arc;
 use i3_gfx::prelude::*;
-
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -44,11 +43,13 @@ impl RenderPass for AverageLuminancePass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("average_luminance").wait_loaded() {
-            self.pipeline = Some(backend.create_compute_pipeline_from_baked(
-                &asset.reflection_data,
-                &asset.bytecode,
-            ));
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("average_luminance")
+            .wait_loaded()
+        {
+            self.pipeline = Some(
+                backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
+            );
         }
     }
 
@@ -75,6 +76,7 @@ impl RenderPass for AverageLuminancePass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 1,
@@ -86,6 +88,7 @@ impl RenderPass for AverageLuminancePass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 2,
@@ -97,6 +100,7 @@ impl RenderPass for AverageLuminancePass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
             ],
         );

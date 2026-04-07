@@ -75,7 +75,7 @@ graph TD
 
 | ID | Severity | Description |
 |---|---|---|
-| RN-02 | High | Normal mapping not utilized in deferred resolve. GBuffer normal lacks tangent-space map sampling. |
+| RN-02 | **DONE** | ~~Normal mapping.~~ TBN matrix + tangent-space normal map sampling implemented in `gbuffer.slang`; tangent vertex attribute present. |
 | RN-03 | **DONE** | ~~Magic numbers duplicated.~~ Extracted to `constants.rs`: `MAX_MESHES`, `MAX_INSTANCES`, `MAX_LIGHTS`, `CLUSTER_GRID_Z`, `CLUSTER_TILE_SIZE`, `DRAW_INDIRECT_CMD_SIZE`. |
 | RN-04 | High | No GPU culling pass (GPUCull). Currently uses CPU-side draw commands. |
 | RN-05 | High | No ZPrePass implemented. |
@@ -87,7 +87,34 @@ graph TD
 | RN-11 | Low | `unsafe ptr::copy_nonoverlapping` in `sync.rs` lacks bounds checking and casts through `*const u8`. Audit and tighten. |
 | RN-12 | **DONE** | ~~TLAS rebuilt every frame.~~ `TlasRebuildPass` now caches the instance list and skips `build_tlas` when unchanged. |
 
-### 2.3 Tools (i3_baker, i3_bundle, i3_egui)
+### 2.3 Frame Graph API Ergonomics (i3_gfx)
+
+| ID | Severity | Description |
+|---|---|---|
+| GFX-11 | Medium | `bind_descriptor_set` takes `Vec<DescriptorWrite>` with explicit struct literals — verbose and error-prone. Replace with a `DescriptorSetWriter` fluent builder. |
+
+**GFX-11 Design** — `DescriptorSetWriter` builder sur `PassBuilder`:
+
+```rust
+builder.descriptor_set(0, |d| {
+    d.combined_image_sampler(0, self.gbuffer_albedo, DescriptorImageLayout::ShaderReadOnlyOptimal, self.sampler);
+    d.combined_image_sampler(1, self.gbuffer_normal,  DescriptorImageLayout::ShaderReadOnlyOptimal, self.sampler);
+    d.combined_image_sampler(2, self.gbuffer_roughmetal, DescriptorImageLayout::ShaderReadOnlyOptimal, self.sampler);
+    d.combined_image_sampler(3, self.gbuffer_emissive,   DescriptorImageLayout::ShaderReadOnlyOptimal, self.sampler);
+    d.combined_image_sampler(4, self.depth_buffer,       DescriptorImageLayout::ShaderReadOnlyOptimal, self.sampler);
+    d.storage_buffer(5, self.lights);
+    d.storage_buffer(6, self.cluster_grid);
+    d.storage_buffer(7, self.cluster_light_indices);
+    d.storage_buffer(8, self.exposure_buffer);
+    d.acceleration_structure(9, self.tlas_handle);  // conditional — only emitted if handle != INVALID
+});
+```
+
+`DescriptorSetWriter` est un struct interne avec `writes: Vec<DescriptorWrite>`, construit dans la closure, passé à `bind_descriptor_set` à la fin. L'API `d.acceleration_structure(binding, handle)` skip silencieusement si `handle == AccelerationStructureHandle::INVALID`. L'API existante (`bind_descriptor_set(u32, Vec<DescriptorWrite>)`) reste disponible pour les cas avancés.
+
+---
+
+### 2.4 Tools (i3_baker, i3_bundle, i3_egui)
 
 | ID | Component | Severity | Description |
 |---|---|---|

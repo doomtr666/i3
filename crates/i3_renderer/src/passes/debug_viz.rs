@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use i3_gfx::prelude::*;
+use std::sync::Arc;
 
 /// Which GBuffer channel to display in the debug visualization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,6 @@ impl DebugVizPass {
             pipeline: None,
         }
     }
-
 }
 
 impl RenderPass for DebugVizPass {
@@ -72,7 +71,10 @@ impl RenderPass for DebugVizPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("debug_viz").wait_loaded() {
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("debug_viz")
+            .wait_loaded()
+        {
             let state = asset.state.as_ref().expect("DebugViz asset missing state");
             self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
                 state,
@@ -116,6 +118,7 @@ impl RenderPass for DebugVizPass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 1,
@@ -127,6 +130,7 @@ impl RenderPass for DebugVizPass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 2,
@@ -138,6 +142,7 @@ impl RenderPass for DebugVizPass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 3,
@@ -149,6 +154,7 @@ impl RenderPass for DebugVizPass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 4,
@@ -160,6 +166,7 @@ impl RenderPass for DebugVizPass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
             ],
         );

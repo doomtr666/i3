@@ -1,7 +1,7 @@
 use std::any::{Any, TypeId};
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
-use crate::graph::backend::{BackendBuffer, BackendImage, DescriptorWrite};
+use crate::graph::backend::{BackendAccelerationStructure, BackendBuffer, BackendImage, DescriptorWrite};
 use crate::graph::pass::{InternalPassBuilder, PassBuilder, RenderPass};
 use crate::graph::symbol_table::{Symbol, SymbolTable};
 use crate::graph::types::*;
@@ -35,6 +35,7 @@ pub struct NodeStorage {
 
     pub external_images: Vec<(ImageHandle, BackendImage)>,
     pub external_buffers: Vec<(BufferHandle, BackendBuffer)>,
+    pub external_accel_structs: Vec<(AccelerationStructureHandle, BackendAccelerationStructure)>,
     pub swapchain_requests: Vec<(ImageHandle, WindowHandle)>,
     pub descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
     pub prefer_async: bool,
@@ -74,6 +75,7 @@ impl NodeStorage {
             data_reads: Vec::new(),
             external_images: Vec::new(),
             external_buffers: Vec::new(),
+            external_accel_structs: Vec::new(),
             swapchain_requests: Vec::new(),
             descriptor_sets: Vec::new(),
             prefer_async,
@@ -275,6 +277,29 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         );
         self.register_external_buffer(actual_handle, physical);
         actual_handle
+    }
+
+    fn import_acceleration_structure(
+        &mut self,
+        name: &str,
+        physical: BackendAccelerationStructure,
+    ) -> AccelerationStructureHandle {
+        let index = self.storage.symbols.symbols.len() as u64;
+        let id = SymbolId((self.storage.node_id << 32) | index);
+        let handle = AccelerationStructureHandle(id);
+        self.storage.symbols.publish(
+            name,
+            Symbol {
+                name: name.to_string(),
+                symbol_type: SymbolType::AccelStruct(AccelerationStructureDesc { size: 0 }),
+                lifetime: SymbolLifetime::External,
+                data: Some(Arc::new(handle)),
+                is_output: true,
+            },
+            id,
+        );
+        self.storage.external_accel_structs.push((handle, physical));
+        handle
     }
 
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle {

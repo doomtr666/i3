@@ -383,4 +383,41 @@ pub fn update_descriptor_set(
             .handle
             .update_descriptor_sets(&descriptor_writes, &[]);
     }
+
+    // Pass 3: AccelerationStructure writes — require p_next chain, handled separately.
+    for write in writes {
+        if write.descriptor_type != BindingType::AccelerationStructure {
+            continue;
+        }
+        let Some(as_handle) = write.accel_struct_info else {
+            continue;
+        };
+        let physical = backend.resolve_accel_struct(as_handle);
+        let vk_as = match backend.accel_structs.get(physical.0) {
+            Some(pas) => pas.handle,
+            None => {
+                error!(
+                    "AccelerationStructure not found for descriptor write: {:?}",
+                    as_handle
+                );
+                continue;
+            }
+        };
+        let as_handles = [vk_as];
+        let mut as_ext = vk::WriteDescriptorSetAccelerationStructureKHR::default()
+            .acceleration_structures(&as_handles);
+        let vk_write = vk::WriteDescriptorSet::default()
+            .dst_set(vk_set)
+            .dst_binding(write.binding)
+            .dst_array_element(write.array_element)
+            .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+            .descriptor_count(1)
+            .push_next(&mut as_ext);
+        unsafe {
+            backend
+                .get_device()
+                .handle
+                .update_descriptor_sets(std::slice::from_ref(&vk_write), &[]);
+        }
+    }
 }

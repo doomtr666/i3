@@ -1,6 +1,5 @@
-use std::sync::Arc;
 use i3_gfx::prelude::*;
-
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +36,6 @@ impl TonemapPass {
             pipeline: None,
         }
     }
-
 }
 
 impl RenderPass for TonemapPass {
@@ -47,7 +45,10 @@ impl RenderPass for TonemapPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("tonemap").wait_loaded() {
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("tonemap")
+            .wait_loaded()
+        {
             let state = asset.state.as_ref().expect("Tonemap asset missing state");
             self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
                 state,
@@ -83,6 +84,7 @@ impl RenderPass for TonemapPass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 1,
@@ -94,12 +96,17 @@ impl RenderPass for TonemapPass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
             ],
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
+    fn execute(
+        &self,
+        ctx: &mut dyn PassContext,
+        _frame: &i3_gfx::graph::compiler::FrameBlackboard,
+    ) {
         let Some(pipeline) = self.pipeline else {
             tracing::error!("TonemapPass::execute: pipeline not initialized!");
             return;
@@ -108,7 +115,12 @@ impl RenderPass for TonemapPass {
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
             0,
-            &ToneMapPushConstants { debug_mode: 0, pad0: 0, pad1: 0, pad2: 0 },
+            &ToneMapPushConstants {
+                debug_mode: 0,
+                pad0: 0,
+                pad1: 0,
+                pad2: 0,
+            },
         );
         ctx.draw(3, 0); // Fullscreen triangle
     }

@@ -1,5 +1,5 @@
+use i3_gfx::{graph::types::AccelerationStructureHandle, prelude::*};
 use std::sync::Arc;
-use i3_gfx::prelude::*;
 
 use nalgebra_glm as glm;
 
@@ -19,6 +19,10 @@ pub struct DeferredResolvePushConstants {
 
 pub struct DeferredResolvePass {
     pub sampler: SamplerHandle,
+    /// Physical TLAS handle. Set by `DefaultRenderGraph::sync()`.
+    /// Imported as a virtual handle each frame in `declare()`.
+    pub tlas: Option<BackendAccelerationStructure>,
+    tlas_handle: AccelerationStructureHandle,
 
     // Resolved handles (updated in declare)
     hdr_target: ImageHandle,
@@ -50,6 +54,8 @@ impl DeferredResolvePass {
             cluster_grid: BufferHandle::INVALID,
             cluster_light_indices: BufferHandle::INVALID,
             exposure_buffer: BufferHandle::INVALID,
+            tlas: None,
+            tlas_handle: AccelerationStructureHandle::INVALID,
             pipeline: None,
         }
     }
@@ -62,8 +68,14 @@ impl RenderPass for DeferredResolvePass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve").wait_loaded() {
-            let state = asset.state.as_ref().expect("DeferredResolve asset missing state");
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve")
+            .wait_loaded()
+        {
+            let state = asset
+                .state
+                .as_ref()
+                .expect("DeferredResolve asset missing state");
             self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
                 state,
                 &asset.reflection_data,
@@ -85,6 +97,14 @@ impl RenderPass for DeferredResolvePass {
         self.cluster_grid = builder.resolve_buffer("ClusterGrid");
         self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
         self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
+
+        // Import TLAS if available
+        if let Some(physical_tlas) = self.tlas {
+            self.tlas_handle = builder.import_acceleration_structure("TLAS", physical_tlas);
+            builder.read_acceleration_structure(self.tlas_handle, ResourceUsage::SHADER_READ);
+        } else {
+            self.tlas_handle = AccelerationStructureHandle::INVALID;
+        }
 
         // Read GBuffers and buffers
         builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
@@ -114,6 +134,7 @@ impl RenderPass for DeferredResolvePass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 1,
@@ -125,6 +146,7 @@ impl RenderPass for DeferredResolvePass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 2,
@@ -136,6 +158,7 @@ impl RenderPass for DeferredResolvePass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 3,
@@ -147,6 +170,7 @@ impl RenderPass for DeferredResolvePass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 4,
@@ -158,6 +182,7 @@ impl RenderPass for DeferredResolvePass {
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
                         sampler: Some(self.sampler),
                     }),
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 5,
@@ -169,6 +194,7 @@ impl RenderPass for DeferredResolvePass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 6,
@@ -180,6 +206,7 @@ impl RenderPass for DeferredResolvePass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 7,
@@ -191,6 +218,7 @@ impl RenderPass for DeferredResolvePass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
                 DescriptorWrite {
                     binding: 8,
@@ -202,8 +230,13 @@ impl RenderPass for DeferredResolvePass {
                         range: 0,
                     }),
                     image_info: None,
+                    accel_struct_info: None,
                 },
-            ],
+            ].into_iter().chain(
+                (self.tlas_handle != AccelerationStructureHandle::INVALID).then(||
+                    DescriptorWrite::acceleration_structure(9, self.tlas_handle)
+                )
+            ).collect(),
         );
     }
 

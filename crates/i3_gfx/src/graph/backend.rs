@@ -447,6 +447,16 @@ pub trait RenderBackend {
         handle: crate::graph::types::BufferHandle,
         physical: BackendBuffer,
     );
+    fn register_external_accel_struct(
+        &mut self,
+        handle: crate::graph::types::AccelerationStructureHandle,
+        physical: BackendAccelerationStructure,
+    );
+
+    fn resolve_accel_struct(
+        &self,
+        handle: crate::graph::types::AccelerationStructureHandle,
+    ) -> BackendAccelerationStructure;
 
     /// Wait for the timeline semaphore to reach a specific value on the host (CPU).
     fn wait_for_timeline(&self, value: u64, timeout_ns: u64) -> Result<(), String>;
@@ -607,6 +617,7 @@ pub struct DescriptorWrite {
     pub descriptor_type: crate::graph::pipeline::BindingType, // Reusing from pipeline
     pub buffer_info: Option<DescriptorBufferInfo>,
     pub image_info: Option<DescriptorImageInfo>,
+    pub accel_struct_info: Option<crate::graph::types::AccelerationStructureHandle>,
 }
 
 impl DescriptorWrite {
@@ -621,6 +632,21 @@ impl DescriptorWrite {
                 range: 0,
             }),
             image_info: None,
+            accel_struct_info: None,
+        }
+    }
+
+    pub fn acceleration_structure(
+        binding: u32,
+        handle: crate::graph::types::AccelerationStructureHandle,
+    ) -> Self {
+        Self {
+            binding,
+            array_element: 0,
+            descriptor_type: crate::graph::pipeline::BindingType::AccelerationStructure,
+            buffer_info: None,
+            image_info: None,
+            accel_struct_info: Some(handle),
         }
     }
 }

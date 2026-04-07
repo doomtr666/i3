@@ -72,8 +72,25 @@ impl<'a> PassBuilder<'a> {
         _handle: crate::graph::backend::BackendAccelerationStructure,
         _usage: ResourceUsage,
     ) {
-        // For now, AS dependencies are handled via sync passes or manual barriers in backend.
-        // This method allows the renderer to declare intent.
+        // AS dependencies are handled via sync passes or manual barriers in backend.
+    }
+
+    pub fn read_acceleration_structure(
+        &mut self,
+        _handle: crate::graph::types::AccelerationStructureHandle,
+        _usage: ResourceUsage,
+    ) {
+        // AS read intent — sync handled by build passes ordering.
+    }
+
+    /// Imports an existing physical acceleration structure into the frame graph.
+    /// Returns a virtual `AccelerationStructureHandle` that can be used in descriptor bindings.
+    pub fn import_acceleration_structure(
+        &mut self,
+        name: &str,
+        physical: crate::graph::backend::BackendAccelerationStructure,
+    ) -> crate::graph::types::AccelerationStructureHandle {
+        self.inner.import_acceleration_structure(name, physical)
     }
 
     pub fn read_buffer(&mut self, handle: BufferHandle, usage: ResourceUsage) {
@@ -276,11 +293,13 @@ pub(crate) trait InternalPassBuilder {
     ) -> BufferHandle;
     fn read_buffer_history(&mut self, name: &str) -> BufferHandle;
 
-    fn import_buffer(
+    fn import_buffer(&mut self, name: &str, physical: crate::graph::backend::BackendBuffer) -> BufferHandle;
+
+    fn import_acceleration_structure(
         &mut self,
         name: &str,
-        physical: crate::graph::backend::BackendBuffer,
-    ) -> BufferHandle;
+        physical: crate::graph::backend::BackendAccelerationStructure,
+    ) -> crate::graph::types::AccelerationStructureHandle;
 
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 
