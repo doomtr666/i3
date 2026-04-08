@@ -71,35 +71,14 @@ impl RenderPass for TonemapPass {
         // Write to backbuffer
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
 
-        builder.bind_descriptor_set(
-            0,
-            vec![
-                DescriptorWrite {
-                    binding: 0,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.hdr_target,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 1,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.exposure_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-            ],
-        );
+        builder.descriptor_set(0, |d| {
+            d.combined_image_sampler(
+                self.hdr_target,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            )
+            .storage_buffer(self.exposure_buffer);
+        });
     }
 
     fn execute(

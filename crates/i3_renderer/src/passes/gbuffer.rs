@@ -141,9 +141,9 @@ impl RenderPass for GBufferFillPass {
             pipeline,
             0,
             &[
-                DescriptorWrite::buffer(0, self.mesh_descriptor_buffer),
-                DescriptorWrite::buffer(1, self.instance_buffer),
-                DescriptorWrite::buffer(2, self.material_buffer),
+                DescriptorWrite::storage_buffer(0, 0, self.mesh_descriptor_buffer),
+                DescriptorWrite::storage_buffer(1, 0, self.instance_buffer),
+                DescriptorWrite::storage_buffer(2, 0, self.material_buffer),
             ],
         );
         ctx.bind_descriptor_set(0, scene_set);

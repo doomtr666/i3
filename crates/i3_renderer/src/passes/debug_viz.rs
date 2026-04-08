@@ -105,71 +105,33 @@ impl RenderPass for DebugVizPass {
         builder.present_image(self.backbuffer);
 
         // Bind GBuffer textures via push descriptors
-        builder.bind_descriptor_set(
-            0,
-            vec![
-                DescriptorWrite {
-                    binding: 0,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_albedo,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 1,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_normal,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 2,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_roughmetal,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 3,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_emissive,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 4,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_depth,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-            ],
-        );
+        builder.descriptor_set(0, |d| {
+            d.combined_image_sampler(
+                self.gbuffer_albedo,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            )
+            .combined_image_sampler(
+                self.gbuffer_normal,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            )
+            .combined_image_sampler(
+                self.gbuffer_roughmetal,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            )
+            .combined_image_sampler(
+                self.gbuffer_emissive,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            )
+            .combined_image_sampler(
+                self.gbuffer_depth,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            );
+        });
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {

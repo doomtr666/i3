@@ -64,47 +64,11 @@ impl RenderPass for HistogramBuildPass {
         // Write to histogram buffer
         builder.write_buffer(self.histogram_buffer, ResourceUsage::SHADER_WRITE);
 
-        builder.bind_descriptor_set(
-            0,
-            vec![
-                DescriptorWrite {
-                    binding: 0,
-                    array_element: 0,
-                    descriptor_type: BindingType::Texture,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.hdr_image,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: None,
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 1,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.histogram_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 2,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.exposure_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-            ],
-        );
+        builder.descriptor_set(0, |d| {
+            d.texture(self.hdr_image, DescriptorImageLayout::ShaderReadOnlyOptimal)
+                .storage_buffer(self.histogram_buffer)
+                .storage_buffer(self.exposure_buffer);
+        });
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {

@@ -614,35 +614,99 @@ pub trait RenderBackendInternal: RenderBackend + Send + Sync {
 pub struct DescriptorWrite {
     pub binding: u32,
     pub array_element: u32,
-    pub descriptor_type: crate::graph::pipeline::BindingType, // Reusing from pipeline
+    pub descriptor_type: crate::graph::pipeline::BindingType,
     pub buffer_info: Option<DescriptorBufferInfo>,
     pub image_info: Option<DescriptorImageInfo>,
     pub accel_struct_info: Option<crate::graph::types::AccelerationStructureHandle>,
 }
 
 impl DescriptorWrite {
-    pub fn buffer(binding: u32, buffer: crate::graph::types::BufferHandle) -> Self {
+    pub fn storage_buffer(binding: u32, array_element: u32, buffer: crate::graph::types::BufferHandle) -> Self {
         Self {
             binding,
-            array_element: 0,
+            array_element,
             descriptor_type: crate::graph::pipeline::BindingType::StorageBuffer,
-            buffer_info: Some(DescriptorBufferInfo {
-                buffer,
-                offset: 0,
-                range: 0,
-            }),
+            buffer_info: Some(DescriptorBufferInfo::whole(buffer)),
             image_info: None,
+            accel_struct_info: None,
+        }
+    }
+
+    pub fn uniform_buffer(binding: u32, array_element: u32, buffer: crate::graph::types::BufferHandle) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::UniformBuffer,
+            buffer_info: Some(DescriptorBufferInfo::whole(buffer)),
+            image_info: None,
+            accel_struct_info: None,
+        }
+    }
+
+    pub fn combined_image_sampler(
+        binding: u32,
+        array_element: u32,
+        image: crate::graph::types::ImageHandle,
+        layout: DescriptorImageLayout,
+        sampler: SamplerHandle,
+    ) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::CombinedImageSampler,
+            buffer_info: None,
+            image_info: Some(DescriptorImageInfo {
+                image,
+                image_layout: layout,
+                sampler: Some(sampler),
+            }),
+            accel_struct_info: None,
+        }
+    }
+
+    pub fn texture(
+        binding: u32,
+        array_element: u32,
+        image: crate::graph::types::ImageHandle,
+        layout: DescriptorImageLayout,
+    ) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::Texture,
+            buffer_info: None,
+            image_info: Some(DescriptorImageInfo {
+                image,
+                image_layout: layout,
+                sampler: None,
+            }),
+            accel_struct_info: None,
+        }
+    }
+
+    pub fn sampler(binding: u32, array_element: u32, sampler: SamplerHandle) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::Sampler,
+            buffer_info: None,
+            image_info: Some(DescriptorImageInfo {
+                image: crate::graph::types::ImageHandle::INVALID,
+                image_layout: DescriptorImageLayout::General,
+                sampler: Some(sampler),
+            }),
             accel_struct_info: None,
         }
     }
 
     pub fn acceleration_structure(
         binding: u32,
+        array_element: u32,
         handle: crate::graph::types::AccelerationStructureHandle,
     ) -> Self {
         Self {
             binding,
-            array_element: 0,
+            array_element,
             descriptor_type: crate::graph::pipeline::BindingType::AccelerationStructure,
             buffer_info: None,
             image_info: None,
@@ -656,6 +720,16 @@ pub struct DescriptorBufferInfo {
     pub buffer: crate::graph::types::BufferHandle,
     pub offset: u64,
     pub range: u64, // or whole size
+}
+
+impl DescriptorBufferInfo {
+    pub fn whole(buffer: crate::graph::types::BufferHandle) -> Self {
+        Self {
+            buffer,
+            offset: 0,
+            range: 0, // 0 = VK_WHOLE_SIZE in some backends, but backend will decide.
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -89,11 +89,16 @@ impl RenderPass for MandelbrotPass {
                     image_layout: DescriptorImageLayout::General,
                 }),
                 buffer_info: None,
+                accel_struct_info: None,
             }],
         );
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext, _frame: &i3_gfx::graph::compiler::FrameBlackboard) {
+    fn execute(
+        &self,
+        ctx: &mut dyn PassContext,
+        _frame: &i3_gfx::graph::compiler::FrameBlackboard,
+    ) {
         ctx.push_constant_data(ShaderStageFlags::Compute, 0, &self.push_data);
         ctx.dispatch((self.width + 15) / 16, (self.height + 15) / 16, 1);
         ctx.present(self.backbuffer);
@@ -197,7 +202,11 @@ impl ExampleApp for MandelbrotApp {
         });
 
         let mut compiled = graph.compile(&self.backend.capabilities());
-        if let Err(e) = compiled.execute(&mut self.backend, &i3_gfx::graph::compiler::FrameBlackboard::new(), None) {
+        if let Err(e) = compiled.execute(
+            &mut self.backend,
+            &i3_gfx::graph::compiler::FrameBlackboard::new(),
+            None,
+        ) {
             if e == GraphError::WindowMinimized {
                 std::thread::sleep(Duration::from_millis(100));
             } else {

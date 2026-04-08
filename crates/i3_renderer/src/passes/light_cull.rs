@@ -65,59 +65,12 @@ impl RenderPass for LightCullPass {
         builder.write_buffer(self.cluster_grid, ResourceUsage::SHADER_WRITE);
         builder.write_buffer(self.cluster_light_indices, ResourceUsage::SHADER_WRITE);
 
-        builder.bind_descriptor_set(
-            0,
-            vec![
-                DescriptorWrite {
-                    binding: 0,
-                    array_element: 0,
-                    descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.cluster_aabbs,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 1,
-                    array_element: 0,
-                    descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.lights,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 2,
-                    array_element: 0,
-                    descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.cluster_grid,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 3,
-                    array_element: 0,
-                    descriptor_type: i3_gfx::graph::pipeline::BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.cluster_light_indices,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-            ],
-        );
+        builder.descriptor_set(0, |d| {
+            d.storage_buffer(self.cluster_aabbs)
+                .storage_buffer(self.lights)
+                .storage_buffer(self.cluster_grid)
+                .storage_buffer(self.cluster_light_indices);
+        });
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {

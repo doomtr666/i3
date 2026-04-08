@@ -117,123 +117,41 @@ impl RenderPass for DeferredResolvePass {
         // Write to HDR target
         builder.write_image(self.hdr_target, ResourceUsage::COLOR_ATTACHMENT);
 
-        builder.bind_descriptor_set(
-            0,
-            vec![
-                DescriptorWrite {
-                    binding: 0,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_albedo,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 1,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_normal,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 2,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_roughmetal,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 3,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.gbuffer_emissive,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 4,
-                    array_element: 0,
-                    descriptor_type: BindingType::CombinedImageSampler,
-                    buffer_info: None,
-                    image_info: Some(DescriptorImageInfo {
-                        image: self.depth_buffer,
-                        image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
-                        sampler: Some(self.sampler),
-                    }),
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 5,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.lights,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 6,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.cluster_grid,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 7,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.cluster_light_indices,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 8,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.exposure_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-            ].into_iter().chain(
-                (self.tlas_handle != AccelerationStructureHandle::INVALID).then(||
-                    DescriptorWrite::acceleration_structure(9, self.tlas_handle)
-                )
-            ).collect(),
-        );
+        builder.descriptor_set(0, |d| {
+            d.combined_image_sampler(
+                self.gbuffer_albedo,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            );
+            d.combined_image_sampler(
+                self.gbuffer_normal,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            );
+            d.combined_image_sampler(
+                self.gbuffer_roughmetal,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            );
+            d.combined_image_sampler(
+                self.gbuffer_emissive,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            );
+            d.combined_image_sampler(
+                self.depth_buffer,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+                self.sampler,
+            );
+            d.storage_buffer(self.lights);
+            d.storage_buffer(self.cluster_grid);
+            d.storage_buffer(self.cluster_light_indices);
+            d.storage_buffer(self.exposure_buffer);
+
+            if self.tlas_handle != AccelerationStructureHandle::INVALID {
+                d.bind(9).acceleration_structure(self.tlas_handle);
+            }
+        });
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {

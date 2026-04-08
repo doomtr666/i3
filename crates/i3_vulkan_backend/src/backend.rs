@@ -274,7 +274,7 @@ impl VulkanBackend {
         let mut frame_contexts = Vec::new();
         let device = self.get_device().clone();
 
-        let pool_sizes = [
+        let mut pool_sizes = vec![
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::UNIFORM_BUFFER,
                 descriptor_count: 4096,
@@ -299,11 +299,15 @@ impl VulkanBackend {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
                 descriptor_count: 4096,
             },
-            vk::DescriptorPoolSize {
+        ];
+
+        if device.rt_supported {
+            pool_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
                 descriptor_count: 64,
-            },
-        ];
+            });
+        }
+
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
             .pool_sizes(&pool_sizes)

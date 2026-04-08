@@ -1,4 +1,6 @@
-use crate::graph::backend::{DescriptorWrite, PassContext, RenderBackend};
+use crate::graph::backend::{
+    DescriptorImageLayout, DescriptorWrite, PassContext, RenderBackend, SamplerHandle,
+};
 use crate::graph::compiler::FrameBlackboard;
 use crate::graph::types::{BufferHandle, ImageDesc, ImageHandle, ResourceUsage, WindowHandle};
 use std::any::{Any, TypeId};
@@ -182,6 +184,16 @@ impl<'a> PassBuilder<'a> {
         self.inner.bind_descriptor_set(set_index, writes);
     }
 
+    /// Premium fluent API for binding descriptor sets.
+    pub fn descriptor_set<F>(&mut self, set_index: u32, f: F)
+    where
+        F: FnOnce(&mut DescriptorSetWriter),
+    {
+        let mut writer = DescriptorSetWriter::new();
+        f(&mut writer);
+        self.bind_descriptor_set(set_index, writer.writes);
+    }
+
     pub fn register_external_image(
         &mut self,
         handle: crate::graph::types::ImageHandle,
@@ -218,6 +230,91 @@ impl<'a> PassBuilder<'a> {
 /// Internal wrapper to bridge &mut dyn RenderPass to Box<dyn RenderPass + 'static>.
 struct BoxedRef {
     inner: *mut (dyn RenderPass + 'static),
+}
+
+/// Fluent builder for descriptor set writes.
+pub struct DescriptorSetWriter {
+    pub(crate) writes: Vec<DescriptorWrite>,
+    current_binding: u32,
+}
+
+impl DescriptorSetWriter {
+    pub fn new() -> Self {
+        Self {
+            writes: Vec::new(),
+            current_binding: 0,
+        }
+    }
+
+    /// Explicitly sets the binding index for the next write.
+    pub fn bind(&mut self, binding: u32) -> &mut Self {
+        self.current_binding = binding;
+        self
+    }
+
+    /// Modifies the array element of the last added write.
+    pub fn at(&mut self, element: u32) -> &mut Self {
+        if let Some(last) = self.writes.last_mut() {
+            last.array_element = element;
+        }
+        self
+    }
+
+    pub fn storage_buffer(&mut self, buffer: BufferHandle) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::storage_buffer(b, 0, buffer));
+        self.current_binding += 1;
+        self
+    }
+
+    pub fn uniform_buffer(&mut self, buffer: BufferHandle) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::uniform_buffer(b, 0, buffer));
+        self.current_binding += 1;
+        self
+    }
+
+    pub fn combined_image_sampler(
+        &mut self,
+        image: ImageHandle,
+        layout: DescriptorImageLayout,
+        sampler: SamplerHandle,
+    ) -> &mut Self {
+        let b = self.current_binding;
+        self.writes
+            .push(DescriptorWrite::combined_image_sampler(
+                b, 0, image, layout, sampler,
+            ));
+        self.current_binding += 1;
+        self
+    }
+
+    pub fn texture(&mut self, image: ImageHandle, layout: DescriptorImageLayout) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::texture(b, 0, image, layout));
+        self.current_binding += 1;
+        self
+    }
+
+    pub fn sampler(&mut self, sampler: SamplerHandle) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::sampler(b, 0, sampler));
+        self.current_binding += 1;
+        self
+    }
+
+    pub fn acceleration_structure(&mut self, handle: crate::graph::types::AccelerationStructureHandle) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::acceleration_structure(b, 0, handle));
+        self.current_binding += 1;
+        self
+    }
+
+    // --- Shortcuts ---
+
+    pub fn storage_buffer_at(&mut self, binding: u32, buffer: BufferHandle) -> &mut Self {
+        self.bind(binding).storage_buffer(buffer)
+    }
 }
 
 unsafe impl Send for BoxedRef {}
@@ -332,3 +429,38 @@ pub(crate) trait InternalPassBuilder {
 
     fn add_node_erased(&mut self, node: Box<dyn RenderPass>);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::types::SymbolId;
+
+    #[test]
+    fn test_descriptor_set_writer_fluent() {
+        let mut writer = DescriptorSetWriter::new();
+        let buffer = BufferHandle(SymbolId(1));
+        let image = ImageHandle(SymbolId(2));
+        let sampler = SamplerHandle(3);
+
+        writer.bind(0)
+            .storage_buffer(buffer)
+            .uniform_buffer(buffer).at(1)
+            .bind(5)
+            .combined_image_sampler(image, DescriptorImageLayout::ShaderReadOnlyOptimal, sampler);
+
+        assert_eq!(writer.writes.len(), 3);
+
+        // Binding 0: storage_buffer
+        assert_eq!(writer.writes[0].binding, 0);
+        assert_eq!(writer.writes[0].array_element, 0);
+
+        // Binding 1: uniform_buffer (auto-inc from 0), then .at(1)
+        assert_eq!(writer.writes[1].binding, 1);
+        assert_eq!(writer.writes[1].array_element, 1);
+
+        // Binding 5: combined_image_sampler
+        assert_eq!(writer.writes[2].binding, 5);
+        assert_eq!(writer.writes[2].array_element, 0);
+    }
+}
+

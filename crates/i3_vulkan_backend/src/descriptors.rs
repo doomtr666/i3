@@ -389,6 +389,12 @@ pub fn update_descriptor_set(
         if write.descriptor_type != BindingType::AccelerationStructure {
             continue;
         }
+
+        if !backend.rt_supported {
+            error!("Attempted to update AccelerationStructure descriptor but Ray Tracing is not supported or enabled.");
+            continue;
+        }
+
         let Some(as_handle) = write.accel_struct_info else {
             continue;
         };

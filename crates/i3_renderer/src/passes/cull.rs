@@ -71,59 +71,12 @@ impl RenderPass for DrawCallGenComputePass {
         builder.write_buffer(self.draw_call_buffer, ResourceUsage::SHADER_WRITE);
         builder.write_buffer(self.draw_count_buffer, ResourceUsage::SHADER_WRITE);
 
-        builder.bind_descriptor_set(
-            0,
-            vec![
-                DescriptorWrite {
-                    binding: 0,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.mesh_descriptor_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 1,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.instance_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 2,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.draw_call_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-                DescriptorWrite {
-                    binding: 3,
-                    array_element: 0,
-                    descriptor_type: BindingType::StorageBuffer,
-                    buffer_info: Some(DescriptorBufferInfo {
-                        buffer: self.draw_count_buffer,
-                        offset: 0,
-                        range: 0,
-                    }),
-                    image_info: None,
-                    accel_struct_info: None,
-                },
-            ],
-        );
+        builder.descriptor_set(0, |d| {
+            d.storage_buffer(self.mesh_descriptor_buffer)
+                .storage_buffer(self.instance_buffer)
+                .storage_buffer(self.draw_call_buffer)
+                .storage_buffer(self.draw_count_buffer);
+        });
     }
 
     fn execute(
