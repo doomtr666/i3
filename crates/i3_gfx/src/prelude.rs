@@ -9,12 +9,12 @@
 
 pub use crate::graph::{
     backend::{
-        BackendAccelerationStructure, BackendBuffer, BackendImage, BackendPipeline,
-        BlasCreateInfo, BlasGeometryDesc, DescriptorBufferInfo, DescriptorImageInfo,
-        DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, DeviceCapabilities,
-        DeviceInfo, DeviceType, Event, KeyCode, PassContext, PassContextExt, RenderBackend,
-        RenderBackendExt, RenderBackendInternal, SamplerHandle, SwapchainConfig,
-        TlasCreateInfo, TlasInstanceDesc, WindowDesc, AccelStructBuildFlags,
+        AccelStructBuildFlags, BackendAccelerationStructure, BackendBuffer, BackendImage,
+        BackendPipeline, BlasCreateInfo, BlasGeometryDesc, DescriptorBufferInfo,
+        DescriptorImageInfo, DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite,
+        DeviceCapabilities, DeviceInfo, DeviceType, Event, KeyCode, PassContext, PassContextExt,
+        RenderBackend, RenderBackendExt, RenderBackendInternal, SamplerHandle, SwapchainConfig,
+        TlasCreateInfo, TlasInstanceDesc, WindowDesc,
     },
     compiler::{CompiledGraph, FrameGraph},
     pass::{PassBuilder, RenderPass},
@@ -27,9 +27,9 @@ pub use crate::graph::{
         VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState,
     },
     types::{
-        AddressMode, BufferDesc, BufferHandle, BufferUsageFlags, ComponentMapping,
-        ComponentSwizzle, Filter, Format, GraphError, ImageDesc, ImageHandle, ImageUsageFlags,
-        ImageViewType, MemoryType, MipmapMode, PipelineHandle, ResourceUsage, SamplerDesc,
-        SwapChainImageHandle, SymbolId, WindowHandle,
+        AccelerationStructureHandle, AddressMode, BufferDesc, BufferHandle, BufferUsageFlags,
+        ComponentMapping, ComponentSwizzle, Filter, Format, GraphError, ImageDesc, ImageHandle,
+        ImageUsageFlags, ImageViewType, MemoryType, MipmapMode, PipelineHandle, ResourceUsage,
+        SamplerDesc, SwapChainImageHandle, SymbolId, WindowHandle,
     },
 };

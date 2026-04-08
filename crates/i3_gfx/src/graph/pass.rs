@@ -52,6 +52,14 @@ impl<'a> PassBuilder<'a> {
         *self.consume::<BufferHandle>(name)
     }
 
+    /// Resolves an AccelerationStructureHandle by name, or returns None if not published.
+    pub fn try_resolve_acceleration_structure(
+        &mut self,
+        name: &str,
+    ) -> Option<crate::graph::types::AccelerationStructureHandle> {
+        self.inner.try_resolve_acceleration_structure(name)
+    }
+
     // --- GPU Intents ---
     pub fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage) {
         self.inner.read_image(handle, usage);
@@ -300,6 +308,11 @@ pub(crate) trait InternalPassBuilder {
         name: &str,
         physical: crate::graph::backend::BackendAccelerationStructure,
     ) -> crate::graph::types::AccelerationStructureHandle;
+
+    fn try_resolve_acceleration_structure(
+        &mut self,
+        name: &str,
+    ) -> Option<crate::graph::types::AccelerationStructureHandle>;
 
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 

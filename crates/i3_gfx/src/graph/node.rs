@@ -302,6 +302,26 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         handle
     }
 
+    fn try_resolve_acceleration_structure(
+        &mut self,
+        name: &str,
+    ) -> Option<AccelerationStructureHandle> {
+        // Check local scope first, then ancestor scopes.
+        if let Some(id) = self.storage.symbols.resolve(name) {
+            if let Some(data) = self.storage.symbols.get_data(id) {
+                return data.downcast_ref::<AccelerationStructureHandle>().copied();
+            }
+        }
+        for parent in self.ancestor_symbols.iter().rev() {
+            if let Some(id) = parent.resolve(name) {
+                if let Some(data) = parent.get_data(id) {
+                    return data.downcast_ref::<AccelerationStructureHandle>().copied();
+                }
+            }
+        }
+        None
+    }
+
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle {
         let name = format!("Window_{}", window.0);
         let index = self.storage.symbols.symbols.len() as u64;

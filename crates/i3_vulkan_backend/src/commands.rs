@@ -662,7 +662,7 @@ pub fn prepare_pass(
                 let clear_value = if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
                     vk::ClearValue {
                         depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 1.0,
+                            depth: 0.0, // reverse-Z: far = 0
                             stencil: 0,
                         },
                     }

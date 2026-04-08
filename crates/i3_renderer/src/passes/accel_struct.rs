@@ -117,6 +117,9 @@ impl RenderPass for TlasRebuildPass {
     fn declare(&mut self, builder: &mut PassBuilder) {
         if let Some(tlas) = self.tlas {
             builder.write_acceleration_structure(tlas, ResourceUsage::ACCEL_STRUCT_WRITE);
+            // Publish as virtual handle so downstream passes (e.g. DeferredResolve) can consume
+            // "TLAS" by name via try_resolve_acceleration_structure — no direct backend handle needed.
+            builder.import_acceleration_structure("TLAS", tlas);
         }
 
         // Dirty check: only rebuild when the instance list changed.

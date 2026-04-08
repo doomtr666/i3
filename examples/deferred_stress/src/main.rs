@@ -53,8 +53,8 @@ impl ExampleApp for DeferredStressApp {
         let projection = glm::perspective_rh_zo(
             width as f32 / height as f32,
             std::f32::consts::FRAC_PI_4,
+            200.0, // reverse-Z: swap near/far so near→1, far→0
             0.1,
-            200.0,
         );
 
         if let Err(e) = self.render_graph.render(

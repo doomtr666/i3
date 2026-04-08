@@ -49,8 +49,8 @@ impl DeferredGltfApp {
             }
         };
 
-        // Reset scene and render graph scene-specific state
-        self.render_graph.clear_scene(&mut self.backend);
+        // Reset scene and render graph scene-specific state (frees GPU buffers + AS)
+        self.render_graph.clear_scene(&mut self.backend, &mut self.scene);
         self.scene = BasicScene::new();
         self.current_scene = scene_name.to_string();
 
@@ -468,8 +468,8 @@ impl ExampleApp for DeferredGltfApp {
         let projection = glm::perspective_rh_zo(
             width as f32 / height as f32,
             std::f32::consts::FRAC_PI_4,
+            far,  // reverse-Z: swap near/far so near→1, far→0
             near,
-            far,
         );
 
         if let Err(e) = self.render_graph.render(

@@ -24,6 +24,7 @@ pub struct VulkanDevice {
     pub accel_struct: Option<ash::khr::acceleration_structure::Device>,
     pub rt_pipeline: Option<ash::khr::ray_tracing_pipeline::Device>,
     pub rt_supported: bool,
+    pub min_scratch_alignment: vk::DeviceSize,
 
     #[cfg(debug_assertions)]
     pub debug_utils: ash::ext::debug_utils::Device,
@@ -198,10 +199,13 @@ impl VulkanDevice {
         let has_as = has_extension(ash::khr::acceleration_structure::NAME);
         let has_deferred = has_extension(ash::khr::deferred_host_operations::NAME);
         let has_rt_pipeline = has_extension(ash::khr::ray_tracing_pipeline::NAME);
+        let has_ray_query = has_extension(ash::khr::ray_query::NAME);
 
         let rt_supported = has_as && has_deferred;
         let mut as_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
             .acceleration_structure(true);
+        let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default()
+            .ray_query(true);
         let mut rt_pipeline_features =
             vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
 
@@ -213,6 +217,15 @@ impl VulkanDevice {
             unsafe {
                 (*last_feature).p_next = &mut as_features as *mut _ as *mut _;
                 last_feature = &mut as_features as *mut _ as *mut _;
+            }
+
+            if has_ray_query {
+                info!("Ray Query enabled");
+                device_extensions.push(ash::khr::ray_query::NAME.as_ptr());
+                unsafe {
+                    (*last_feature).p_next = &mut ray_query_features as *mut _ as *mut _;
+                    last_feature = &mut ray_query_features as *mut _ as *mut _;
+                }
             }
 
             if has_rt_pipeline {
@@ -261,6 +274,18 @@ impl VulkanDevice {
             None
         };
 
+        let min_scratch_alignment = if rt_supported {
+            let mut as_props = vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+            let mut props2 = vk::PhysicalDeviceProperties2::default()
+                .push_next(&mut as_props);
+            unsafe {
+                instance.handle.get_physical_device_properties2(physical_device, &mut props2);
+            }
+            as_props.min_acceleration_structure_scratch_offset_alignment as vk::DeviceSize
+        } else {
+            256 // conservative fallback
+        };
+
         #[cfg(debug_assertions)]
         let debug_utils = ash::ext::debug_utils::Device::new(&instance.handle, &handle);
 
@@ -288,6 +313,7 @@ impl VulkanDevice {
             accel_struct,
             rt_pipeline,
             rt_supported,
+            min_scratch_alignment,
             #[cfg(debug_assertions)]
             debug_utils,
         })

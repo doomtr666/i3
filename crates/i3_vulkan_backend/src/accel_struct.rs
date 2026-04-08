@@ -2,7 +2,63 @@ use crate::backend::VulkanBackend;
 use crate::commands::VulkanPassContext;
 use ash::vk;
 use i3_gfx::graph::backend::*;
+use i3_gfx::graph::types::{BufferDesc, BufferUsageFlags, MemoryType};
 use vk_mem::Alloc;
+
+/// Allocates a buffer with a guaranteed minimum address alignment via VMA.
+fn create_aligned_buffer(
+    ctx: &mut VulkanPassContext,
+    desc: BufferDesc,
+    alignment: vk::DeviceSize,
+) -> BackendBuffer {
+    let device = ctx.backend().get_device().clone();
+    let mut vk_usage = crate::convert::convert_buffer_usage_flags(desc.usage);
+    if matches!(desc.memory, MemoryType::GpuOnly) {
+        vk_usage |= vk::BufferUsageFlags::TRANSFER_DST;
+    }
+    let mut families = vec![device.graphics_family];
+    if let Some(f) = device.compute_family { if !families.contains(&f) { families.push(f); } }
+    if let Some(f) = device.transfer_family { if !families.contains(&f) { families.push(f); } }
+    let sharing_mode = if families.len() > 1 { vk::SharingMode::CONCURRENT } else { vk::SharingMode::EXCLUSIVE };
+    let create_info = vk::BufferCreateInfo::default()
+        .size(desc.size.max(4))
+        .usage(vk_usage)
+        .sharing_mode(sharing_mode)
+        .queue_family_indices(&families);
+    let (mem_usage, alloc_flags) = match desc.memory {
+        MemoryType::GpuOnly => (vk_mem::MemoryUsage::Auto, vk_mem::AllocationCreateFlags::empty()),
+        MemoryType::CpuToGpu => (vk_mem::MemoryUsage::Auto,
+            vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED),
+        MemoryType::GpuToCpu => (vk_mem::MemoryUsage::Auto,
+            vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED),
+    };
+    let alloc_info = vk_mem::AllocationCreateInfo { usage: mem_usage, flags: alloc_flags, ..Default::default() };
+    let (buffer, allocation) = unsafe {
+        device.allocator.lock().unwrap()
+            .create_buffer_with_alignment(&create_info, &alloc_info, alignment)
+            .expect("Failed to create aligned AS buffer")
+    };
+    let physical = crate::resource_arena::PhysicalBuffer {
+        buffer,
+        allocation: Some(allocation),
+        desc,
+        last_access: vk::AccessFlags2::empty(),
+        last_stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
+        last_queue_family: device.graphics_family,
+        concurrent: false,
+        is_transient: false,
+    };
+    BackendBuffer(ctx.backend_mut().buffers.insert(physical))
+}
+
+fn create_scratch_buffer(ctx: &mut VulkanPassContext, size: u64) -> BackendBuffer {
+    let alignment = ctx.backend().get_device().min_scratch_alignment;
+    create_aligned_buffer(ctx, BufferDesc {
+        size,
+        usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        memory: MemoryType::GpuOnly,
+    }, alignment)
+}
 
 pub struct PhysicalAccelerationStructure {
     pub handle: vk::AccelerationStructureKHR,
@@ -350,17 +406,13 @@ pub fn build_blas(ctx: &mut VulkanPassContext, handle: BackendAccelerationStruct
             )
     };
 
-    // Create scratch buffer
-    let scratch_desc = BufferDesc {
-        size: if update {
-            size_info.update_scratch_size
-        } else {
-            size_info.build_scratch_size
-        },
-        usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-        memory: MemoryType::GpuOnly,
+    // Create scratch buffer (aligned to minAccelerationStructureScratchOffsetAlignment)
+    let scratch_size = if update {
+        size_info.update_scratch_size
+    } else {
+        size_info.build_scratch_size
     };
-    let scratch_handle = ctx.backend_mut().create_buffer(&scratch_desc);
+    let scratch_handle = create_scratch_buffer(ctx, scratch_size);
     let scratch_address = ctx.backend_mut().get_buffer_address(scratch_handle);
     build_info.scratch_data = vk::DeviceOrHostAddressKHR {
         device_address: scratch_address,
@@ -374,9 +426,11 @@ pub fn build_blas(ctx: &mut VulkanPassContext, handle: BackendAccelerationStruct
         .src_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
         .src_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR)
         .dst_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
-        .dst_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR);
-    let dep_info = vk::DependencyInfo::default()
-        .memory_barriers(std::slice::from_ref(&as_barrier));
+        .dst_access_mask(
+            vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR
+                | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR,
+        );
+    let dep_info = vk::DependencyInfo::default().memory_barriers(std::slice::from_ref(&as_barrier));
     unsafe {
         device.handle.cmd_pipeline_barrier2(ctx.cmd, &dep_info);
     }
@@ -400,7 +454,11 @@ pub fn build_tlas(
     update: bool,
 ) {
     if !instances.is_empty() {
-        tracing::debug!("Building TLAS {:?} with {} instances", handle, instances.len());
+        tracing::debug!(
+            "Building TLAS {:?} with {} instances",
+            handle,
+            instances.len()
+        );
     }
     let device = ctx.backend().get_device().clone();
     let tlas_handle = {
@@ -446,16 +504,15 @@ pub fn build_tlas(
         )
     };
 
-    let inst_buffer_desc = BufferDesc {
-        size: inst_data.len() as u64,
-        usage: BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT
-            | BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-        memory: MemoryType::CpuToGpu,
-    };
+    // Instances data must be aligned to 16 bytes (VkAccelerationStructureInstanceKHR requirement)
     let inst_buffer_handle = {
-        let backend = ctx.backend_mut();
-        let handle = backend.create_buffer(&inst_buffer_desc);
-        backend.upload_buffer(handle, inst_data, 0).unwrap();
+        let handle = create_aligned_buffer(ctx, BufferDesc {
+            size: inst_data.len() as u64,
+            usage: BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            memory: MemoryType::CpuToGpu,
+        }, 16);
+        ctx.backend_mut().upload_buffer(handle, inst_data, 0).unwrap();
         handle
     };
     let inst_buffer_address = ctx.backend_mut().get_buffer_address(inst_buffer_handle);
@@ -499,17 +556,13 @@ pub fn build_tlas(
             )
     };
 
-    // Create scratch buffer
-    let scratch_desc = BufferDesc {
-        size: if update {
-            size_info.update_scratch_size
-        } else {
-            size_info.build_scratch_size
-        },
-        usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-        memory: MemoryType::GpuOnly,
+    // Create scratch buffer (aligned to minAccelerationStructureScratchOffsetAlignment)
+    let scratch_size = if update {
+        size_info.update_scratch_size
+    } else {
+        size_info.build_scratch_size
     };
-    let scratch_handle = ctx.backend_mut().create_buffer(&scratch_desc);
+    let scratch_handle = create_scratch_buffer(ctx, scratch_size);
     let scratch_address = ctx.backend_mut().get_buffer_address(scratch_handle);
     build_info.scratch_data = vk::DeviceOrHostAddressKHR {
         device_address: scratch_address,
@@ -529,9 +582,11 @@ pub fn build_tlas(
         .src_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
         .src_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR)
         .dst_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
-        .dst_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR);
-    let dep_info = vk::DependencyInfo::default()
-        .memory_barriers(std::slice::from_ref(&as_barrier));
+        .dst_access_mask(
+            vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR
+                | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR,
+        );
+    let dep_info = vk::DependencyInfo::default().memory_barriers(std::slice::from_ref(&as_barrier));
     unsafe {
         device.handle.cmd_pipeline_barrier2(ctx.cmd, &dep_info);
     }

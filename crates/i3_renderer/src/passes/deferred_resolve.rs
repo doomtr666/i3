@@ -1,4 +1,4 @@
-use i3_gfx::{graph::types::AccelerationStructureHandle, prelude::*};
+use i3_gfx::prelude::*;
 use std::sync::Arc;
 
 use nalgebra_glm as glm;
@@ -19,9 +19,6 @@ pub struct DeferredResolvePushConstants {
 
 pub struct DeferredResolvePass {
     pub sampler: SamplerHandle,
-    /// Physical TLAS handle. Set by `DefaultRenderGraph::sync()`.
-    /// Imported as a virtual handle each frame in `declare()`.
-    pub tlas: Option<BackendAccelerationStructure>,
     tlas_handle: AccelerationStructureHandle,
 
     // Resolved handles (updated in declare)
@@ -54,7 +51,6 @@ impl DeferredResolvePass {
             cluster_grid: BufferHandle::INVALID,
             cluster_light_indices: BufferHandle::INVALID,
             exposure_buffer: BufferHandle::INVALID,
-            tlas: None,
             tlas_handle: AccelerationStructureHandle::INVALID,
             pipeline: None,
         }
@@ -98,12 +94,12 @@ impl RenderPass for DeferredResolvePass {
         self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
         self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
 
-        // Import TLAS if available
-        if let Some(physical_tlas) = self.tlas {
-            self.tlas_handle = builder.import_acceleration_structure("TLAS", physical_tlas);
+        // Resolve TLAS from symbol table (published by TlasRebuildPass::declare()).
+        self.tlas_handle = builder
+            .try_resolve_acceleration_structure("TLAS")
+            .unwrap_or(AccelerationStructureHandle::INVALID);
+        if self.tlas_handle != AccelerationStructureHandle::INVALID {
             builder.read_acceleration_structure(self.tlas_handle, ResourceUsage::SHADER_READ);
-        } else {
-            self.tlas_handle = AccelerationStructureHandle::INVALID;
         }
 
         // Read GBuffers and buffers

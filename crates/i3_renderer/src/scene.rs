@@ -180,4 +180,8 @@ pub trait SceneProvider {
     fn instance_count(&self) -> usize {
         self.object_count()
     }
+
+    /// Free GPU resources (vertex/index buffers) owned by this scene.
+    /// Called by `DefaultRenderGraph::clear_scene`. Default is a no-op.
+    fn cleanup_gpu(&mut self, _backend: &mut dyn i3_gfx::graph::backend::RenderBackend) {}
 }

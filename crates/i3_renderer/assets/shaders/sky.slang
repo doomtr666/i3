@@ -26,8 +26,8 @@ VertexOutput vertexMain(uint vertexId : SV_VertexID)
 {
     VertexOutput output;
     float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
-    // Depth = 1.0 to render behind everything
-    float4 pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0); 
+    // Depth = 0.0 to render behind everything (reverse-Z: far = 0)
+    float4 pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
     
     float4 world_pos_h = mul(pc.inv_view_proj, pos);
     float3 world_pos = world_pos_h.xyz / world_pos_h.w;

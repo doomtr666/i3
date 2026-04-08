@@ -967,7 +967,6 @@ impl RenderBackendInternal for VulkanBackend {
     }
 
     fn end_frame(&mut self) {
-        self.frame_count += 1;
         crate::submission::end_frame(self);
     }
 

@@ -300,6 +300,9 @@ impl SlangCompiler {
                         | slang::BindingType::MutableRawBuffer
                         | slang::BindingType::TypedBuffer
                         | slang::BindingType::MutableTypedBuffer => BindingType::StorageBuffer,
+                        slang::BindingType::RayTracingAccelerationStructure => {
+                            BindingType::AccelerationStructure
+                        }
                         _ => BindingType::StorageBuffer,
                     }
                 } else {

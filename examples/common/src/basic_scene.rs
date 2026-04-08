@@ -578,6 +578,13 @@ impl SceneProvider for BasicScene {
             _pad3: 0.0,
         }))
     }
+
+    fn cleanup_gpu(&mut self, backend: &mut dyn i3_gfx::graph::backend::RenderBackend) {
+        for mesh in self.meshes.drain(..) {
+            backend.destroy_buffer(mesh.vertex_buffer);
+            backend.destroy_buffer(mesh.index_buffer);
+        }
+    }
 }
 
 /// Generates a white unit cube: 24 vertices (4 per face), 36 indices (CCW winding).

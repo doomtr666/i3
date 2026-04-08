@@ -220,7 +220,9 @@ impl DefaultRenderGraph {
     }
 
     /// Resets scene-specific state in the render graph (e.g., for scene switching).
-    pub fn clear_scene(&mut self, backend: &mut dyn RenderBackend) {
+    /// Also calls `scene.cleanup_gpu()` to free any GPU buffers owned by the scene.
+    pub fn clear_scene(&mut self, backend: &mut dyn RenderBackend, scene: &mut dyn crate::scene::SceneProvider) {
+        scene.cleanup_gpu(backend);
         self.accel_struct_system.reset(backend);
         self.blas_update_pass.builds.clear();
         self.tlas_rebuild_pass.reset();
