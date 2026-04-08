@@ -1,7 +1,7 @@
 // assets/system/shaders/deferred_resolve.slang
 #include "lighting.slangh"
 
-#define USE_RT
+//#define USE_RT
 
 struct PushConstants
 {

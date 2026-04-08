@@ -77,21 +77,10 @@ impl RenderPass for MandelbrotPass {
         builder.bind_pipeline(self.pipeline);
         builder.write_image(self.backbuffer, ResourceUsage::SHADER_WRITE);
         builder.present_image(self.backbuffer);
-        builder.bind_descriptor_set(
-            0,
-            vec![DescriptorWrite {
-                binding: 0,
-                array_element: 0,
-                descriptor_type: BindingType::StorageTexture,
-                image_info: Some(DescriptorImageInfo {
-                    image: self.backbuffer,
-                    sampler: None,
-                    image_layout: DescriptorImageLayout::General,
-                }),
-                buffer_info: None,
-                accel_struct_info: None,
-            }],
-        );
+
+        builder.descriptor_set(0, |d| {
+            d.storage_image(self.backbuffer, DescriptorImageLayout::General);
+        });
     }
 
     fn execute(

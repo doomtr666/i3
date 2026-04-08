@@ -70,6 +70,8 @@ graph TD
 | IO-01 | i3_io | **DONE** | ~~`AssetHandle` ref lifetime.~~ `get()` and `wait_loaded()` already return owned `Arc<T>` cloned under the lock. |
 | IO-03 | i3_io | **DONE** | ~~Manual unsafe cast in `texture.rs`.~~ Already uses `bytemuck::pod_read_unaligned`. |
 | VK-03 | i3_vulkan_backend | Low | Format conversion audit needed for recent Vulkan additions. |
+| GFX-12 | i3_vulkan_backend | Medium | Implement `VkBufferView` for `UniformTexelBuffer` and `StorageTexelBuffer` support. |
+| GFX-13 | i3_gfx / i3_vulkan_backend | Medium | Support subresource views (mip/layer) via explicit `ImageViewDesc` in the Frame Graph. |
 
 ### 2.2 Renderer & Shading (i3_renderer)
 

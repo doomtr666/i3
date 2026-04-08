@@ -154,7 +154,6 @@ impl SlangCompiler {
                     _ => 1,
                 };
 
-
                 (ty, count)
             } else {
                 (BindingType::Unknown, 1)
@@ -165,8 +164,8 @@ impl SlangCompiler {
             if let Some(existing) = unique_bindings.get(&key) {
                 // Merge Sampler + Texture = CombinedImageSampler
                 let merged_type = match (&existing.binding_type, &binding_type) {
-                    (BindingType::Sampler, BindingType::Texture)
-                    | (BindingType::Texture, BindingType::Sampler) => {
+                    (BindingType::Sampler, BindingType::SampledImage)
+                    | (BindingType::SampledImage, BindingType::Sampler) => {
                         BindingType::CombinedImageSampler
                     }
                     _ => binding_type, // Keep the new one
@@ -277,7 +276,7 @@ impl SlangCompiler {
     fn determine_binding_type(type_layout: &slang::reflection::TypeLayout) -> BindingType {
         let kind = type_layout.kind();
         use slang::TypeKind;
-        
+
         let result = match kind {
             TypeKind::ConstantBuffer => BindingType::UniformBuffer,
             TypeKind::Array => {
@@ -293,13 +292,13 @@ impl SlangCompiler {
                 if type_layout.binding_range_count() > 0 {
                     match type_layout.binding_range_type(0) {
                         slang::BindingType::ConstantBuffer => BindingType::UniformBuffer,
-                        slang::BindingType::Texture => BindingType::Texture,
-                        slang::BindingType::MutableTeture => BindingType::StorageTexture,
+                        slang::BindingType::Texture => BindingType::SampledImage,
+                        slang::BindingType::MutableTeture => BindingType::StorageImage,
                         slang::BindingType::Sampler => BindingType::Sampler,
+                        slang::BindingType::TypedBuffer => BindingType::UniformTexelBuffer,
+                        slang::BindingType::MutableTypedBuffer => BindingType::StorageTexelBuffer,
                         slang::BindingType::RawBuffer
-                        | slang::BindingType::MutableRawBuffer
-                        | slang::BindingType::TypedBuffer
-                        | slang::BindingType::MutableTypedBuffer => BindingType::StorageBuffer,
+                        | slang::BindingType::MutableRawBuffer => BindingType::StorageBuffer,
                         slang::BindingType::RayTracingAccelerationStructure => {
                             BindingType::AccelerationStructure
                         }
@@ -307,7 +306,7 @@ impl SlangCompiler {
                     }
                 } else {
                     // Try to deduce from type layout
-                    BindingType::Texture
+                    BindingType::SampledImage
                 }
             }
             TypeKind::ParameterBlock => BindingType::UniformBuffer,

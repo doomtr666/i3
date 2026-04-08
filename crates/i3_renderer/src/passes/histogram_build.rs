@@ -65,7 +65,7 @@ impl RenderPass for HistogramBuildPass {
         builder.write_buffer(self.histogram_buffer, ResourceUsage::SHADER_WRITE);
 
         builder.descriptor_set(0, |d| {
-            d.texture(self.hdr_image, DescriptorImageLayout::ShaderReadOnlyOptimal)
+            d.sampled_image(self.hdr_image, DescriptorImageLayout::ShaderReadOnlyOptimal)
                 .storage_buffer(self.histogram_buffer)
                 .storage_buffer(self.exposure_buffer);
         });

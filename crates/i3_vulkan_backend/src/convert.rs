@@ -316,13 +316,13 @@ pub fn convert_stencil_op_state(state: &StencilOpState) -> vk::StencilOpState {
 pub fn convert_binding_type_to_descriptor(binding_type: BindingType) -> vk::DescriptorType {
     match binding_type {
         BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-        BindingType::StorageBuffer | BindingType::RawBuffer | BindingType::MutableRawBuffer => {
-            vk::DescriptorType::STORAGE_BUFFER
-        }
-        BindingType::Texture => vk::DescriptorType::SAMPLED_IMAGE,
-        BindingType::StorageTexture => vk::DescriptorType::STORAGE_IMAGE,
+        BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+        BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+        BindingType::StorageImage => vk::DescriptorType::STORAGE_IMAGE,
         BindingType::Sampler => vk::DescriptorType::SAMPLER,
         BindingType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        BindingType::UniformTexelBuffer => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+        BindingType::StorageTexelBuffer => vk::DescriptorType::STORAGE_TEXEL_BUFFER,
         BindingType::AccelerationStructure => vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
         BindingType::Unknown => vk::DescriptorType::UNIFORM_BUFFER, // fallback
     }
@@ -545,12 +545,24 @@ pub fn convert_u32_descriptor_type(id: u32) -> vk::DescriptorType {
 
 pub fn convert_u32_shader_stage_flags(bits: u32) -> vk::ShaderStageFlags {
     let mut flags = vk::ShaderStageFlags::empty();
-    if bits & 0x01 != 0 { flags |= vk::ShaderStageFlags::VERTEX; }
-    if bits & 0x02 != 0 { flags |= vk::ShaderStageFlags::FRAGMENT; }
-    if bits & 0x04 != 0 { flags |= vk::ShaderStageFlags::COMPUTE; }
-    if bits & 0x08 != 0 { flags |= vk::ShaderStageFlags::GEOMETRY; }
-    if bits & 0x10 != 0 { flags |= vk::ShaderStageFlags::TESSELLATION_CONTROL; }
-    if bits & 0x20 != 0 { flags |= vk::ShaderStageFlags::TESSELLATION_EVALUATION; }
+    if bits & 0x01 != 0 {
+        flags |= vk::ShaderStageFlags::VERTEX;
+    }
+    if bits & 0x02 != 0 {
+        flags |= vk::ShaderStageFlags::FRAGMENT;
+    }
+    if bits & 0x04 != 0 {
+        flags |= vk::ShaderStageFlags::COMPUTE;
+    }
+    if bits & 0x08 != 0 {
+        flags |= vk::ShaderStageFlags::GEOMETRY;
+    }
+    if bits & 0x10 != 0 {
+        flags |= vk::ShaderStageFlags::TESSELLATION_CONTROL;
+    }
+    if bits & 0x20 != 0 {
+        flags |= vk::ShaderStageFlags::TESSELLATION_EVALUATION;
+    }
     flags
 }
 

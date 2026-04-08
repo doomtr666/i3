@@ -256,8 +256,8 @@ pub fn update_descriptor_set(
                 }
             }
             BindingType::CombinedImageSampler
-            | BindingType::Texture
-            | BindingType::StorageTexture
+            | BindingType::SampledImage
+            | BindingType::StorageImage
             | BindingType::Sampler => {
                 if let Some(info) = &write.image_info {
                     // Resolve Image View
@@ -342,7 +342,7 @@ pub fn update_descriptor_set(
                     descriptor_writes.push(vk_write);
                 }
             }
-            BindingType::Texture => {
+            BindingType::SampledImage => {
                 // Sampled Image
                 vk_write = vk_write
                     .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
@@ -353,7 +353,7 @@ pub fn update_descriptor_set(
                     descriptor_writes.push(vk_write);
                 }
             }
-            BindingType::StorageTexture => {
+            BindingType::StorageImage => {
                 vk_write = vk_write
                     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                     .descriptor_count(1);
@@ -370,6 +370,26 @@ pub fn update_descriptor_set(
                 if img_idx < image_infos.len() {
                     vk_write = vk_write.image_info(&image_infos[img_idx..=img_idx]);
                     img_idx += 1;
+                    descriptor_writes.push(vk_write);
+                }
+            }
+            BindingType::UniformTexelBuffer => {
+                vk_write = vk_write
+                    .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
+                    .descriptor_count(1);
+                if buf_idx < buffer_infos.len() {
+                    vk_write = vk_write.buffer_info(&buffer_infos[buf_idx..=buf_idx]);
+                    buf_idx += 1;
+                    descriptor_writes.push(vk_write);
+                }
+            }
+            BindingType::StorageTexelBuffer => {
+                vk_write = vk_write
+                    .descriptor_type(vk::DescriptorType::STORAGE_TEXEL_BUFFER)
+                    .descriptor_count(1);
+                if buf_idx < buffer_infos.len() {
+                    vk_write = vk_write.buffer_info(&buffer_infos[buf_idx..=buf_idx]);
+                    buf_idx += 1;
                     descriptor_writes.push(vk_write);
                 }
             }
@@ -391,7 +411,9 @@ pub fn update_descriptor_set(
         }
 
         if !backend.rt_supported {
-            error!("Attempted to update AccelerationStructure descriptor but Ray Tracing is not supported or enabled.");
+            error!(
+                "Attempted to update AccelerationStructure descriptor but Ray Tracing is not supported or enabled."
+            );
             continue;
         }
 

@@ -621,7 +621,11 @@ pub struct DescriptorWrite {
 }
 
 impl DescriptorWrite {
-    pub fn storage_buffer(binding: u32, array_element: u32, buffer: crate::graph::types::BufferHandle) -> Self {
+    pub fn storage_buffer(
+        binding: u32,
+        array_element: u32,
+        buffer: crate::graph::types::BufferHandle,
+    ) -> Self {
         Self {
             binding,
             array_element,
@@ -632,7 +636,11 @@ impl DescriptorWrite {
         }
     }
 
-    pub fn uniform_buffer(binding: u32, array_element: u32, buffer: crate::graph::types::BufferHandle) -> Self {
+    pub fn uniform_buffer(
+        binding: u32,
+        array_element: u32,
+        buffer: crate::graph::types::BufferHandle,
+    ) -> Self {
         Self {
             binding,
             array_element,
@@ -664,7 +672,7 @@ impl DescriptorWrite {
         }
     }
 
-    pub fn texture(
+    pub fn sampled_image(
         binding: u32,
         array_element: u32,
         image: crate::graph::types::ImageHandle,
@@ -673,7 +681,27 @@ impl DescriptorWrite {
         Self {
             binding,
             array_element,
-            descriptor_type: crate::graph::pipeline::BindingType::Texture,
+            descriptor_type: crate::graph::pipeline::BindingType::SampledImage,
+            buffer_info: None,
+            image_info: Some(DescriptorImageInfo {
+                image,
+                image_layout: layout,
+                sampler: None,
+            }),
+            accel_struct_info: None,
+        }
+    }
+
+    pub fn storage_image(
+        binding: u32,
+        array_element: u32,
+        image: crate::graph::types::ImageHandle,
+        layout: DescriptorImageLayout,
+    ) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::StorageImage,
             buffer_info: None,
             image_info: Some(DescriptorImageInfo {
                 image,
@@ -711,6 +739,36 @@ impl DescriptorWrite {
             buffer_info: None,
             image_info: None,
             accel_struct_info: Some(handle),
+        }
+    }
+
+    pub fn uniform_texel_buffer(
+        binding: u32,
+        array_element: u32,
+        buffer: crate::graph::types::BufferHandle,
+    ) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::UniformTexelBuffer,
+            buffer_info: Some(DescriptorBufferInfo::whole(buffer)),
+            image_info: None,
+            accel_struct_info: None,
+        }
+    }
+
+    pub fn storage_texel_buffer(
+        binding: u32,
+        array_element: u32,
+        buffer: crate::graph::types::BufferHandle,
+    ) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::StorageTexelBuffer,
+            buffer_info: Some(DescriptorBufferInfo::whole(buffer)),
+            image_info: None,
+            accel_struct_info: None,
         }
     }
 }

@@ -207,21 +207,7 @@ pub fn create_graphics_pipeline(
     // Group bindings by set index
     let mut set_bindings: HashMap<u32, Vec<vk::DescriptorSetLayoutBinding>> = HashMap::new();
     for binding in &desc.shader_module.reflection.bindings {
-        let descriptor_type = match binding.binding_type {
-            BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-            BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
-            BindingType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            BindingType::Sampler => vk::DescriptorType::SAMPLER,
-            BindingType::Texture => vk::DescriptorType::SAMPLED_IMAGE,
-            BindingType::AccelerationStructure => vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-            _ => {
-                tracing::warn!(
-                    "Unknown binding type for binding {}, defaulting to STORAGE_BUFFER",
-                    binding.binding
-                );
-                vk::DescriptorType::STORAGE_BUFFER
-            }
-        };
+        let descriptor_type = convert_binding_type_to_descriptor(binding.binding_type.clone());
 
         let stage_flags = convert_shader_stage_flags(ShaderStageFlags::All); // Simplified for MVP
 

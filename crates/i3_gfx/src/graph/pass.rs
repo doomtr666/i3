@@ -289,9 +289,9 @@ impl DescriptorSetWriter {
         self
     }
 
-    pub fn texture(&mut self, image: ImageHandle, layout: DescriptorImageLayout) -> &mut Self {
+    pub fn sampled_image(&mut self, image: ImageHandle, layout: DescriptorImageLayout) -> &mut Self {
         let b = self.current_binding;
-        self.writes.push(DescriptorWrite::texture(b, 0, image, layout));
+        self.writes.push(DescriptorWrite::sampled_image(b, 0, image, layout));
         self.current_binding += 1;
         self
     }
@@ -310,10 +310,35 @@ impl DescriptorSetWriter {
         self
     }
 
+    pub fn storage_image(&mut self, image: ImageHandle, layout: DescriptorImageLayout) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::storage_image(b, 0, image, layout));
+        self.current_binding += 1;
+        self
+    }
+
+    pub fn uniform_texel_buffer(&mut self, buffer: BufferHandle) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::uniform_texel_buffer(b, 0, buffer));
+        self.current_binding += 1;
+        self
+    }
+
+    pub fn storage_texel_buffer(&mut self, buffer: BufferHandle) -> &mut Self {
+        let b = self.current_binding;
+        self.writes.push(DescriptorWrite::storage_texel_buffer(b, 0, buffer));
+        self.current_binding += 1;
+        self
+    }
+
     // --- Shortcuts ---
 
     pub fn storage_buffer_at(&mut self, binding: u32, buffer: BufferHandle) -> &mut Self {
         self.bind(binding).storage_buffer(buffer)
+    }
+
+    pub fn storage_image_at(&mut self, binding: u32, image: ImageHandle, layout: DescriptorImageLayout) -> &mut Self {
+        self.bind(binding).storage_image(image, layout)
     }
 }
 

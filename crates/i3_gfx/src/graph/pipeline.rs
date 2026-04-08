@@ -25,12 +25,12 @@ pub enum BindingType {
     Unknown,
     UniformBuffer,
     StorageBuffer,
-    RawBuffer,
-    MutableRawBuffer,
-    Texture,
-    StorageTexture,
+    SampledImage,
+    StorageImage,
     Sampler,
     CombinedImageSampler,
+    UniformTexelBuffer, // Currently not supported (requires VkBufferView)
+    StorageTexelBuffer, // Currently not supported (requires VkBufferView)
     AccelerationStructure,
 }
 
