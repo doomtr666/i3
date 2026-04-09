@@ -3,6 +3,7 @@ use uuid::Uuid;
 use crate::pipeline::{ImportedData, Importer, BakeOutput, BakeContext};
 use crate::Result;
 use crate::importers::ibl_bake::*;
+use std::f32::consts::PI;
 use i3_io::ibl::{IblHeader, IBL_ASSET_TYPE};
 
 pub struct HdrImportedData {
@@ -56,6 +57,22 @@ impl Importer for HdrIblImporter {
 
         // Extraction soleil — retourne IblSunData::zeroed() si threshold == f32::MAX
         let mut sun = extract_sun(&hdr.pixels, hdr.width, hdr.height, sun_threshold);
+
+        // Calibration du ratio direct/ambient si demandé.
+        // sun_dir_toward = direction "vers le soleil" (opposée à la convention renderer).
+        if let Some(ratio) = self.options.sun_strength_ratio {
+            let sun_dir_toward = [-sun.direction[0], -sun.direction[1], -sun.direction[2]];
+            let irr = irradiance_lum_at(&hdr.pixels, hdr.width, hdr.height,
+                                        sun_dir_toward, sun_threshold);
+            // Sur surface Lambertienne face au soleil (NdotL=1) :
+            //   direct = sun_intensity × albedo/π
+            //   ambient = irr × albedo
+            //   direct/ambient = ratio ⟹ sun_intensity = ratio × irr × π
+            sun.intensity = ratio * irr * PI;
+            tracing::info!("IBL sun calibration: irr_at_sun={:.4}, ratio={}, sun_intensity={:.2}",
+                irr, ratio, sun.intensity);
+        }
+
         sun.intensity *= self.options.intensity_scale;
 
         // Compression equirect

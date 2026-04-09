@@ -1,7 +1,7 @@
 use crate::importers::ibl_math::*;
 use half::f16;
 use i3_io::ibl::IblSunData;
-use intel_tex_2::{bc6h, RgbaSurface};
+use intel_tex_2::{RgbaSurface, bc6h};
 use rayon::prelude::*;
 use std::f32::consts::PI;
 
@@ -13,6 +13,15 @@ pub struct IblBakeOptions {
     /// Multiplicateur appliqué à sun_intensity et stocké dans IblHeader.
     /// Convertit les valeurs HDR brutes vers des unités physiques (lux).
     pub intensity_scale: f32,
+
+    /// Ratio direct/ambient cible pour le soleil.
+    /// Quand défini, sun_intensity est calculé pour que la contribution directe du soleil soit
+    /// exactement `sun_strength_ratio` fois l'irradiance ambiante masquée dans la direction soleil.
+    /// Garantie : sur une surface Lambertienne face au soleil (NdotL=1) :
+    ///   `L_direct / L_ambient = sun_strength_ratio`
+    /// Valeurs typiques extérieur : 5.0 (nuageux) → 20.0 (plein soleil).
+    /// None = intensité brute extraite du HDR (pas de calibration).
+    pub sun_strength_ratio: Option<f32>,
 }
 
 impl Default for IblBakeOptions {
@@ -20,6 +29,7 @@ impl Default for IblBakeOptions {
         Self {
             extract_sun: true,
             intensity_scale: 1.0,
+            sun_strength_ratio: Some(10.0),
         }
     }
 }
@@ -87,7 +97,7 @@ pub fn bake_brdf_lut(width: u32, height: u32, num_samples: u32) -> Vec<u8> {
                 let mut scale = 0.0f32;
                 let mut bias = 0.0f32;
 
-                let v = [ (1.0 - nov * nov).sqrt(), nov, 0.0 ];
+                let v = [(1.0 - nov * nov).sqrt(), nov, 0.0];
 
                 for i in 0..num_samples {
                     let xi = hammersley(i, num_samples);
@@ -113,7 +123,10 @@ pub fn bake_brdf_lut(width: u32, height: u32, num_samples: u32) -> Vec<u8> {
                     }
                 }
 
-                [f16::from_f32(scale / num_samples as f32), f16::from_f32(bias / num_samples as f32)]
+                [
+                    f16::from_f32(scale / num_samples as f32),
+                    f16::from_f32(bias / num_samples as f32),
+                ]
             })
         })
         .collect();
@@ -156,10 +169,12 @@ pub fn bake_irradiance(
                     for sx in 0..src_width {
                         let dir = equirect_to_dir(sx, sy, src_width, src_height);
                         let cos_theta = (n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2]).max(0.0);
-                        
+
                         if cos_theta > 0.0 {
                             let px = pixels_rgb[(sx + sy * src_width) as usize];
-                            if sun_threshold == f32::MAX || luminance(px[0], px[1], px[2]) <= sun_threshold {
+                            if sun_threshold == f32::MAX
+                                || luminance(px[0], px[1], px[2]) <= sun_threshold
+                            {
                                 irr[0] += px[0] * cos_theta * solid;
                                 irr[1] += px[1] * cos_theta * solid;
                                 irr[2] += px[2] * cos_theta * solid;
@@ -195,7 +210,7 @@ pub fn bake_prefiltered(
         let roughness = m as f32 / (num_mips - 1) as f32;
         let alpha = roughness * roughness;
         let mip_size = (out_size >> m).max(1);
-        
+
         let packed_pixels: Vec<u32> = (0..mip_size)
             .into_par_iter()
             .flat_map(|iy| {
@@ -213,18 +228,20 @@ pub fn bake_prefiltered(
                         let xi = hammersley(i, num_samples);
                         let h_local = importance_sample_ggx(xi, alpha);
                         let h = tbn_transform(h_local, n);
-                        
-                        let noh = (n[0]*h[0] + n[1]*h[1] + n[2]*h[2]).max(0.0);
+
+                        let noh = (n[0] * h[0] + n[1] * h[1] + n[2] * h[2]).max(0.0);
                         let l = [
                             2.0 * noh * h[0] - v_dir[0],
                             2.0 * noh * h[1] - v_dir[1],
                             2.0 * noh * h[2] - v_dir[2],
                         ];
-                        
-                        let nol = (n[0]*l[0] + n[1]*l[1] + n[2]*l[2]).max(0.0);
+
+                        let nol = (n[0] * l[0] + n[1] * l[1] + n[2] * l[2]).max(0.0);
                         if nol > 0.0 {
                             let sample = sample_equirect(pixels_rgb, l, src_width, src_height);
-                            if sun_threshold == f32::MAX || luminance(sample[0], sample[1], sample[2]) <= sun_threshold {
+                            if sun_threshold == f32::MAX
+                                || luminance(sample[0], sample[1], sample[2]) <= sun_threshold
+                            {
                                 color[0] += sample[0] * nol;
                                 color[1] += sample[1] * nol;
                                 color[2] += sample[2] * nol;
@@ -234,7 +251,11 @@ pub fn bake_prefiltered(
                     }
 
                     if total_weight > 0.0 {
-                        encode_r11g11b10(color[0] / total_weight, color[1] / total_weight, color[2] / total_weight)
+                        encode_r11g11b10(
+                            color[0] / total_weight,
+                            color[1] / total_weight,
+                            color[2] / total_weight,
+                        )
                     } else {
                         // Fallback to average or black
                         let sample = sample_equirect(pixels_rgb, r, src_width, src_height);
@@ -251,11 +272,51 @@ pub fn bake_prefiltered(
     all_data
 }
 
+/// Luminance de l'irradiance cosine-weighted masquée dans la direction `n` (normalisée).
+/// Utilisé pour calibrer sun_intensity via `sun_strength_ratio`.
+pub fn irradiance_lum_at(
+    pixels_rgb: &[[f32; 3]],
+    src_width: u32,
+    src_height: u32,
+    n: [f32; 3],
+    sun_threshold: f32,
+) -> f32 {
+    let mut irr = [0.0f32; 3];
+    for sy in 0..src_height {
+        let solid = equirect_solid_angle(sy, src_height);
+        for sx in 0..src_width {
+            let dir = equirect_to_dir(sx, sy, src_width, src_height);
+            let cos_theta = (n[0]*dir[0] + n[1]*dir[1] + n[2]*dir[2]).max(0.0);
+            if cos_theta > 0.0 {
+                let px = pixels_rgb[(sx + sy * src_width) as usize];
+                if sun_threshold == f32::MAX || luminance(px[0], px[1], px[2]) <= sun_threshold {
+                    irr[0] += px[0] * cos_theta * solid;
+                    irr[1] += px[1] * cos_theta * solid;
+                    irr[2] += px[2] * cos_theta * solid;
+                }
+            }
+        }
+    }
+    luminance(irr[0] / PI, irr[1] / PI, irr[2] / PI)
+}
+
 pub fn compute_sun_threshold(pixels_rgb: &[[f32; 3]]) -> f32 {
-    let mut lums: Vec<f32> = pixels_rgb.iter().map(|p| luminance(p[0], p[1], p[2])).collect();
+    let mut lums: Vec<f32> = pixels_rgb
+        .iter()
+        .map(|p| luminance(p[0], p[1], p[2]))
+        .collect();
     lums.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let idx = (lums.len() as f32 * 0.999) as usize;
-    lums[idx].max(1.0)
+
+    let idx = ((lums.len() as f32 * 0.99) as usize).min(lums.len() - 1);
+    let threshold = lums[idx];
+    let n_masked = lums.iter().filter(|&&l| l > threshold).count();
+    tracing::warn!(
+        "IBL sun threshold: {:.2} ({} pixels masked, {:.4}% of total)",
+        threshold,
+        n_masked,
+        n_masked as f32 / lums.len() as f32 * 100.0
+    );
+    threshold
 }
 
 pub fn extract_sun(
@@ -264,9 +325,13 @@ pub fn extract_sun(
     src_height: u32,
     sun_threshold: f32,
 ) -> IblSunData {
+    // Direction centroid weighted by lum × solid_angle (correct angular weighting).
     let mut w_dir = [0.0f32; 3];
-    let mut w_color = [0.0f32; 3];
-    let mut total_lum = 0.0f32;
+    // Color/intensity accumulated as raw radiance (no solid angle) → average sun disk radiance.
+    let mut sum_r = 0.0f32;
+    let mut sum_g = 0.0f32;
+    let mut sum_b = 0.0f32;
+    let mut sum_lum = 0.0f32; // raw lum sum, no solid angle
     let mut count = 0usize;
 
     for sy in 0..src_height {
@@ -276,27 +341,45 @@ pub fn extract_sun(
             let lum = luminance(px[0], px[1], px[2]);
             if lum > sun_threshold {
                 let dir = equirect_to_dir(sx, sy, src_width, src_height);
-                w_dir[0] += dir[0] * lum * solid;
-                w_dir[1] += dir[1] * lum * solid;
-                w_dir[2] += dir[2] * lum * solid;
-                
-                w_color[0] += px[0] * solid;
-                w_color[1] += px[1] * solid;
-                w_color[2] += px[2] * solid;
-                
-                total_lum += lum * solid;
+                let w = lum * solid;
+                w_dir[0] += dir[0] * w;
+                w_dir[1] += dir[1] * w;
+                w_dir[2] += dir[2] * w;
+
+                // Raw accumulation for average radiance
+                sum_r += px[0];
+                sum_g += px[1];
+                sum_b += px[2];
+                sum_lum += lum;
                 count += 1;
             }
         }
     }
 
     if count > 0 {
-        let len = (w_dir[0]*w_dir[0] + w_dir[1]*w_dir[1] + w_dir[2]*w_dir[2]).sqrt().max(1e-6);
-        let color_len = (w_color[0]*w_color[0] + w_color[1]*w_color[1] + w_color[2]*w_color[2]).sqrt().max(1e-6);
+        let n = count as f32;
+        // Direction: normalize weighted centroid, then negate to match renderer convention.
+        // equirect_to_dir gives "toward sun" but the renderer stores "light ray direction"
+        // (from sun toward scene), matching scene LightData::direction and the sky/deferred shaders.
+        let len = (w_dir[0] * w_dir[0] + w_dir[1] * w_dir[1] + w_dir[2] * w_dir[2])
+            .sqrt()
+            .max(1e-6);
+        let direction = [-w_dir[0] / len, -w_dir[1] / len, -w_dir[2] / len];
+
+        // Color: average RGB of sun pixels, normalized by max component → chromaticity in [0,1]
+        let avg_r = sum_r / n;
+        let avg_g = sum_g / n;
+        let avg_b = sum_b / n;
+        let max_c = avg_r.max(avg_g).max(avg_b).max(1e-6);
+        let color = [avg_r / max_c, avg_g / max_c, avg_b / max_c];
+
+        // Intensity: average luminance of the sun disk pixels (raw radiance, no solid angle)
+        let intensity = sum_lum / n;
+
         IblSunData {
-            direction: [w_dir[0] / len, w_dir[1] / len, w_dir[2] / len],
-            intensity: total_lum / count as f32,
-            color: [w_color[0] / color_len, w_color[1] / color_len, w_color[2] / color_len],
+            direction,
+            intensity,
+            color,
             _pad: 0.0,
         }
     } else {
@@ -330,7 +413,11 @@ fn importance_sample_ggx(xi: (f32, f32), alpha: f32) -> [f32; 3] {
 }
 
 fn tbn_transform(h: [f32; 3], n: [f32; 3]) -> [f32; 3] {
-    let up = if n[1].abs() < 0.999 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let up = if n[1].abs() < 0.999 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
     let tangent = normalize([
         up[1] * n[2] - up[2] * n[1],
         up[2] * n[0] - up[0] * n[2],
@@ -349,8 +436,8 @@ fn tbn_transform(h: [f32; 3], n: [f32; 3]) -> [f32; 3] {
 }
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let len = (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]).sqrt().max(1e-8);
-    [v[0]/len, v[1]/len, v[2]/len]
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-8);
+    [v[0] / len, v[1] / len, v[2] / len]
 }
 
 fn sample_equirect(pixels: &[[f32; 3]], dir: [f32; 3], w: u32, h: u32) -> [f32; 3] {

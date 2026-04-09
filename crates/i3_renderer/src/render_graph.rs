@@ -313,12 +313,15 @@ impl DefaultRenderGraph {
             let irr_index  = self.bindless_manager.register_physical_texture(backend, self.ibl_images[1]);
             let pref_index = self.bindless_manager.register_physical_texture(backend, self.ibl_images[2]);
             let env_index  = self.bindless_manager.register_physical_texture(backend, self.ibl_images[3]);
+            // Preserve the existing intensity_scale (HDR→physical calibration factor, default 1.0).
+            // Do NOT use ibl_sun.intensity here — that's sun radiance, not ambient scale.
+            let scale = self.ibl_indices.intensity_scale;
             self.ibl_indices = IblIndices {
                 lut_index,
                 irr_index,
                 pref_index,
                 env_index,
-                intensity_scale: self.ibl_sun.intensity,
+                intensity_scale: scale,
             };
         }
     }
@@ -624,10 +627,29 @@ impl DefaultRenderGraph {
             self.tlas_rebuild_pass.instances = tlas_instances;
         }
 
+        let ibl_sun_active = !self.ibl_images.is_empty();
         let mut gpu_lights = Vec::with_capacity(crate::constants::MAX_LIGHTS as usize);
+
+        // When IBL is loaded, inject its extracted sun as the sole directional light.
+        if ibl_sun_active {
+            let s = &self.ibl_sun;
+            gpu_lights.push(GpuLightData {
+                position: [0.0, 0.0, 0.0],
+                radius: 0.0,
+                color: s.color,
+                intensity: s.intensity,
+                direction: s.direction,
+                light_type: 1, // Directional
+            });
+        }
+
         for (_, light) in scene.iter_lights() {
             if gpu_lights.len() >= crate::constants::MAX_LIGHTS as usize {
                 break;
+            }
+            // Skip scene directional lights when IBL sun takes over.
+            if ibl_sun_active && light.light_type == crate::scene::LightType::Directional {
+                continue;
             }
             let light_type = match light.light_type {
                 crate::scene::LightType::Point => 0,
@@ -705,14 +727,24 @@ impl DefaultRenderGraph {
             light_count,
         };
 
-        let sun_light = scene.sun();
+        // When IBL is loaded, its extracted sun overrides any scene directional light.
+        let (sun_dir, sun_int, sun_col) = if !self.ibl_images.is_empty() {
+            (
+                nalgebra_glm::make_vec3(&self.ibl_sun.direction),
+                self.ibl_sun.intensity,
+                nalgebra_glm::make_vec3(&self.ibl_sun.color),
+            )
+        } else {
+            let l = scene.sun();
+            (l.direction, l.intensity, l.color)
+        };
 
         // 3. Populate FrameBlackboard for execute() access
         let mut frame_data = i3_gfx::graph::compiler::FrameBlackboard::new();
         frame_data.publish("Common", common);
-        frame_data.publish("SunDirection", sun_light.direction);
-        frame_data.publish("SunIntensity", sun_light.intensity);
-        frame_data.publish("SunColor", sun_light.color);
+        frame_data.publish("SunDirection", sun_dir);
+        frame_data.publish("SunIntensity", sun_int);
+        frame_data.publish("SunColor", sun_col);
         frame_data.publish("TimeDelta", dt);
         frame_data.publish("DebugChannel", self.debug_channel as u32);
         frame_data.publish("BindlessSet", self.bindless_manager.bindless_set);
@@ -881,10 +913,16 @@ impl DefaultRenderGraph {
         let channel = self.debug_channel;
         let light_buffer_physical = self.light_buffer;
 
-        let sun_light = scene.sun();
-        let sun_dir = sun_light.direction;
-        let sun_int = sun_light.intensity;
-        let sun_col = sun_light.color;
+        let (sun_dir, sun_int, sun_col) = if !self.ibl_images.is_empty() {
+            (
+                nalgebra_glm::make_vec3(&self.ibl_sun.direction),
+                self.ibl_sun.intensity,
+                nalgebra_glm::make_vec3(&self.ibl_sun.color),
+            )
+        } else {
+            let l = scene.sun();
+            (l.direction, l.intensity, l.color)
+        };
 
         let scene_mesh_descriptors = self.scene_mesh_descriptors.clone();
         let scene_instances = self.cached_instances.clone();
