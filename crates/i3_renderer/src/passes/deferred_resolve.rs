@@ -14,6 +14,10 @@ pub struct DeferredResolvePushConstants {
     pub far_plane: f32,
     pub screen_dimensions: [f32; 2],
     pub debug_mode: u32,
+    pub ibl_lut_index: u32,
+    pub ibl_irr_index: u32,
+    pub ibl_pref_index: u32,
+    pub ibl_intensity: f32,
     pub _pad: u32,
 }
 
@@ -161,6 +165,9 @@ impl RenderPass for DeferredResolvePass {
         };
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let debug_mode = *frame.consume::<u32>("DebugChannel");
+        let ibl = frame.consume::<crate::render_graph::IblIndices>("IblIndices");
+        let bindless_set = *frame.consume::<u64>("BindlessSet");
+
         let grid_x = (common.screen_width + 63) / 64;
         let grid_y = (common.screen_height + 63) / 64;
         let grid_size = [grid_x, grid_y, 16u32];
@@ -173,9 +180,14 @@ impl RenderPass for DeferredResolvePass {
             far_plane: common.far_plane,
             screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
             debug_mode,
+            ibl_lut_index: ibl.lut_index,
+            ibl_irr_index: ibl.irr_index,
+            ibl_pref_index: ibl.pref_index,
+            ibl_intensity: ibl.intensity_scale,
             _pad: 0,
         };
         ctx.bind_pipeline_raw(pipeline);
+        ctx.bind_descriptor_set_raw(2, bindless_set);
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
             0,

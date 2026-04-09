@@ -1,7 +1,8 @@
 // assets/system/shaders/deferred_resolve.slang
 #include "lighting.slangh"
 
-//#define USE_RT
+#define USE_RT
+#define USE_IBL
 
 struct PushConstants
 {
@@ -15,7 +16,12 @@ struct PushConstants
 
     float2 screen_dimensions;
     uint debug_mode;
-    uint pad;
+
+    uint ibl_lut_index;
+    uint ibl_irr_index;
+    uint ibl_pref_index;
+    float ibl_intensity;
+    uint pad1;
 };
 
 [[vk::push_constant]]
@@ -163,7 +169,35 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     ClusterGridData grid_item = cluster_grid[cluster_index];
 
     float3 V = normalize(pc.camera_pos - world_pos);
+#ifdef USE_IBL
+    // IBL ambient
+    float3 F0 = lerp(float3(0.04), albedo, metallic);
+    float NdotV = saturate(dot(normal, V));
+
+    float3 kS = F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+    float3 kD = (1.0 - kS) * (1.0 - metallic);
+
+    float3 irradiance = float3(0.0);
+    if (pc.ibl_irr_index != 0xFFFFFFFF)
+    {
+        irradiance = bindlessTextures[pc.ibl_irr_index].Sample(globalSampler, encodeHemiOcta(normal)).rgb;
+    }
+    float3 diffuse_ambient = kD * albedo * irradiance;
+
+    float3 spec_ambient = float3(0.0);
+    if (pc.ibl_pref_index != 0xFFFFFFFF && pc.ibl_lut_index != 0xFFFFFFFF)
+    {
+        float3 R = reflect(-V, normal);
+        float mip_level = roughness * 5.0; // MAX_PREFILTER_MIP = 5
+        float3 prefiltered = bindlessTextures[pc.ibl_pref_index].SampleLevel(globalSampler, encodeHemiOcta(R), mip_level).rgb;
+        float2 brdf = bindlessTextures[pc.ibl_lut_index].Sample(globalSampler, float2(NdotV, roughness)).rg;
+        spec_ambient = prefiltered * (F0 * brdf.x + brdf.y);
+    }
+
+    float3 color = emissive + (diffuse_ambient + spec_ambient) * pc.ibl_intensity;
+#else
     float3 color = emissive + 0.005 * albedo;
+#endif
 
     for (uint i = 0; i < grid_item.count; ++i)
     {

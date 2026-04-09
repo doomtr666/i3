@@ -60,7 +60,7 @@ impl SlangCompiler {
     ) -> Result<ShaderReflection, String> {
         let reflection = linked_program
             .layout(0)
-            .map_err(|e| format!("Failed to get reflection layout: {:?}", e))?;
+            .map_err(|e| format!("Failed to get reflection layout: {}", e))?;
 
         // Extract entry points
         let mut entry_points = Vec::new();
@@ -368,7 +368,7 @@ impl SlangCompiler {
         // Load module from inline source
         let module = session
             .load_module_from_source_string(module_name, source_path, source_code)
-            .map_err(|e| format!("Failed to load Slang module from source: {:?}", e))?;
+            .map_err(|e| format!("Failed to load Slang module from source: {}", e))?;
 
         // Auto-discover all entry points
         let entry_point_count = module.entry_point_count();
@@ -387,12 +387,12 @@ impl SlangCompiler {
         // Create composite component
         let program = session
             .create_composite_component_type(&components)
-            .map_err(|e| format!("Failed to create composite component: {:?}", e))?;
+            .map_err(|e| format!("Failed to create composite component: {}", e))?;
 
         // Link program
         let linked_program = program
             .link()
-            .map_err(|e| format!("Failed to link program: {:?}", e))?;
+            .map_err(|e| format!("Failed to link program: {}", e))?;
 
         // Extract reflection data
         let reflection = self.extract_reflection(&linked_program)?;
@@ -400,7 +400,7 @@ impl SlangCompiler {
         // Get complete bytecode with ALL entry points
         let bytecode_blob = linked_program
             .target_code(0)
-            .map_err(|e| format!("Failed to get target code: {:?}", e))?;
+            .map_err(|e| format!("Failed to get target code: {}", e))?;
 
         let bytecode = bytecode_blob.as_slice().to_vec();
 
@@ -500,7 +500,7 @@ impl SlangCompiler {
         // Load module from file
         let module = session
             .load_module(module_name)
-            .map_err(|e| format!("Failed to load Slang module: {:?}", e))?;
+            .map_err(|e| format!("Failed to load Slang module: {}", e))?;
 
         // Auto-discover all entry points
         let entry_point_count = module.entry_point_count();
@@ -519,12 +519,12 @@ impl SlangCompiler {
         // Create composite component
         let program = session
             .create_composite_component_type(&components)
-            .map_err(|e| format!("Failed to create composite component: {:?}", e))?;
+            .map_err(|e| format!("Failed to create composite component: {}", e))?;
 
         // Link program
         let linked_program = program
             .link()
-            .map_err(|e| format!("Failed to link program: {:?}", e))?;
+            .map_err(|e| format!("Failed to link program: {}", e))?;
 
         // Extract reflection data
         let reflection = self.extract_reflection(&linked_program)?;
@@ -532,7 +532,7 @@ impl SlangCompiler {
         // Get complete bytecode with ALL entry points
         let bytecode_blob = linked_program
             .target_code(0)
-            .map_err(|e| format!("Failed to get target code: {:?}", e))?;
+            .map_err(|e| format!("Failed to get target code: {}", e))?;
 
         let bytecode = bytecode_blob.as_slice().to_vec();
 

@@ -70,18 +70,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let asset_id = Uuid::from_bytes(entry.asset_id);
         let asset_type = Uuid::from_bytes(entry.asset_type);
 
-        let type_name = if asset_type == i3_io::mesh::MESH_ASSET_TYPE {
-            "Mesh"
-        } else if asset_type == i3_io::scene_asset::SCENE_ASSET_TYPE {
-            "Scene"
-        } else if asset_type == i3_io::material::MATERIAL_ASSET_TYPE {
-            "Material"
-        } else if asset_type == i3_io::texture::TEXTURE_ASSET_TYPE {
-            "Texture"
-        } else if asset_type == i3_io::pipeline_asset::PIPELINE_ASSET_TYPE {
-            "Pipeline"
-        } else {
-            "Unknown"
+        let type_name = match asset_type {
+            i3_io::mesh::MESH_ASSET_TYPE => "Mesh",
+            i3_io::scene_asset::SCENE_ASSET_TYPE => "Scene",
+            i3_io::material::MATERIAL_ASSET_TYPE => "Material",
+            i3_io::texture::TEXTURE_ASSET_TYPE => "Texture",
+            i3_io::pipeline_asset::PIPELINE_ASSET_TYPE => "Pipeline",
+            i3_io::ibl::IBL_ASSET_TYPE => "IBL",
+            _ => "Unknown",
         };
 
         let comp_name = match entry.compression {

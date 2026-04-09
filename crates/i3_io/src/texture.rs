@@ -21,6 +21,9 @@ pub enum TextureFormat {
     BC5_SNORM = 110,
     BC7_UNORM = 111,
     BC7_SRGB = 112,
+    R16G16_SFLOAT = 10,
+    R11G11B10_UFLOAT = 11,
+    BC6H_UF16 = 12,
 }
 
 #[repr(C)]

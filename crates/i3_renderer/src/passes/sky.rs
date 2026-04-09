@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use i3_gfx::prelude::*;
+use std::sync::Arc;
 
 use nalgebra_glm as glm;
 
@@ -12,21 +12,19 @@ pub struct SkyPushConstants {
     pub sun_direction: glm::Vec3,
     pub sun_intensity: f32,
     pub sun_color: glm::Vec3,
-    pub _pad1: f32,
+    pub ibl_env_index: u32, // bindless index, !0 = no IBL
 }
 
-/// Sky pass struct implementing the RenderPass trait.
 pub struct SkyPass {
     // Resolved handles (updated in declare)
     hdr_target: ImageHandle,
     depth_buffer: ImageHandle,
 
-    // Persistence
     pipeline: Option<BackendPipeline>,
 }
 
 impl SkyPass {
-    pub fn new() -> Self {
+    pub fn new(_sampler: SamplerHandle) -> Self {
         Self {
             hdr_target: ImageHandle::INVALID,
             depth_buffer: ImageHandle::INVALID,
@@ -42,7 +40,10 @@ impl RenderPass for SkyPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("sky").wait_loaded() {
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("sky")
+            .wait_loaded()
+        {
             let state = asset.state.as_ref().expect("Sky asset missing state");
             self.pipeline = Some(backend.create_graphics_pipeline_from_baked(
                 state,
@@ -59,9 +60,7 @@ impl RenderPass for SkyPass {
             "HDR_Target",
             ImageDesc::new(w, h, Format::R16G16B16A16_SFLOAT),
         );
-
         self.depth_buffer = builder.resolve_image("DepthBuffer");
-
         builder.write_image(self.hdr_target, ResourceUsage::COLOR_ATTACHMENT);
         builder.write_image(self.depth_buffer, ResourceUsage::DEPTH_STENCIL);
     }
@@ -75,6 +74,7 @@ impl RenderPass for SkyPass {
         let sun_dir = *frame.consume::<glm::Vec3>("SunDirection");
         let sun_int = *frame.consume::<f32>("SunIntensity");
         let sun_col = *frame.consume::<glm::Vec3>("SunColor");
+        let ibl = *frame.consume::<crate::render_graph::IblIndices>("IblIndices");
         let push_constants = SkyPushConstants {
             inv_view_proj: common.inv_view_projection,
             camera_pos: common.camera_pos,
@@ -82,9 +82,13 @@ impl RenderPass for SkyPass {
             sun_direction: sun_dir,
             sun_intensity: sun_int,
             sun_color: sun_col,
-            _pad1: 0.0,
+            ibl_env_index: ibl.env_index,
         };
+
+        let bindless_set = *frame.consume::<u64>("BindlessSet");
+
         ctx.bind_pipeline_raw(pipeline);
+        ctx.bind_descriptor_set_raw(2, bindless_set);
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
             0,

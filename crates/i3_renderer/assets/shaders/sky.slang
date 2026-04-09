@@ -9,7 +9,7 @@ struct PushConstants
     float3 sun_direction;
     float sun_intensity;
     float3 sun_color;
-    float pad1;
+    uint ibl_env_index;  // bindless index, 0xFFFFFFFF = no IBL → procedural sky
 };
 
 [[vk::push_constant]]
@@ -60,6 +60,22 @@ float3 get_sky_color(float3 dir, float3 sun_dir, float3 sun_color)
 float4 fragmentMain(VertexOutput input) : SV_Target
 {
     float3 dir = normalize(input.view_dir);
-    float3 color = get_sky_color(dir, -pc.sun_direction, pc.sun_color * pc.sun_intensity);
+    float3 color;
+
+    if (pc.ibl_env_index != 0xFFFFFFFF)
+    {
+        // IBL sky — sample equirect from bindless array
+        color = bindlessTextures[pc.ibl_env_index].SampleLevel(globalSampler, dirToEquirect(dir), 0).rgb;
+        // Add sun disk on top
+        float cos_theta = dot(dir, -pc.sun_direction);
+        float sun_disk = smoothstep(0.998, 0.999, cos_theta) * 50.0;
+        color += sun_disk * pc.sun_color * pc.sun_intensity;
+    }
+    else
+    {
+        // Procedural sky fallback
+        color = get_sky_color(dir, -pc.sun_direction, pc.sun_color * pc.sun_intensity);
+    }
+
     return float4(color, 1.0);
 }

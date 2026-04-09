@@ -107,3 +107,30 @@ float3 decodeOctahedral(float2 e)
     }
     return normalize(n);
 }
+
+// --- IBL Helpers ---
+float2 dirToEquirect(float3 d)
+{
+    float u = atan2(d.z, d.x) / (2.0 * PI) + 0.5;
+    float v = acos(d.y) / PI;
+    return float2(u, v);
+}
+
+float3 decodeHemiOcta(float2 uv)
+{
+    float sign_y = uv.y < 0.5 ? 1.0 : -1.0;
+    float v = uv.y < 0.5 ? uv.y * 2.0 : (uv.y - 0.5) * 2.0;
+    float2 f = float2(uv.x * 2.0 - 1.0, v * 2.0 - 1.0);
+    float3 n = float3(f.x, 1.0 - abs(f.x) - abs(f.y), f.y);
+    n.y *= sign_y;
+    return normalize(n);
+}
+
+float2 encodeHemiOcta(float3 n)
+{
+    float l1 = abs(n.x) + abs(n.y) + abs(n.z);
+    float2 uv = n.xz / l1;
+    uv = uv * 0.5 + 0.5;
+    float v = n.y >= 0.0 ? uv.y * 0.5 : 0.5 + uv.y * 0.5;
+    return float2(uv.x, v);
+}

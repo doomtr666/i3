@@ -8,6 +8,7 @@ pub mod pipeline_asset;
 pub mod scene_asset;
 pub mod texture;
 pub mod vfs;
+pub mod ibl;
 
 pub use error::{IoError, Result};
 

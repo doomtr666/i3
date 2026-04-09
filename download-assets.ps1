@@ -65,6 +65,25 @@ if (-not (Test-Path $BistroDir)) {
     Write-Host "[INFO] Bistro already present." -ForegroundColor Green
 }
 
+# 3. HDRIs
+$HdriDir = Join-Path $AssetDir "hdri"
+$HdriFile = Join-Path $HdriDir "horn-koppe_spring_1k.hdr"
+$HdriUrl = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/horn-koppe_spring_1k.hdr"
+
+Write-Host "[INFO] Checking HDRI..." -ForegroundColor Cyan
+if (-not (Test-Path $HdriDir)) { New-Item -ItemType Directory -Path $HdriDir | Out-Null }
+if (-not (Test-Path $HdriFile)) {
+    Write-Host "[INFO] Downloading HDRI horn-koppe_spring_1k.hdr..." -ForegroundColor Cyan
+    try {
+        Invoke-WebRequest -Uri $HdriUrl -OutFile $HdriFile -UseBasicParsing
+        Write-Host "[SUCCESS] HDRI downloaded." -ForegroundColor Green
+    } catch {
+        Write-Host "[ERROR] Failed to download HDRI." -ForegroundColor Red
+    }
+} else {
+    Write-Host "[INFO] HDRI already present." -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "[SUCCESS] Asset download completed!" -ForegroundColor Green
 Write-Host "          Assets are located in: $KHDir" -ForegroundColor Gray

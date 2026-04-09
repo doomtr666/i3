@@ -91,43 +91,46 @@ pub enum SymbolLifetime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum Format {
-    Undefined,
-    R8G8B8A8_UNORM,
-    R8G8B8A8_SRGB,
-    B8G8R8A8_UNORM,
-    B8G8R8A8_SRGB,
-    R8G8_UNORM,
-    R16G16_SFLOAT,
-    R16G16B16A16_SFLOAT,
-    R11G11B10_UFLOAT,
-    R32_FLOAT,
-    R32G32B32A32_FLOAT,
-    D32_FLOAT,
-    R32_SINT,
-    R32G32_SINT,
-    R32G32B32_SINT,
-    R32G32B32A32_SINT,
-    R32_UINT,
-    R32G32_UINT,
-    R32G32B32_UINT,
-    R32G32B32A32_UINT,
-    R32_SFLOAT,
-    R32G32_SFLOAT,
-    R32G32B32_SFLOAT,
-    R32G32B32A32_SFLOAT,
-    // BCx Compressed formats
-    BC1_RGB_UNORM,
-    BC1_RGB_SRGB,
-    BC1_RGBA_UNORM,
-    BC1_RGBA_SRGB,
-    BC3_UNORM,
-    BC3_SRGB,
-    BC4_UNORM,
-    BC4_SNORM,
-    BC5_UNORM,
-    BC5_SNORM,
-    BC7_UNORM,
-    BC7_SRGB,
+    // Explicit discriminants — NEVER reorder or renumber existing entries.
+    // Always append new formats at the end with the next available number.
+    Undefined           = 0,
+    R8G8B8A8_UNORM      = 1,
+    R8G8B8A8_SRGB       = 2,
+    B8G8R8A8_UNORM      = 3,
+    B8G8R8A8_SRGB       = 4,
+    R8G8_UNORM          = 5,
+    R16G16B16A16_SFLOAT = 6,
+    R32_FLOAT           = 7,
+    R32G32B32A32_FLOAT  = 8,
+    D32_FLOAT           = 9,
+    R32_SINT            = 10,
+    R32G32_SINT         = 11,
+    R32G32B32_SINT      = 12,
+    R32G32B32A32_SINT   = 13,
+    R32_UINT            = 14,
+    R32G32_UINT         = 15,
+    R32G32B32_UINT      = 16,
+    R32G32B32A32_UINT   = 17,
+    R32_SFLOAT          = 18,
+    R32G32_SFLOAT       = 19,
+    R32G32B32_SFLOAT    = 20,
+    R32G32B32A32_SFLOAT = 21,
+    B10G11R11_UFLOAT_PACK32 = 22,
+    BC1_RGB_UNORM       = 23,
+    BC1_RGB_SRGB        = 24,
+    BC1_RGBA_UNORM      = 25,
+    BC1_RGBA_SRGB       = 26,
+    BC3_UNORM           = 27,
+    BC3_SRGB            = 28,
+    BC4_UNORM           = 29,
+    BC4_SNORM           = 30,
+    BC5_UNORM           = 31,
+    BC5_SNORM           = 32,
+    BC7_UNORM           = 33,
+    BC7_SRGB            = 34,
+    R16G16_SFLOAT       = 35,
+    R11G11B10_UFLOAT    = 36,
+    BC6H_UF16           = 37,
 }
 
 impl Format {
@@ -144,6 +147,7 @@ impl Format {
                 | Format::BC1_RGBA_SRGB
                 | Format::BC3_SRGB
                 | Format::BC7_SRGB
+                | Format::BC6H_UF16
         )
     }
 

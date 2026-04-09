@@ -26,6 +26,7 @@ pub use crate::graph::{
         ShaderReflection, ShaderStageFlags, StencilOp, StencilOpState, VertexFormat,
         VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState,
     },
+    symbol_table::FrameBlackboard,
     types::{
         AccelerationStructureHandle, AddressMode, BufferDesc, BufferHandle, BufferUsageFlags,
         ComponentMapping, ComponentSwizzle, Filter, Format, GraphError, ImageDesc, ImageHandle,

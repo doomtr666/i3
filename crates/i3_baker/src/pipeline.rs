@@ -236,6 +236,18 @@ impl BundleBaker {
         Ok(self)
     }
 
+    /// Register an HDR environment map to be baked as an IBL asset.
+    pub fn add_hdr_ibl(
+        self,
+        source_path: impl AsRef<Path>,
+        options: crate::importers::ibl_bake::IblBakeOptions,
+    ) -> Self {
+        self.add_asset(
+            source_path,
+            crate::importers::HdrIblImporter { options },
+        )
+    }
+
     /// Execute the baking process.
     pub fn execute(self) -> Result<()> {
         let blob_path = self.output_dir.join(format!("{}.i3b", self.bundle_name));
