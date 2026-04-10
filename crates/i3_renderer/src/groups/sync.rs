@@ -13,7 +13,7 @@ impl SyncGroup {
         Self {
             mesh_registry_sync: MeshRegistrySyncPass::new(),
             instance_sync:      InstanceSyncPass::new(),
-            material_sync:      MaterialSyncPass::new(1024 * 64),
+            material_sync:      MaterialSyncPass::new(),
         }
     }
 }

@@ -10,7 +10,7 @@ pub struct BindlessManager {
     texture_registry: HashMap<u64, u32>,
     next_index: u32,
     pub max_textures: u32,
-    pub bindless_set: u64,
+    pub bindless_set: DescriptorSetHandle,
     pub bindless_binding: u32,
     pub default_sampler: SamplerHandle,
 }
@@ -21,7 +21,7 @@ impl BindlessManager {
             texture_registry: HashMap::new(),
             next_index: 0,
             max_textures,
-            bindless_set: 0, // Will be set by RenderGraph
+            bindless_set: DescriptorSetHandle(0), // Will be set by RenderGraph
             bindless_binding: 0,
             default_sampler,
         }
@@ -63,7 +63,7 @@ impl BindlessManager {
             image,
             self.default_sampler,
             index,
-            self.bindless_set,
+            self.bindless_set.0,
             self.bindless_binding,
         );
 

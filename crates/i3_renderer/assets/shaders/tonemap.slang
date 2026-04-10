@@ -13,7 +13,6 @@ struct PushConstants
 PushConstants pc;
 
 [[vk::binding(0, 0)]] Texture2D hdrTarget;
-[[vk::binding(0, 0)]] SamplerState pointSampler;
 
 [[vk::binding(1, 0)]] StructuredBuffer<ExposureData> exposure_buffer;
 
@@ -45,7 +44,7 @@ float3 ACESFilm(float3 x) {
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input) : SV_Target
 {
-    float3 color = hdrTarget.Sample(pointSampler, input.uv).rgb;
+    float3 color = hdrTarget.Sample(bindlessSamplers[SAMPLER_NEAREST], input.uv).rgb;
     
     float prev_ex = exposure_buffer[0].prev_exposure;
     float new_ex  = exposure_buffer[0].new_exposure;

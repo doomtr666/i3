@@ -1,4 +1,5 @@
 // assets/system/shaders/fxaa.slang
+#include "common.slangh"
 // FXAA 3.11 — Nvidia Timothy Lottes, adapted for Slang / Vulkan
 // Input: LDR tonemapped image (R8G8B8A8_UNORM or swapchain format)
 
@@ -14,7 +15,6 @@ struct PushConstants
 PushConstants pc;
 
 [[vk::binding(0, 0)]] Texture2D   ldrInput;
-[[vk::binding(0, 0)]] SamplerState linearSampler;
 
 struct VertexOutput
 {
@@ -53,15 +53,15 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float2 inv = pc.inv_screen_size;
 
     // Luma of center + 4 neighbours
-    float3 cC  = ldrInput.SampleLevel(linearSampler, uv, 0).rgb;
+    float3 cC  = ldrInput.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], uv, 0).rgb;
 
     if (pc.enabled == 0)
         return float4(cC, 1.0);
 
-    float3 cN  = sampleOffset(ldrInput, linearSampler, uv, float2( 0,-1));
-    float3 cS  = sampleOffset(ldrInput, linearSampler, uv, float2( 0, 1));
-    float3 cE  = sampleOffset(ldrInput, linearSampler, uv, float2( 1, 0));
-    float3 cW  = sampleOffset(ldrInput, linearSampler, uv, float2(-1, 0));
+    float3 cN  = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2( 0,-1));
+    float3 cS  = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2( 0, 1));
+    float3 cE  = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2( 1, 0));
+    float3 cW  = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2(-1, 0));
 
     float lumaC  = luma(cC);
     float lumaN  = luma(cN);
@@ -78,10 +78,10 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         return float4(cC, 1.0);
 
     // Diagonal neighbours for direction + subpixel blend
-    float3 cNW = sampleOffset(ldrInput, linearSampler, uv, float2(-1,-1));
-    float3 cNE = sampleOffset(ldrInput, linearSampler, uv, float2( 1,-1));
-    float3 cSW = sampleOffset(ldrInput, linearSampler, uv, float2(-1, 1));
-    float3 cSE = sampleOffset(ldrInput, linearSampler, uv, float2( 1, 1));
+    float3 cNW = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2(-1,-1));
+    float3 cNE = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2( 1,-1));
+    float3 cSW = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2(-1, 1));
+    float3 cSE = sampleOffset(ldrInput, bindlessSamplers[SAMPLER_LINEAR], uv, float2( 1, 1));
 
     float lumaNW = luma(cNW); float lumaNE = luma(cNE);
     float lumaSW = luma(cSW); float lumaSE = luma(cSE);
@@ -123,16 +123,16 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 
     float2 uvP = uvEdge + edgeStep;
     float2 uvN = uvEdge - edgeStep;
-    float deltaP = luma(ldrInput.SampleLevel(linearSampler, uvP, 0).rgb) - lumaEdge;
-    float deltaN = luma(ldrInput.SampleLevel(linearSampler, uvN, 0).rgb) - lumaEdge;
+    float deltaP = luma(ldrInput.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], uvP, 0).rgb) - lumaEdge;
+    float deltaN = luma(ldrInput.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], uvN, 0).rgb) - lumaEdge;
     bool doneP = abs(deltaP) >= gradThreshold;
     bool doneN = abs(deltaN) >= gradThreshold;
 
     [unroll]
     for (int i = 0; i < 7; ++i)
     {
-        if (!doneP) { uvP += edgeStep; deltaP = luma(ldrInput.SampleLevel(linearSampler, uvP, 0).rgb) - lumaEdge; }
-        if (!doneN) { uvN -= edgeStep; deltaN = luma(ldrInput.SampleLevel(linearSampler, uvN, 0).rgb) - lumaEdge; }
+        if (!doneP) { uvP += edgeStep; deltaP = luma(ldrInput.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], uvP, 0).rgb) - lumaEdge; }
+        if (!doneN) { uvN -= edgeStep; deltaN = luma(ldrInput.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], uvN, 0).rgb) - lumaEdge; }
         doneP = doneP || abs(deltaP) >= gradThreshold;
         doneN = doneN || abs(deltaN) >= gradThreshold;
         if (doneP && doneN) break;
@@ -153,6 +153,6 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     if (isHorizontal) uvFinal.y += blendFinal * stepDir;
     else              uvFinal.x += blendFinal * stepDir;
 
-    float3 result = ldrInput.SampleLevel(linearSampler, uvFinal, 0).rgb;
+    float3 result = ldrInput.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], uvFinal, 0).rgb;
     return float4(result, 1.0);
 }

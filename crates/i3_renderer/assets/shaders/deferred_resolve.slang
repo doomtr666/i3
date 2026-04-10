@@ -27,30 +27,11 @@ struct PushConstants
 [[vk::push_constant]]
 PushConstants pc;
 
-[[vk::binding(0, 0)]]
-Texture2D gbufferAlbedo;
-[[vk::binding(0, 0)]]
-SamplerState albedoSampler;
-
-[[vk::binding(1, 0)]]
-Texture2D gbufferNormal;
-[[vk::binding(1, 0)]]
-SamplerState normalSampler;
-
-[[vk::binding(2, 0)]]
-Texture2D gbufferRoughMetal;
-[[vk::binding(2, 0)]]
-SamplerState roughMetalSampler;
-
-[[vk::binding(3, 0)]]
-Texture2D gbufferEmissive;
-[[vk::binding(3, 0)]]
-SamplerState emissiveSampler;
-
-[[vk::binding(4, 0)]]
-Texture2D depthBuffer;
-[[vk::binding(4, 0)]]
-SamplerState depthSampler;
+[[vk::binding(0, 0)]] Texture2D gbufferAlbedo;
+[[vk::binding(1, 0)]] Texture2D gbufferNormal;
+[[vk::binding(2, 0)]] Texture2D gbufferRoughMetal;
+[[vk::binding(3, 0)]] Texture2D gbufferEmissive;
+[[vk::binding(4, 0)]] Texture2D depthBuffer;
 
 [[vk::binding(5, 0)]]
 StructuredBuffer<LightData> lights;
@@ -123,21 +104,21 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 {
     float2 uv = input.uv;
 
-    float depth = depthBuffer.Sample(depthSampler, uv).r;
+    float depth = depthBuffer.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r;
     if (depth <= 0.0)
     {
         discard;
     }
 
     // Read GBuffer
-    float3 albedo = gbufferAlbedo.Sample(albedoSampler, uv).rgb;
-    float2 nEnc = gbufferNormal.Sample(normalSampler, uv).rg;
+    float3 albedo = gbufferAlbedo.Sample(bindlessSamplers[SAMPLER_LINEAR], uv).rgb;
+    float2 nEnc = gbufferNormal.Sample(bindlessSamplers[SAMPLER_LINEAR], uv).rg;
     float3 normal = decodeOctahedral(nEnc);
 
-    float2 roughMetal = gbufferRoughMetal.Sample(roughMetalSampler, uv).rg;
+    float2 roughMetal = gbufferRoughMetal.Sample(bindlessSamplers[SAMPLER_LINEAR], uv).rg;
     float roughness = roughMetal.r;
     float metallic = roughMetal.g;
-    float3 emissive = gbufferEmissive.Sample(emissiveSampler, uv).rgb;
+    float3 emissive = gbufferEmissive.Sample(bindlessSamplers[SAMPLER_LINEAR], uv).rgb;
 
     // World & View space reconstruct
     float x = uv.x * 2.0 - 1.0;
@@ -180,7 +161,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float3 irradiance = float3(0.0);
     if (pc.ibl_irr_index != 0xFFFFFFFF)
     {
-        irradiance = bindlessTextures[pc.ibl_irr_index].Sample(globalSampler, encodeHemiOcta(normal)).rgb;
+        irradiance = bindlessTextures[pc.ibl_irr_index].Sample(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(normal)).rgb;
     }
     float3 diffuse_ambient = kD * albedo * irradiance;
 
@@ -189,8 +170,8 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     {
         float3 R = reflect(-V, normal);
         float mip_level = roughness * 5.0; // MAX_PREFILTER_MIP = 5
-        float3 prefiltered = bindlessTextures[pc.ibl_pref_index].SampleLevel(globalSampler, encodeHemiOcta(R), mip_level).rgb;
-        float2 brdf = bindlessTextures[pc.ibl_lut_index].Sample(globalSampler, float2(NdotV, roughness)).rg;
+        float3 prefiltered = bindlessTextures[pc.ibl_pref_index].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(R), mip_level).rgb;
+        float2 brdf = bindlessTextures[pc.ibl_lut_index].Sample(bindlessSamplers[SAMPLER_LINEAR], float2(NdotV, roughness)).rg;
         spec_ambient = prefiltered * (F0 * brdf.x + brdf.y);
     }
 

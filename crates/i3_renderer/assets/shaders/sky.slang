@@ -65,7 +65,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     if (pc.ibl_env_index != 0xFFFFFFFF)
     {
         // IBL sky — sample equirect from bindless array
-        color = bindlessTextures[pc.ibl_env_index].SampleLevel(globalSampler, dirToEquirect(dir), 0).rgb;
+        color = bindlessTextures[pc.ibl_env_index].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(dir), 0).rgb;
         // Add sun disk on top
         // float cos_theta = dot(dir, -pc.sun_direction);
         // float sun_disk = smoothstep(0.998, 0.999, cos_theta) * 50.0;

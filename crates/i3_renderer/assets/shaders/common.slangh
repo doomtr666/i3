@@ -81,8 +81,13 @@ struct ExposureData
 [[vk::binding(0, BINDLESS_SET)]]
 Texture2D bindlessTextures[4096];
 
+// --- Bindless Sampler Indices (matching DefaultRenderGraph) ---
+#define SAMPLER_LINEAR 0
+#define SAMPLER_NEAREST 1
+#define SAMPLER_ANISO 2
+
 [[vk::binding(1, BINDLESS_SET)]]
-SamplerState globalSampler;
+SamplerState bindlessSamplers[64];
 
 // --- Helper Funcs ---
 float2 encodeOctahedral(float3 n)

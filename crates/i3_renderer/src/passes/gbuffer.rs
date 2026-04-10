@@ -39,7 +39,7 @@ impl Default for GBufferPushConstants {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct GBufferFillPass {
-    pub bindless_set: u64,
+    pub bindless_set: DescriptorSetHandle,
 
     // Resolved handles (updated in declare)
     depth_buffer:           ImageHandle,
@@ -73,7 +73,7 @@ impl GBufferFillPass {
             draw_count_buffer:      BufferHandle::INVALID,
             material_buffer:        BufferHandle::INVALID,
 
-            bindless_set: 0,
+            bindless_set: DescriptorSetHandle(0),
             pipeline:     None,
         }
     }
@@ -119,7 +119,7 @@ impl RenderPass for GBufferFillPass {
         builder.read_buffer(self.material_buffer, ResourceUsage::SHADER_READ);
 
         // Resolve bindless descriptor set
-        self.bindless_set = *builder.consume::<u64>("BindlessSet");
+        self.bindless_set = *builder.consume::<DescriptorSetHandle>("BindlessSet");
 
         // Declare write targets
         builder.write_image(self.gbuffer_albedo,     ResourceUsage::COLOR_ATTACHMENT);
@@ -147,7 +147,7 @@ impl RenderPass for GBufferFillPass {
             ],
         );
         ctx.bind_descriptor_set(0, scene_set);
-        ctx.bind_descriptor_set_raw(2, self.bindless_set);
+        ctx.bind_descriptor_set(2, self.bindless_set);
 
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,

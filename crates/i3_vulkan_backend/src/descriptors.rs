@@ -105,10 +105,11 @@ pub fn update_bindless_texture_raw(
     }
 }
 
-/// Update a bindless sampler in the global bindless descriptor set.
+/// Update a bindless sampler in the global bindless descriptor set at a specific index.
 pub fn update_bindless_sampler(
     backend: &mut VulkanBackend,
     sampler: SamplerHandle,
+    index: u32,
     set: u64,
     binding: u32,
 ) {
@@ -129,7 +130,7 @@ pub fn update_bindless_sampler(
         let write = vk::WriteDescriptorSet::default()
             .dst_set(vk_set)
             .dst_binding(binding)
-            .dst_array_element(0)
+            .dst_array_element(index)
             .descriptor_type(vk::DescriptorType::SAMPLER)
             .image_info(std::slice::from_ref(&image_info));
 

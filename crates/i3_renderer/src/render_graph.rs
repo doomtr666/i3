@@ -8,6 +8,14 @@ use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 
+/// Indices of global samplers in the bindless sampler array.
+#[derive(Debug, Clone, Copy)]
+pub struct GlobalSamplerIndices {
+    pub linear: u32,
+    pub nearest: u32,
+    pub aniso: u32,
+}
+
 /// Shared data published to the FrameGraph blackboard.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +117,7 @@ pub struct DefaultRenderGraph {
     pub debug_viz_pass: DebugVizPass,
 
     pub linear_sampler: SamplerHandle,
+    pub nearest_sampler: SamplerHandle,
     pub material_sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
     pub fxaa_enabled: bool,
@@ -141,6 +150,7 @@ pub struct DefaultRenderGraph {
     pub ibl_indices: IblIndices,
     /// 1×1 white texture always at bindless index 0 — re-registered after each clear.
     white_image: i3_gfx::graph::backend::BackendImage,
+    pub sampler_indices: GlobalSamplerIndices,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -152,7 +162,7 @@ pub struct RenderConfig {
 impl DefaultRenderGraph {
     /// Creates the render graph resources (passes and groups).
     pub fn new(_backend: &mut dyn RenderBackend, _config: &RenderConfig) -> Self {
-        // Linear sampler for post-processing (ClampToEdge, no anisotropy)
+        // 1. Create Physical Samplers
         let linear_sampler = _backend.create_sampler(&SamplerDesc {
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
@@ -161,7 +171,6 @@ impl DefaultRenderGraph {
             ..Default::default()
         });
 
-        // Material sampler for bindless textures (Repeat, Anisotropy 16)
         let material_sampler = _backend.create_sampler(&SamplerDesc {
             address_mode_u: AddressMode::Repeat,
             address_mode_v: AddressMode::Repeat,
@@ -170,13 +179,36 @@ impl DefaultRenderGraph {
             ..Default::default()
         });
 
+        let nearest_sampler = _backend.create_sampler(&SamplerDesc {
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+            mag_filter: Filter::Nearest,
+            min_filter: Filter::Nearest,
+            ..Default::default()
+        });
+
+        // 2. Register Samplers in Bindless Set
+        // For now we use fixed slots as requested by "MAX_CONSTANTS" but stay flexible.
+        let bindless_set = _backend.get_bindless_set_handle();
+        _backend.update_bindless_sampler(linear_sampler, 0, bindless_set, 1);
+        _backend.update_bindless_sampler(nearest_sampler, 1, bindless_set, 1);
+        _backend.update_bindless_sampler(material_sampler, 2, bindless_set, 1);
+
+        let sampler_indices = GlobalSamplerIndices {
+            linear: 0,
+            nearest: 1,
+            aniso: 2,
+        };
+
+        // 3. Rule #1: Empty Constructors
         let gbuffer_pass = GBufferPass::new();
         let draw_call_gen_pass = DrawCallGenPass::new();
-        let sky_pass = SkyPass::new(linear_sampler);
+        let sky_pass = SkyPass::new();
         let clustering_group = ClusteringGroup::new();
-        let deferred_resolve_pass = DeferredResolvePass::new(linear_sampler);
-        let post_process_group = PostProcessGroup::new(linear_sampler);
-        let debug_viz_pass = DebugVizPass::new(linear_sampler, DebugChannel::Lit);
+        let deferred_resolve_pass = DeferredResolvePass::new();
+        let post_process_group = PostProcessGroup::new();
+        let debug_viz_pass = DebugVizPass::new();
 
         let graph = FrameGraph::new();
 
@@ -195,10 +227,10 @@ impl DefaultRenderGraph {
             1000, // Capacity for 1000 bindless global textures
             material_sampler,
         );
-        bindless_manager.bindless_set = _backend.get_bindless_set_handle();
+        bindless_manager.bindless_set = DescriptorSetHandle(_backend.get_bindless_set_handle());
 
         // Update the global sampler in the bindless set
-        _backend.update_bindless_sampler(material_sampler, bindless_manager.bindless_set, 1);
+        _backend.update_bindless_sampler(material_sampler, sampler_indices.aniso, bindless_manager.bindless_set.0, 1);
 
         // Register a default 1x1 white texture at index 0
         let white_image = _backend.create_image(&ImageDesc {
@@ -241,7 +273,7 @@ impl DefaultRenderGraph {
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
 
-        Self {
+        let mut this = Self {
             graph,
             gbuffer_pass,
             draw_call_gen_pass,
@@ -253,11 +285,13 @@ impl DefaultRenderGraph {
             debug_viz_pass,
             linear_sampler,
             material_sampler,
+            nearest_sampler,
             debug_channel: DebugChannel::Lit,
             fxaa_enabled: true,
             light_buffer,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
+            sampler_indices,
             ui: None,
             accel_struct_system,
             blas_update_pass,
@@ -280,7 +314,12 @@ impl DefaultRenderGraph {
             last_compiled_debug_channel: DebugChannel::Lit,
             graph_dirty: true,
             compiled_had_staging: false,
-        }
+        };
+
+        // 4. Initialization: Run pass-specific initialization logic
+        this.graph.publish("BindlessSet", DescriptorSetHandle(_backend.get_bindless_set_handle()));
+
+        this
     }
 
     /// Resets scene-specific state in the render graph (e.g., for scene switching).
@@ -752,7 +791,6 @@ impl DefaultRenderGraph {
         frame_data.publish("BindlessSet", self.bindless_manager.bindless_set);
 
         frame_data.publish("IblIndices", self.ibl_indices);
-        frame_data.publish("LinearSampler", self.linear_sampler);
 
         // 4. Detect structural changes that require recompilation.
         let new_size = (screen_width, screen_height);
@@ -829,20 +867,18 @@ impl DefaultRenderGraph {
                 "Recompiling render graph"
             );
             let mut graph = FrameGraph::new();
-            if let Some(loader) = self
-                .graph
-                .try_consume::<std::sync::Arc<i3_io::asset::AssetLoader>>("AssetLoader")
-                .cloned()
-            {
+            
+            // Publish global persistent resources to the graph blackboard
+            graph.publish("BindlessSet", self.bindless_manager.bindless_set);
+            
+            if let Some(loader) = self.graph.try_consume::<std::sync::Arc<i3_io::asset::AssetLoader>>("AssetLoader").cloned() {
                 graph.publish("AssetLoader", loader);
             }
-            if let Some(ui) = self
-                .graph
-                .try_consume::<std::sync::Arc<i3_egui::UiSystem>>("UiSystem")
-                .cloned()
-            {
+            
+            if let Some(ui) = self.graph.try_consume::<std::sync::Arc<i3_egui::UiSystem>>("UiSystem").cloned() {
                 graph.publish("UiSystem", ui);
             }
+
             self.declare(
                 &mut graph,
                 window,

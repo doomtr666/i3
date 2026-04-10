@@ -20,3 +20,6 @@ pub const MAX_LIGHTS_PER_CLUSTER: u64 = 512;
 /// Size in bytes of a `vkDrawIndexedIndirectCommand` (index_count, instance_count,
 /// first_index, vertex_offset, first_instance — 5 × u32).
 pub const DRAW_INDIRECT_CMD_SIZE: u64 = 20;
+
+/// Maximum number of materials in the material buffer.
+pub const MAX_MATERIALS: u64 = 65536;

@@ -24,7 +24,7 @@ pub struct SkyPass {
 }
 
 impl SkyPass {
-    pub fn new(_sampler: SamplerHandle) -> Self {
+    pub fn new() -> Self {
         Self {
             hdr_target: ImageHandle::INVALID,
             depth_buffer: ImageHandle::INVALID,
@@ -85,10 +85,10 @@ impl RenderPass for SkyPass {
             ibl_env_index: ibl.env_index,
         };
 
-        let bindless_set = *frame.consume::<u64>("BindlessSet");
+        let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
 
         ctx.bind_pipeline_raw(pipeline);
-        ctx.bind_descriptor_set_raw(2, bindless_set);
+        ctx.bind_descriptor_set(2, bindless_set);
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
             0,

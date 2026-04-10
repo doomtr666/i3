@@ -266,8 +266,14 @@ impl RenderBackend for NullBackend {
         info!("Updated Bindless Texture (raw) index {}", index);
     }
 
-    fn update_bindless_sampler(&mut self, _sampler: SamplerHandle, _set: u64, _binding: u32) {
-        info!("Updated Bindless Sampler");
+    fn update_bindless_sampler(
+        &mut self,
+        _sampler: SamplerHandle,
+        index: u32,
+        _set: u64,
+        _binding: u32,
+    ) {
+        info!("Updated Bindless Sampler index {}", index);
     }
 
     // --- Handle Registration ---

@@ -121,7 +121,7 @@ GBufferOutput fragmentMain(VertexOutput input)
     float4 albedo = float4(mat.baseColorFactor);
     if (mat.textureIndices.x >= 0)
     {
-        albedo *= bindlessTextures[mat.textureIndices.x].Sample(globalSampler, input.uv);
+        albedo *= bindlessTextures[mat.textureIndices.x].Sample(bindlessSamplers[SAMPLER_ANISO], input.uv);
     }
 
     if (albedo.a < mat.emissiveFactorAndAlphaCutoff.a)
@@ -133,7 +133,7 @@ GBufferOutput fragmentMain(VertexOutput input)
     float metallic = mat.pbrFactors.x;
     if (mat.textureIndices.z >= 0)
     {
-        float4 rmao = bindlessTextures[mat.textureIndices.z].Sample(globalSampler, input.uv);
+        float4 rmao = bindlessTextures[mat.textureIndices.z].Sample(bindlessSamplers[SAMPLER_ANISO], input.uv);
         roughness *= rmao.g;
         metallic *= rmao.b;
     }
@@ -141,13 +141,13 @@ GBufferOutput fragmentMain(VertexOutput input)
     float3 emissive = mat.emissiveFactorAndAlphaCutoff.rgb;
     if (mat.textureIndices.w >= 0)
     {
-        emissive *= bindlessTextures[mat.textureIndices.w].Sample(globalSampler, input.uv).rgb;
+        emissive *= bindlessTextures[mat.textureIndices.w].Sample(bindlessSamplers[SAMPLER_ANISO], input.uv).rgb;
     }
 
     float3 normal = normalize(input.worldNormal);
     if (mat.textureIndices.y >= 0)
     {
-        float2 normalSample = bindlessTextures[mat.textureIndices.y].Sample(globalSampler, input.uv).rg;
+        float2 normalSample = bindlessTextures[mat.textureIndices.y].Sample(bindlessSamplers[SAMPLER_ANISO], input.uv).rg;
         float2 tangentNormal = normalSample * 2.0 - 1.0;
         float z = sqrt(max(0.0, 1.0 - dot(tangentNormal, tangentNormal)));
         float3 normalTS = float3(tangentNormal, z);

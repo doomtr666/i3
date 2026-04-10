@@ -31,7 +31,6 @@ pub struct DebugVizPushConstants {
 /// and writes to the backbuffer.
 /// Debug visualization pass struct implementing the RenderPass trait.
 pub struct DebugVizPass {
-    pub sampler: SamplerHandle,
     pub channel: DebugChannel,
     pub backbuffer_name: String,
 
@@ -48,7 +47,7 @@ pub struct DebugVizPass {
 }
 
 impl DebugVizPass {
-    pub fn new(sampler: SamplerHandle, channel: DebugChannel) -> Self {
+    pub fn new() -> Self {
         Self {
             backbuffer: ImageHandle::INVALID,
             gbuffer_albedo: ImageHandle::INVALID,
@@ -56,8 +55,7 @@ impl DebugVizPass {
             gbuffer_roughmetal: ImageHandle::INVALID,
             gbuffer_emissive: ImageHandle::INVALID,
             gbuffer_depth: ImageHandle::INVALID,
-            sampler,
-            channel,
+            channel: DebugChannel::Lit,
             backbuffer_name: "Backbuffer".to_string(),
             pipeline: None,
         }
@@ -106,30 +104,25 @@ impl RenderPass for DebugVizPass {
 
         // Bind GBuffer textures via push descriptors
         builder.descriptor_set(0, |d| {
-            d.combined_image_sampler(
+            d.sampled_image(
                 self.gbuffer_albedo,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
-            )
-            .combined_image_sampler(
+            );
+            d.sampled_image(
                 self.gbuffer_normal,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
-            )
-            .combined_image_sampler(
+            );
+            d.sampled_image(
                 self.gbuffer_roughmetal,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
-            )
-            .combined_image_sampler(
+            );
+            d.sampled_image(
                 self.gbuffer_emissive,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
-            )
-            .combined_image_sampler(
+            );
+            d.sampled_image(
                 self.gbuffer_depth,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
             );
         });
     }
@@ -140,6 +133,8 @@ impl RenderPass for DebugVizPass {
             return;
         };
         ctx.bind_pipeline_raw(pipeline);
+        let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
+        ctx.bind_descriptor_set(2, bindless_set);
         let channel = *frame.consume::<u32>("DebugChannel");
         let push = DebugVizPushConstants {
             channel,

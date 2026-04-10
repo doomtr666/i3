@@ -410,14 +410,15 @@ impl VulkanBackend {
                 vk::DescriptorSetLayoutBinding::default()
                     .binding(1)
                     .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
+                    .descriptor_count(64) // Increased from 1
                     .stage_flags(vk::ShaderStageFlags::ALL),
             ];
 
             let binding_flags = [
                 vk::DescriptorBindingFlags::PARTIALLY_BOUND
                     | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-                vk::DescriptorBindingFlags::empty(),
+                vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                    | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
             ];
 
             let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
@@ -932,8 +933,8 @@ impl RenderBackend for VulkanBackend {
         );
     }
 
-    fn update_bindless_sampler(&mut self, sampler: SamplerHandle, set: u64, binding: u32) {
-        crate::descriptors::update_bindless_sampler(self, sampler, set, binding);
+    fn update_bindless_sampler(&mut self, sampler: SamplerHandle, index: u32, set: u64, binding: u32) {
+        crate::descriptors::update_bindless_sampler(self, sampler, index, set, binding);
     }
 
     #[cfg(debug_assertions)]

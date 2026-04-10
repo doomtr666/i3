@@ -16,17 +16,15 @@ pub struct FxaaPushConstants {
 pub struct FxaaPass {
     ldr_target: ImageHandle,
     backbuffer: ImageHandle,
-    sampler: SamplerHandle,
     pub enabled: bool,
     pipeline: Option<BackendPipeline>,
 }
 
 impl FxaaPass {
-    pub fn new(sampler: SamplerHandle) -> Self {
+    pub fn new() -> Self {
         Self {
             ldr_target: ImageHandle::INVALID,
             backbuffer: ImageHandle::INVALID,
-            sampler,
             enabled: true,
             pipeline: None,
         }
@@ -63,10 +61,9 @@ impl RenderPass for FxaaPass {
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
 
         builder.descriptor_set(0, |d| {
-            d.combined_image_sampler(
+            d.sampled_image(
                 self.ldr_target,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
             );
         });
 
@@ -90,6 +87,9 @@ impl RenderPass for FxaaPass {
         };
 
         ctx.bind_pipeline_raw(pipeline);
+        let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
+        ctx.bind_descriptor_set(2, bindless_set);
+
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
             0,

@@ -488,8 +488,8 @@ pub trait RenderBackend {
         binding: u32,
     );
 
-    /// Updates a specific binding in a bindless descriptor set with a sampler.
-    fn update_bindless_sampler(&mut self, sampler: SamplerHandle, set: u64, binding: u32);
+    /// Updates a specific binding in a bindless descriptor set with a sampler at a given index.
+    fn update_bindless_sampler(&mut self, sampler: SamplerHandle, index: u32, set: u64, binding: u32);
 
     // --- Debug Utilities ---
     /// Nests a name for an image (no-op in release).
@@ -800,8 +800,12 @@ pub struct DescriptorImageInfo {
 }
 
 // Temporary Sampler Handle until we have proper sampler resources
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SamplerHandle(pub u64);
+
+impl SamplerHandle {
+    pub const INVALID: Self = Self(0);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DescriptorImageLayout {

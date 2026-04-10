@@ -82,12 +82,12 @@ pub struct PostProcessGroup {
 }
 
 impl PostProcessGroup {
-    pub fn new(sampler: SamplerHandle) -> Self {
+    pub fn new() -> Self {
         Self {
             histogram_build_pass: HistogramBuildPass::new(),
             average_luminance_pass: AverageLuminancePass::new(),
-            tonemap_pass: TonemapPass::new(sampler),
-            fxaa_pass: FxaaPass::new(sampler),
+            tonemap_pass: TonemapPass::new(),
+            fxaa_pass: FxaaPass::new(),
         }
     }
 }

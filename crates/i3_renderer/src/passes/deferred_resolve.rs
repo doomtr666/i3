@@ -22,7 +22,7 @@ pub struct DeferredResolvePushConstants {
 }
 
 pub struct DeferredResolvePass {
-    pub sampler: SamplerHandle,
+    pub bindless_set: DescriptorSetHandle,
     tlas_handle: AccelerationStructureHandle,
 
     // Resolved handles (updated in declare)
@@ -42,9 +42,9 @@ pub struct DeferredResolvePass {
 }
 
 impl DeferredResolvePass {
-    pub fn new(sampler: SamplerHandle) -> Self {
+    pub fn new() -> Self {
         Self {
-            sampler,
+            bindless_set: DescriptorSetHandle(0),
             hdr_target: ImageHandle::INVALID,
             gbuffer_albedo: ImageHandle::INVALID,
             gbuffer_normal: ImageHandle::INVALID,
@@ -67,6 +67,7 @@ impl RenderPass for DeferredResolvePass {
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        self.bindless_set = *globals.consume::<DescriptorSetHandle>("BindlessSet");
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
         if let Ok(asset) = loader
             .load::<i3_io::pipeline_asset::PipelineAsset>("deferred_resolve")
@@ -122,30 +123,25 @@ impl RenderPass for DeferredResolvePass {
         builder.write_image(self.hdr_target, ResourceUsage::COLOR_ATTACHMENT);
 
         builder.descriptor_set(0, |d| {
-            d.combined_image_sampler(
+            d.sampled_image(
                 self.gbuffer_albedo,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
             );
-            d.combined_image_sampler(
+            d.sampled_image(
                 self.gbuffer_normal,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
             );
-            d.combined_image_sampler(
+            d.sampled_image(
                 self.gbuffer_roughmetal,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
             );
-            d.combined_image_sampler(
+            d.sampled_image(
                 self.gbuffer_emissive,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
             );
-            d.combined_image_sampler(
+            d.sampled_image(
                 self.depth_buffer,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
             );
             d.storage_buffer(self.lights);
             d.storage_buffer(self.cluster_grid);
@@ -166,7 +162,7 @@ impl RenderPass for DeferredResolvePass {
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let debug_mode = *frame.consume::<u32>("DebugChannel");
         let ibl = frame.consume::<crate::render_graph::IblIndices>("IblIndices");
-        let bindless_set = *frame.consume::<u64>("BindlessSet");
+        let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
 
         let grid_x = (common.screen_width + 63) / 64;
         let grid_y = (common.screen_height + 63) / 64;
@@ -187,7 +183,7 @@ impl RenderPass for DeferredResolvePass {
             _pad: 0,
         };
         ctx.bind_pipeline_raw(pipeline);
-        ctx.bind_descriptor_set_raw(2, bindless_set);
+        ctx.bind_descriptor_set(2, bindless_set);
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
             0,

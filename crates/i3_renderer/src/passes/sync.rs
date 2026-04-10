@@ -1,4 +1,4 @@
-use crate::constants::{MAX_MESHES, MAX_INSTANCES};
+use crate::constants::{MAX_MESHES, MAX_INSTANCES, MAX_MATERIALS};
 use crate::scene::{MaterialData, GpuMeshDescriptor, GpuInstanceData};
 use i3_gfx::prelude::*;
 
@@ -226,11 +226,11 @@ pub struct MaterialSyncPass {
 }
 
 impl MaterialSyncPass {
-    pub fn new(max_materials: usize) -> Self {
+    pub fn new() -> Self {
         Self {
             material_buffer: BufferHandle::INVALID,
             physical_buffer: BackendBuffer::INVALID,
-            max_materials,
+            max_materials: MAX_MATERIALS as usize,
             staging_buffer:  None,
             materials:       Vec::new(),
             materials_cache: Vec::new(),
@@ -246,7 +246,7 @@ impl RenderPass for MaterialSyncPass {
 
     fn init(&mut self, backend: &mut dyn RenderBackend, _globals: &mut PassBuilder) {
         self.physical_buffer = backend.create_buffer(&BufferDesc {
-            size: 1024 * 1024, // 1MB for ~16k materials
+            size: MAX_MATERIALS * std::mem::size_of::<MaterialData>() as u64,
             usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::CpuToGpu,
         });

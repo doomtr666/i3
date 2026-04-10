@@ -11,7 +11,6 @@ pub struct ToneMapPushConstants {
 }
 
 pub struct TonemapPass {
-    pub sampler: SamplerHandle,
     pub backbuffer_name: String,
     pub hdr_image_name: String,
 
@@ -25,12 +24,11 @@ pub struct TonemapPass {
 }
 
 impl TonemapPass {
-    pub fn new(sampler: SamplerHandle) -> Self {
+    pub fn new() -> Self {
         Self {
             backbuffer: ImageHandle::INVALID,
             hdr_target: ImageHandle::INVALID,
             exposure_buffer: BufferHandle::INVALID,
-            sampler,
             backbuffer_name: "LDR_Target".to_string(),
             hdr_image_name: "HDR_Target".to_string(),
             pipeline: None,
@@ -44,6 +42,7 @@ impl RenderPass for TonemapPass {
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
         if let Ok(asset) = loader
             .load::<i3_io::pipeline_asset::PipelineAsset>("tonemap")
@@ -83,12 +82,8 @@ impl RenderPass for TonemapPass {
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
 
         builder.descriptor_set(0, |d| {
-            d.combined_image_sampler(
-                self.hdr_target,
-                DescriptorImageLayout::ShaderReadOnlyOptimal,
-                self.sampler,
-            )
-            .storage_buffer(self.exposure_buffer);
+            d.sampled_image(self.hdr_target, DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.storage_buffer(self.exposure_buffer);
         });
     }
 
@@ -102,6 +97,9 @@ impl RenderPass for TonemapPass {
             return;
         };
         ctx.bind_pipeline_raw(pipeline);
+        let bindless_set = *_frame.consume::<DescriptorSetHandle>("BindlessSet");
+        ctx.bind_descriptor_set(2, bindless_set);
+
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
             0,
