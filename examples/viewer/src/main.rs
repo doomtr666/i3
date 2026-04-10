@@ -350,6 +350,13 @@ impl ExampleApp for DeferredGltfApp {
             ui.checkbox(&mut self.show_perf_graph, "Show Performance Graph");
             ui.separator();
 
+            if self.camera.camera_locked {
+                ui.label("📷 Camera: LOCKED (Tab to unlock)");
+            } else {
+                ui.label("📷 Camera: FREE (Tab to lock)");
+            }
+            ui.separator();
+
             ui.label("Scene:");
             egui::ComboBox::from_label("Select Scene")
                 .selected_text(&self.current_scene)
@@ -406,6 +413,9 @@ impl ExampleApp for DeferredGltfApp {
                         scene_to_load = Some("NormalTangentMirrorTest_scene");
                     }
                 });
+
+            ui.separator();
+            ui.checkbox(&mut self.render_graph.fxaa_enabled, "FXAA");
 
             ui.separator();
             ui.label("Debug Channel:");
@@ -502,13 +512,8 @@ impl ExampleApp for DeferredGltfApp {
             }
         }
 
-        // Only let camera handle event if egui doesn't want it
-        let wants_input =
-            self.ui.context().wants_pointer_input() || self.ui.context().wants_keyboard_input();
-
-        if !wants_input {
-            self.camera.handle_event(event);
-        }
+        // Camera always receives events — Tab lock prevents mouse look when GUI is needed.
+        self.camera.handle_event(event);
     }
 }
 

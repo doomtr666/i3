@@ -1,5 +1,6 @@
 use crate::passes::average_luminance::AverageLuminancePass;
 use crate::passes::cluster_build::ClusterBuildPass;
+use crate::passes::fxaa::FxaaPass;
 use crate::passes::histogram_build::HistogramBuildPass;
 use crate::passes::light_cull::LightCullPass;
 use crate::passes::tonemap::TonemapPass;
@@ -75,6 +76,7 @@ pub struct PostProcessGroup {
     pub histogram_build_pass: HistogramBuildPass,
     pub average_luminance_pass: AverageLuminancePass,
     pub tonemap_pass: TonemapPass,
+    pub fxaa_pass: FxaaPass,
 }
 
 impl PostProcessGroup {
@@ -83,6 +85,7 @@ impl PostProcessGroup {
             histogram_build_pass: HistogramBuildPass::new(),
             average_luminance_pass: AverageLuminancePass::new(),
             tonemap_pass: TonemapPass::new(sampler),
+            fxaa_pass: FxaaPass::new(sampler),
         }
     }
 }
@@ -96,6 +99,7 @@ impl RenderPass for PostProcessGroup {
         self.histogram_build_pass.init(backend, globals);
         self.average_luminance_pass.init(backend, globals);
         self.tonemap_pass.init(backend, globals);
+        self.fxaa_pass.init(backend, globals);
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
@@ -112,6 +116,7 @@ impl RenderPass for PostProcessGroup {
         builder.add_pass(&mut self.histogram_build_pass);
         builder.add_pass(&mut self.average_luminance_pass);
         builder.add_pass(&mut self.tonemap_pass);
+        builder.add_pass(&mut self.fxaa_pass);
     }
 }
 

@@ -31,7 +31,7 @@ impl TonemapPass {
             hdr_target: ImageHandle::INVALID,
             exposure_buffer: BufferHandle::INVALID,
             sampler,
-            backbuffer_name: "Backbuffer".to_string(),
+            backbuffer_name: "LDR_Target".to_string(),
             hdr_image_name: "HDR_Target".to_string(),
             pipeline: None,
         }
@@ -59,8 +59,19 @@ impl RenderPass for TonemapPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        // Resolve target handles by name
-        self.backbuffer = builder.resolve_image(&self.backbuffer_name);
+        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
+        let (w, h) = (common.screen_width, common.screen_height);
+
+        // When FXAA is active, declare LDR_Target as an intermediate image.
+        // When FXAA is disabled, resolve the existing Backbuffer directly.
+        self.backbuffer = if self.backbuffer_name == "Backbuffer" {
+            builder.resolve_image("Backbuffer")
+        } else {
+            builder.declare_image_output(
+                &self.backbuffer_name,
+                ImageDesc::new(w, h, Format::R8G8B8A8_UNORM),
+            )
+        };
         self.hdr_target = builder.resolve_image(&self.hdr_image_name);
         self.exposure_buffer = builder.resolve_buffer("ExposureBuffer");
 

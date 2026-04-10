@@ -111,6 +111,7 @@ pub struct DefaultRenderGraph {
     pub linear_sampler: SamplerHandle,
     pub material_sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
+    pub fxaa_enabled: bool,
     pub light_buffer: i3_gfx::graph::backend::BackendBuffer,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
     pub bindless_manager: crate::bindless::BindlessManager,
@@ -253,6 +254,7 @@ impl DefaultRenderGraph {
             linear_sampler,
             material_sampler,
             debug_channel: DebugChannel::Lit,
+            fxaa_enabled: true,
             light_buffer,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
@@ -762,6 +764,8 @@ impl DefaultRenderGraph {
             self.last_compiled_debug_channel = self.debug_channel;
             self.graph_dirty = true;
         }
+        // fxaa_enabled is a push-constant toggle — no graph recompilation needed.
+        self.post_process_group.fxaa_pass.enabled = self.fxaa_enabled;
 
         // 5. Dirty-check sync passes against cached scene data — no declare() side effects.
         // Sync passes add/remove transient staging buffers when dirty, changing graph topology.
@@ -1005,7 +1009,7 @@ impl DefaultRenderGraph {
     }
 
     fn record_post_process(&mut self, builder: &mut PassBuilder) {
-        // HistogramBuffer declared as output (with clear) inside PostProcessGroup
+        // Tonemap always writes to LDR_Target; FXAA always runs (passthrough when disabled).
         builder.add_pass(&mut self.post_process_group);
     }
 }
