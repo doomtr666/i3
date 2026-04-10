@@ -51,8 +51,10 @@ impl RenderPass for ClusteringGroup {
             usage: BufferUsageFlags::STORAGE_BUFFER,
             memory: MemoryType::GpuOnly,
         });
+        // slot [0] = atomic counter, slots [1..] = packed light indices
+        // worst case: every cluster fills up to MAX_LIGHTS_PER_CLUSTER entries
         let cluster_light_indices = builder.declare_buffer_output("ClusterLightIndices", BufferDesc {
-            size: max_clusters * 256 * 4,
+            size: (1 + max_clusters * crate::constants::MAX_LIGHTS_PER_CLUSTER) * 4,
             usage: BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
             memory: MemoryType::GpuOnly,
         });

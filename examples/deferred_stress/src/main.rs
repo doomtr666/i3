@@ -141,10 +141,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _pad: 0,
     });
 
+    const MAX_LIGHT: u32 = 256;
+
     // 256 Dynamic Point Lights
     let mut light_indices = Vec::new();
-    for i in 0..256 {
-        let h = i as f32 / 256.0;
+    for i in 0..MAX_LIGHT {
+        let h = i as f32 / MAX_LIGHT as f32;
         let color = hsv_to_rgb(h, 1.0, 1.0); // Full saturation
 
         let id = scene.add_light(LightData {

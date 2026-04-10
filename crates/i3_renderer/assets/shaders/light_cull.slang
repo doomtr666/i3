@@ -68,7 +68,20 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 
     uint offset = 0;
     InterlockedAdd(cluster_light_indices[0], visible_count, offset);
-    
+
+    // Guard against global buffer overflow (buffer capacity = 1 + max_clusters * MAX_LIGHTS_PER_CLUSTER).
+    // cluster_light_indices.GetDimensions() returns element count; index 0 is the counter itself.
+    uint capacity, stride;
+    cluster_light_indices.GetDimensions(capacity, stride);
+    if (1 + offset + visible_count > capacity) {
+        // Not enough room — record zero lights for this cluster to avoid out-of-bounds writes.
+        ClusterGridData grid_data;
+        grid_data.offset = 0;
+        grid_data.count = 0;
+        cluster_grid[cluster_index] = grid_data;
+        return;
+    }
+
     for (uint j = 0; j < visible_count; ++j) {
         cluster_light_indices[1 + offset + j] = visible_lights[j];
     }

@@ -13,6 +13,10 @@ pub const CLUSTER_GRID_Z: u32 = 16;
 /// Tile size in pixels for cluster X/Y grid dimensions.
 pub const CLUSTER_TILE_SIZE: u32 = 64;
 
+/// Maximum number of lights that can be assigned to a single cluster.
+/// Must match MAX_LIGHTS_PER_CLUSTER in light_cull.slang.
+pub const MAX_LIGHTS_PER_CLUSTER: u64 = 512;
+
 /// Size in bytes of a `vkDrawIndexedIndirectCommand` (index_count, instance_count,
 /// first_index, vertex_offset, first_instance — 5 × u32).
 pub const DRAW_INDIRECT_CMD_SIZE: u64 = 20;
