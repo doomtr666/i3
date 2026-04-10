@@ -29,7 +29,7 @@ impl Default for IblBakeOptions {
         Self {
             extract_sun: true,
             intensity_scale: 1.0,
-            sun_strength_ratio: Some(10.0),
+            sun_strength_ratio: Some(15.0),
         }
     }
 }
@@ -286,7 +286,7 @@ pub fn irradiance_lum_at(
         let solid = equirect_solid_angle(sy, src_height);
         for sx in 0..src_width {
             let dir = equirect_to_dir(sx, sy, src_width, src_height);
-            let cos_theta = (n[0]*dir[0] + n[1]*dir[1] + n[2]*dir[2]).max(0.0);
+            let cos_theta = (n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2]).max(0.0);
             if cos_theta > 0.0 {
                 let px = pixels_rgb[(sx + sy * src_width) as usize];
                 if sun_threshold == f32::MAX || luminance(px[0], px[1], px[2]) <= sun_threshold {
