@@ -13,6 +13,7 @@ i3_slang.workspace = true
 tracing.workspace = true
 nalgebra-glm.workspace = true
 i3_io.workspace = true
+bytemuck.workspace = true
 i3_egui = { path = "../i3_egui" }
 
 [build-dependencies]

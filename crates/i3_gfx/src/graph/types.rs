@@ -228,7 +228,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct BufferUsageFlags: u32 {
         const TRANSFER_SRC = 0x1;
         const TRANSFER_DST = 0x2;
@@ -324,14 +324,15 @@ impl ClearValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MemoryType {
+    #[default]
     GpuOnly,
     CpuToGpu, // Host visible, coherent
     GpuToCpu, // Host visible, coherent
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct BufferDesc {
     pub size: u64,
     pub usage: BufferUsageFlags,
@@ -472,7 +473,7 @@ impl FlatPass {
 
 bitflags! {
     /// Bitfield representing how a resource is used within a pass.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct ResourceUsage: u32 {
         const NONE = 0;
         const READ = 1 << 0;

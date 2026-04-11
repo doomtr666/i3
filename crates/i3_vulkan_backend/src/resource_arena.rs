@@ -77,6 +77,9 @@ pub struct PhysicalImage {
     pub concurrent: bool,
     /// Whether this was created via create_transient_image
     pub is_transient: bool,
+
+    /// Views for specific mip levels or layers
+    pub subresource_views: std::sync::Mutex<std::collections::HashMap<(u32, u32), vk::ImageView>>,
 }
 
 /// Physical representation of a Vulkan buffer.

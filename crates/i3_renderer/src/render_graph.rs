@@ -140,6 +140,7 @@ pub struct DefaultRenderGraph {
     pub accel_struct_system: crate::passes::accel_struct::AccelStructSystem,
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
+    pub hiz_build_pass: crate::passes::hiz_build::HiZBuildPass,
 
     pub prev_view_projection: nalgebra_glm::Mat4,
 
@@ -275,6 +276,7 @@ impl DefaultRenderGraph {
         let accel_struct_system = crate::passes::accel_struct::AccelStructSystem::new();
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
+        let hiz_build_pass = crate::passes::hiz_build::HiZBuildPass::new();
 
         let mut this = Self {
             graph,
@@ -299,6 +301,7 @@ impl DefaultRenderGraph {
             accel_struct_system,
             blas_update_pass,
             tlas_rebuild_pass,
+            hiz_build_pass,
             scene_mesh_descriptors: Vec::new(),
             cached_instances: Vec::new(),
             cached_materials: Vec::new(),
@@ -423,6 +426,7 @@ impl DefaultRenderGraph {
         self.graph
             .init_pass_direct(&mut self.blas_update_pass, backend);
         self.graph.init_pass_direct(&mut self.gbuffer_pass, backend);
+        self.graph.init_pass_direct(&mut self.hiz_build_pass, backend);
         self.graph
             .init_pass_direct(&mut self.draw_call_gen_pass, backend);
         self.graph.init_pass_direct(&mut self.sky_pass, backend);
@@ -993,6 +997,9 @@ impl DefaultRenderGraph {
             // LightBuffer is owned here; mesh/instance/material/draw buffers are imported by their passes
             builder.import_buffer("LightBuffer", light_buffer_physical);
 
+            builder.publish("LinearSampler", self.linear_sampler);
+            builder.publish("NearestSampler", self.nearest_sampler);
+
             // 0. Sync CPU scene delta to GPU (imports MeshDescriptorBuffer, InstanceBuffer, MaterialBuffer)
             builder.add_pass(&mut self.sync_group);
             builder.add_pass(&mut self.blas_update_pass);
@@ -1010,6 +1017,32 @@ impl DefaultRenderGraph {
 
             // 2. GBuffer (images declared as outputs inside GBufferPass)
             builder.add_pass(&mut self.gbuffer_pass);
+
+            // 2b. Hi-Z Pyramid Generation
+            let (hiz_w, hiz_h, hiz_mips) = {
+                let common = builder.consume::<CommonData>("Common");
+                let w = (common.screen_width / 2).next_power_of_two();
+                let h = (common.screen_height / 2).next_power_of_two();
+                let mips = ((w.max(h) as f32).log2().floor() as u32) + 1;
+                (w, h, mips)
+            };
+
+            builder.declare_image_output(
+                "HiZPyramid",
+                ImageDesc {
+                    width: hiz_w,
+                    height: hiz_h,
+                    depth: 1,
+                    format: Format::R32_SFLOAT,
+                    mip_levels: hiz_mips,
+                    array_layers: 1,
+                    usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::STORAGE,
+                    view_type: ImageViewType::Type2D,
+                    swizzle: ComponentMapping::default(),
+                    clear_value: None,
+                },
+            );
+            builder.add_pass(&mut self.hiz_build_pass);
 
             // 3. Sky (HDR_Target declared as output inside SkyPass)
             builder.add_pass(&mut self.sky_pass);

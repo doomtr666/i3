@@ -1091,6 +1091,7 @@ dependencies = [
 name = "i3_renderer"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "i3_baker",
  "i3_egui",
  "i3_gfx",

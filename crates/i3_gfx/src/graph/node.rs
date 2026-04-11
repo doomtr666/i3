@@ -185,6 +185,34 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         None
     }
 
+    fn get_image_desc(&self, handle: ImageHandle) -> ImageDesc {
+        self.storage.symbols.symbols.iter()
+            .find(|s| matches!(s.symbol_type, SymbolType::Image(_)) && s.data.as_ref().and_then(|d| d.downcast_ref::<ImageHandle>()) == Some(&handle))
+            .and_then(|s| if let SymbolType::Image(desc) = s.symbol_type { Some(desc) } else { None })
+            .unwrap_or_else(|| {
+                for parent in self.ancestor_symbols.iter().rev() {
+                    if let Some(s) = parent.symbols.iter().find(|s| matches!(s.symbol_type, SymbolType::Image(_)) && s.data.as_ref().and_then(|d| d.downcast_ref::<ImageHandle>()) == Some(&handle)) {
+                        if let SymbolType::Image(desc) = s.symbol_type { return desc; }
+                    }
+                }
+                ImageDesc::default()
+            })
+    }
+
+    fn get_buffer_desc(&self, handle: BufferHandle) -> crate::graph::types::BufferDesc {
+        self.storage.symbols.symbols.iter()
+            .find(|s| matches!(s.symbol_type, SymbolType::Buffer(_)) && s.data.as_ref().and_then(|d| d.downcast_ref::<BufferHandle>()) == Some(&handle))
+            .and_then(|s| if let SymbolType::Buffer(desc) = s.symbol_type { Some(desc) } else { None })
+            .unwrap_or_else(|| {
+                for parent in self.ancestor_symbols.iter().rev() {
+                    if let Some(s) = parent.symbols.iter().find(|s| matches!(s.symbol_type, SymbolType::Buffer(_)) && s.data.as_ref().and_then(|d| d.downcast_ref::<BufferHandle>()) == Some(&handle)) {
+                        if let SymbolType::Buffer(desc) = s.symbol_type { return desc; }
+                    }
+                }
+                BufferDesc::default()
+            })
+    }
+
     fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage) {
         self.storage.image_reads.push((handle, usage));
     }

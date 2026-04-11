@@ -284,6 +284,8 @@ impl RenderPass for EguiPass {
                         image: self.font_handle,
                         sampler: Some(sampler),
                         image_layout: DescriptorImageLayout::ShaderReadOnlyOptimal,
+                        base_mip: 0,
+                        mip_count: !0,
                     }),
                     accel_struct_info: None,
                 };

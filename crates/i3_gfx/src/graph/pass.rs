@@ -62,6 +62,14 @@ impl<'a> PassBuilder<'a> {
         self.inner.try_resolve_acceleration_structure(name)
     }
 
+    pub fn get_image_desc(&self, handle: ImageHandle) -> ImageDesc {
+        self.inner.get_image_desc(handle)
+    }
+
+    pub fn get_buffer_desc(&self, handle: BufferHandle) -> crate::graph::types::BufferDesc {
+        self.inner.get_buffer_desc(handle)
+    }
+
     // --- GPU Intents ---
     pub fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage) {
         self.inner.read_image(handle, usage);
@@ -410,6 +418,9 @@ pub(crate) trait InternalPassBuilder {
     fn publish_erased(&mut self, type_id: TypeId, name: &str, data: Box<dyn Any + Send + Sync>);
     fn consume_erased(&mut self, type_id: TypeId, name: &str) -> &dyn Any;
     fn try_consume_erased(&mut self, type_id: TypeId, name: &str) -> Option<&dyn Any>;
+
+    fn get_image_desc(&self, handle: ImageHandle) -> ImageDesc;
+    fn get_buffer_desc(&self, handle: BufferHandle) -> crate::graph::types::BufferDesc;
 
     fn read_image(&mut self, handle: ImageHandle, usage: ResourceUsage);
     fn write_image(&mut self, handle: ImageHandle, usage: ResourceUsage);

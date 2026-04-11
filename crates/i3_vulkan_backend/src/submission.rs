@@ -454,6 +454,7 @@ pub fn acquire_swapchain_image(
                         is_swapchain: true,
                         concurrent: false, // swapchain images are always EXCLUSIVE
                         is_transient: false,
+                        subresource_views: std::sync::Mutex::new(std::collections::HashMap::new()),
                     });
                     backend.external_to_physical.insert(image_id, new_id);
                     new_id

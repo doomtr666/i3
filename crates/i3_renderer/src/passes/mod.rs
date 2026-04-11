@@ -10,4 +10,5 @@ pub mod sky;
 pub mod sync;
 pub mod tonemap;
 pub mod fxaa;
+pub mod hiz_build;
 pub mod accel_struct;

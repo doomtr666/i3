@@ -28,6 +28,13 @@ pub struct PipelineConfig {
     pub name: String,
     pub shader: ShaderSource,
     pub graphics: Option<GraphicsConfig>,
+    pub compute: Option<ComputeConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeConfig {
+    pub entry_point: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -250,19 +257,32 @@ impl Importer for PipelineImporter {
         let compiler = SlangCompiler::new()
             .map_err(|e| crate::error::BakerError::Pipeline(e))?;
 
-        let shader_module = match &config.shader {
-            ShaderSource::Path(rel_path) => {
-                let shader_full_path = source_path.parent().unwrap().join(rel_path);
-                
-                let module_name = shader_full_path.file_stem().expect("Invalid shader path").to_str().unwrap();
-                let shader_dir = shader_full_path.parent().unwrap().to_str().unwrap();
+        let shader_module = if let Some(compute) = &config.compute {
+            let rel_path = match &config.shader {
+                ShaderSource::Path(p) => p,
+                _ => return Err(crate::error::BakerError::Pipeline("Inline shaders not supported with entry points yet".into())),
+            };
+            let shader_full_path = source_path.parent().unwrap().join(rel_path);
+            let module_name = shader_full_path.file_stem().expect("Invalid shader path").to_str().unwrap();
+            let shader_dir = shader_full_path.parent().unwrap().to_str().unwrap();
 
-                compiler.compile_file(module_name, ShaderTarget::Spirv, &[shader_dir])
-                    .map_err(|e| crate::error::BakerError::Pipeline(e))?
-            }
-            ShaderSource::Inline { code, virtual_path } => {
-                compiler.compile_inline("inline_shader", virtual_path, code, ShaderTarget::Spirv)
-                    .map_err(|e| crate::error::BakerError::Pipeline(e))?
+            compiler.compile_entry_point(module_name, &compute.entry_point, ShaderTarget::Spirv, &[shader_dir])
+                .map_err(|e| crate::error::BakerError::Pipeline(e))?
+        } else {
+            match &config.shader {
+                ShaderSource::Path(rel_path) => {
+                    let shader_full_path = source_path.parent().unwrap().join(rel_path);
+                    
+                    let module_name = shader_full_path.file_stem().expect("Invalid shader path").to_str().unwrap();
+                    let shader_dir = shader_full_path.parent().unwrap().to_str().unwrap();
+
+                    compiler.compile_file(module_name, ShaderTarget::Spirv, &[shader_dir])
+                        .map_err(|e| crate::error::BakerError::Pipeline(e))?
+                }
+                ShaderSource::Inline { code, virtual_path } => {
+                    compiler.compile_inline("inline_shader", virtual_path, code, ShaderTarget::Spirv)
+                        .map_err(|e| crate::error::BakerError::Pipeline(e))?
+                }
             }
         };
 

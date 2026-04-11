@@ -5,7 +5,10 @@ use i3_gfx::graph::backend::{
 };
 use i3_gfx::graph::pass::RenderPass;
 use i3_gfx::graph::pipeline::IndexType;
-use i3_gfx::graph::types::{AccelerationStructureHandle, BufferDesc, BufferHandle, ImageDesc, ImageHandle, WindowHandle};
+use i3_gfx::graph::types::{
+    AccelerationStructureHandle, BufferDesc, BufferHandle, ImageDesc, ImageHandle,
+    WindowHandle,
+};
 use i3_io;
 pub mod prelude;
 use std::collections::HashSet;
@@ -631,14 +634,12 @@ impl<'a> PassContext for NullPassContext<'a> {
         info!(pass = %self.pass_name, ?_src, ?_dst, "COPY_BUFFER");
     }
 
-    fn map_buffer(&mut self, _handle: BufferHandle) -> *mut u8 {
-        info!(pass = %self.pass_name, ?_handle, "MAP_BUFFER");
+    fn map_buffer(&mut self, _handle: i3_gfx::graph::types::BufferHandle) -> *mut u8 {
         std::ptr::null_mut()
     }
 
-    fn unmap_buffer(&mut self, _handle: BufferHandle) {
-        info!(pass = %self.pass_name, ?_handle, "UNMAP_BUFFER");
-    }
+    fn unmap_buffer(&mut self, _handle: i3_gfx::graph::types::BufferHandle) {}
+
 }
 
 #[cfg(test)]

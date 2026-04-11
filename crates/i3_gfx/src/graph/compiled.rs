@@ -293,6 +293,24 @@ impl CompiledGraph {
                         #[cfg(debug_assertions)]
                         backend.set_image_name(physical, &symbol.name);
                         backend.register_external_image(handle, physical);
+                    } else if symbol.lifetime == SymbolLifetime::TemporalHistory {
+                        if let Some(ref mut temporal) = temporal_registry_opt {
+                            let handle = *symbol
+                                .data.as_ref().expect("History image without handle")
+                                .downcast_ref::<ImageHandle>().expect("Not a handle");
+                            let physical = if symbol.name.ends_with("_History") {
+                                let base = &symbol.name[..symbol.name.len() - 8];
+                                temporal.get_or_create_history_image(base, desc, backend)
+                            } else {
+                                temporal.get_or_create_image(&symbol.name, desc, backend)
+                            };
+                            backend.register_external_image(handle, physical);
+                        } else {
+                            tracing::warn!(
+                                "TemporalHistory image symbol '{}' declared but no TemporalRegistry!",
+                                symbol.name
+                            );
+                        }
                     }
                 }
                 SymbolType::Buffer(ref desc) => {

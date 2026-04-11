@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "hiz_build_reduce",
+    shader: Path("../shaders/hiz_build.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "reduce_mip",
+    )),
+)

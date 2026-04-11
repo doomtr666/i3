@@ -661,6 +661,18 @@ impl DescriptorWrite {
         layout: DescriptorImageLayout,
         sampler: SamplerHandle,
     ) -> Self {
+        Self::combined_image_sampler_mip(binding, array_element, image, sampler, layout, 0, !0)
+    }
+
+    pub fn combined_image_sampler_mip(
+        binding: u32,
+        array_element: u32,
+        image: crate::graph::types::ImageHandle,
+        sampler: SamplerHandle,
+        layout: DescriptorImageLayout,
+        base_mip: u32,
+        mip_count: u32,
+    ) -> Self {
         Self {
             binding,
             array_element,
@@ -670,6 +682,8 @@ impl DescriptorWrite {
                 image,
                 image_layout: layout,
                 sampler: Some(sampler),
+                base_mip,
+                mip_count,
             }),
             accel_struct_info: None,
         }
@@ -690,6 +704,33 @@ impl DescriptorWrite {
                 image,
                 image_layout: layout,
                 sampler: None,
+                base_mip: 0,
+                mip_count: !0,
+            }),
+            accel_struct_info: None,
+        }
+    }
+
+    /// Creates a sampled image descriptor for a specific mip range.
+    pub fn sampled_image_mip(
+        binding: u32,
+        array_element: u32,
+        image: crate::graph::types::ImageHandle,
+        layout: DescriptorImageLayout,
+        base_mip: u32,
+        mip_count: u32,
+    ) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::SampledImage,
+            buffer_info: None,
+            image_info: Some(DescriptorImageInfo {
+                image,
+                image_layout: layout,
+                sampler: None,
+                base_mip,
+                mip_count,
             }),
             accel_struct_info: None,
         }
@@ -710,6 +751,32 @@ impl DescriptorWrite {
                 image,
                 image_layout: layout,
                 sampler: None,
+                base_mip: 0,
+                mip_count: 1, // Storage usually binds a single level
+            }),
+            accel_struct_info: None,
+        }
+    }
+
+    /// Creates a storage image descriptor for a specific mip level.
+    pub fn storage_image_mip(
+        binding: u32,
+        array_element: u32,
+        image: crate::graph::types::ImageHandle,
+        layout: DescriptorImageLayout,
+        mip_level: u32,
+    ) -> Self {
+        Self {
+            binding,
+            array_element,
+            descriptor_type: crate::graph::pipeline::BindingType::StorageImage,
+            buffer_info: None,
+            image_info: Some(DescriptorImageInfo {
+                image,
+                image_layout: layout,
+                sampler: None,
+                base_mip: mip_level,
+                mip_count: 1,
             }),
             accel_struct_info: None,
         }
@@ -725,6 +792,8 @@ impl DescriptorWrite {
                 image: crate::graph::types::ImageHandle::INVALID,
                 image_layout: DescriptorImageLayout::General,
                 sampler: Some(sampler),
+                base_mip: 0,
+                mip_count: 0,
             }),
             accel_struct_info: None,
         }
@@ -800,6 +869,8 @@ pub struct DescriptorImageInfo {
     // Start with basic layout. Or reuse image layout from types?
     // Actually vk::DescriptorImageInfo needs sampler too.
     pub sampler: Option<SamplerHandle>, // Need SamplerHandle
+    pub base_mip: u32,
+    pub mip_count: u32,
 }
 
 // Temporary Sampler Handle until we have proper sampler resources

@@ -17,6 +17,7 @@ struct CommonData
     uint screenHeight;
     float3 cameraPos;
     uint lightCount;
+    float4x4 prevViewProjection;
 };
 
 // --- GPU-Driven Structures ---

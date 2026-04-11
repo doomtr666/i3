@@ -290,9 +290,46 @@ pub fn update_descriptor_set(
                             vk::Sampler::null()
                         };
 
+                        // Select the correct image view (main or subresource)
+                        let image_view = if info.base_mip == 0 && (info.mip_count == !0 || info.mip_count == img.desc.mip_levels) {
+                            img.view
+                        } else {
+                            let key = (info.base_mip, info.mip_count);
+                            let mut views = img.subresource_views.lock().unwrap();
+                            if let Some(&view) = views.get(&key) {
+                                view
+                            } else {
+                                // Create new subresource view
+                                let aspect_mask = if img.format == vk::Format::D32_SFLOAT {
+                                    vk::ImageAspectFlags::DEPTH
+                                } else {
+                                    vk::ImageAspectFlags::COLOR
+                                };
+
+                                let view_info = vk::ImageViewCreateInfo::default()
+                                    .image(img.image)
+                                    .view_type(crate::convert::convert_image_view_type(img.desc.view_type))
+                                    .format(img.format)
+                                    .subresource_range(vk::ImageSubresourceRange {
+                                        aspect_mask,
+                                        base_mip_level: info.base_mip,
+                                        level_count: if info.mip_count == !0 { img.desc.mip_levels - info.base_mip } else { info.mip_count },
+                                        base_array_layer: 0,
+                                        layer_count: img.desc.array_layers.max(1),
+                                    });
+
+                                let new_view = unsafe {
+                                    backend.get_device().handle.create_image_view(&view_info, None)
+                                        .expect("Failed to create subresource image view")
+                                };
+                                views.insert(key, new_view);
+                                new_view
+                            }
+                        };
+
                         image_infos.push(vk::DescriptorImageInfo {
                             sampler: vk_sampler,
-                            image_view: img.view,
+                            image_view,
                             image_layout: layout,
                         });
                     }

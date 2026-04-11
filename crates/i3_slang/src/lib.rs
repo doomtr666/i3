@@ -431,6 +431,64 @@ impl SlangCompiler {
         })
     }
 
+    /// Compile a specific entry point from a Slang module file
+    pub fn compile_entry_point(
+        &self,
+        module_name: &str,
+        entry_point_name: &str,
+        target: ShaderTarget,
+        search_paths: &[&str],
+    ) -> Result<ShaderModule, String> {
+        let mut final_search_paths: Vec<String> = search_paths.iter().map(|s| s.to_string()).collect();
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                final_search_paths.push(exe_dir.join("shaders").to_string_lossy().to_string());
+            }
+        }
+        final_search_paths.push("crates/i3_renderer/assets/shaders".to_string());
+
+        let search_path_cstrings: Vec<_> = final_search_paths.iter().map(|p| std::ffi::CString::new(p.as_str()).unwrap()).collect();
+        let search_path_ptrs: Vec<_> = search_path_cstrings.iter().map(|s| s.as_ptr()).collect();
+
+        let session_options = slang::CompilerOptions::default()
+            .optimization(slang::OptimizationLevel::High)
+            .matrix_layout_column(true);
+
+        let target_desc = slang::TargetDesc::default()
+            .format(target.to_slang_target())
+            .profile(target.default_profile(&self.global_session));
+
+        let session_desc = slang::SessionDesc::default()
+            .targets(std::slice::from_ref(&target_desc))
+            .search_paths(&search_path_ptrs)
+            .options(&session_options);
+
+        let session = self.global_session.create_session(&session_desc).unwrap();
+        let module = session.load_module(module_name).map_err(|e| format!("Module {} load failed: {}", module_name, e))?;
+
+        let entry_point = module.find_entry_point_by_name(entry_point_name)
+            .ok_or_else(|| format!("Entry point {} not found in module {}", entry_point_name, module_name))?;
+
+        let components = [module.into(), entry_point.into()];
+        let program = session.create_composite_component_type(&components).unwrap();
+        let linked = program.link().map_err(|e| format!("Link failed: {}", e))?;
+
+        let reflection = self.extract_reflection(&linked)?;
+        let bytecode = linked.target_code(0).map_err(|e| format!("Target code failed: {}", e))?.as_slice().to_vec();
+
+        let stages = reflection.entry_points.iter().map(|ep| {
+             let stage = match ep.stage.as_str() {
+                "vertex" => ShaderStageFlags::Vertex,
+                "fragment" => ShaderStageFlags::Fragment,
+                "compute" => ShaderStageFlags::Compute,
+                _ => ShaderStageFlags::Compute,
+            };
+            ShaderStageInfo { stage, entry_point: ep.name.clone() }
+        }).collect();
+
+        Ok(ShaderModule { bytecode, stages, reflection })
+    }
+
     /// Compile Slang shader from file
     ///
     /// Automatically discovers all entry points marked with [shader("stage")] in the module.

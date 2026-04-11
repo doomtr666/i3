@@ -104,6 +104,7 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
         is_swapchain: false,
         concurrent: false,
         is_transient: false,
+        subresource_views: std::sync::Mutex::new(std::collections::HashMap::new()),
     };
 
     let id = backend.images.insert(physical);
@@ -158,9 +159,15 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
 pub fn destroy_image(backend: &mut VulkanBackend, handle: BackendImage) {
     if let Some(img) = backend.images.remove(handle.0) {
         if let Some(alloc) = img.allocation {
+            let mut views = vec![img.view];
+            if let Ok(sub_views) = img.subresource_views.lock() {
+                for (_, view) in sub_views.iter() {
+                    views.push(*view);
+                }
+            }
             backend
                 .dead_images
-                .push((backend.frame_count, img.image, img.view, alloc));
+                .push((backend.frame_count, img.image, views, alloc));
         }
     }
 }

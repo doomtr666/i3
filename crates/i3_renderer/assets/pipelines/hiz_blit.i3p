@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "hiz_blit",
+    shader: Path("../shaders/hiz_blit.slang"),
+    graphics: None,
+)

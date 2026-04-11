@@ -195,7 +195,11 @@ impl VulkanPassContext {
             }[0];
 
             let backend = self.backend_mut();
-            let handle_id = backend.descriptor_sets.lock().unwrap_or_else(|e| e.into_inner()).insert(set);
+            let handle_id = backend
+                .descriptor_sets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(set);
             let set_handle = DescriptorSetHandle(handle_id);
 
             backend.update_descriptor_set(set_handle, &writes);
@@ -569,7 +573,6 @@ impl PassContext for VulkanPassContext {
             }
         }
     }
-
 }
 
 /// Prepare a pass for recording by resolving resources and building barriers.
@@ -635,8 +638,8 @@ pub fn prepare_pass(
         false
     };
 
-    let is_compute = matches!(desc.queue, QueueType::AsyncCompute | QueueType::Transfer)
-        || is_compute_pipeline;
+    let is_compute =
+        matches!(desc.queue, QueueType::AsyncCompute | QueueType::Transfer) || is_compute_pipeline;
 
     let mut color_attachments = [vk::RenderingAttachmentInfo::default(); 8];
     let mut color_count = 0;
@@ -644,7 +647,7 @@ pub fn prepare_pass(
 
     if !is_compute {
         let bind_point = vk::PipelineBindPoint::GRAPHICS;
-        
+
         let mut processed_handles = std::collections::HashSet::new();
         for (handle, usage) in desc.image_writes.iter().chain(desc.image_reads.iter()) {
             if processed_handles.contains(handle) {
@@ -655,9 +658,17 @@ pub fn prepare_pass(
                 let pid = backend.resolve_image(*handle).0;
                 let img = backend.images.get(pid).expect("Attachment not found");
                 let (layout, _, _) = backend.get_image_state(*usage, bind_point);
-                
-                let is_write = usage.intersects(ResourceUsage::WRITE | ResourceUsage::COLOR_ATTACHMENT | ResourceUsage::DEPTH_STENCIL);
-                let load_op = sync.load_ops.get(&img.image).cloned().unwrap_or(vk::AttachmentLoadOp::LOAD);
+
+                let is_write = usage.intersects(
+                    ResourceUsage::WRITE
+                        | ResourceUsage::COLOR_ATTACHMENT
+                        | ResourceUsage::DEPTH_STENCIL,
+                );
+                let load_op = sync
+                    .load_ops
+                    .get(&img.image)
+                    .cloned()
+                    .unwrap_or(vk::AttachmentLoadOp::LOAD);
 
                 let clear_value = if usage.intersects(ResourceUsage::DEPTH_STENCIL) {
                     vk::ClearValue {
@@ -737,24 +748,45 @@ pub fn record_barriers(
     }
 
     if total_image_barriers == 0 && total_buffer_barriers == 0 {
-        tracing::debug!("record_barriers: No barriers to declare for {} passes", passes.len());
+        tracing::debug!(
+            "record_barriers: No barriers to declare for {} passes",
+            passes.len()
+        );
         return None;
     }
 
-    tracing::debug!("record_barriers: Recording {} image barriers and {} buffer barriers for {} passes", total_image_barriers, total_buffer_barriers, passes.len());
+    tracing::debug!(
+        "record_barriers: Recording {} image barriers and {} buffer barriers for {} passes",
+        total_image_barriers,
+        total_buffer_barriers,
+        passes.len()
+    );
 
     let device = backend.get_device().clone();
     let thread_idx = rayon::current_thread_index().unwrap_or(0);
-    
+
     // Select Queue Context based on Pass Queue Type
     let queue_ctx = match passes[0].queue {
-        QueueType::Graphics => backend.graphics.as_ref().expect("Graphics queue not initialized for recording barriers"),
-        QueueType::AsyncCompute => backend.compute.as_ref().or(backend.graphics.as_ref()).expect("No queue context available for compute barriers"),
-        QueueType::Transfer => backend.transfer.as_ref().or(backend.graphics.as_ref()).expect("No queue context available for transfer barriers"),
+        QueueType::Graphics => backend
+            .graphics
+            .as_ref()
+            .expect("Graphics queue not initialized for recording barriers"),
+        QueueType::AsyncCompute => backend
+            .compute
+            .as_ref()
+            .or(backend.graphics.as_ref())
+            .expect("No queue context available for compute barriers"),
+        QueueType::Transfer => backend
+            .transfer
+            .as_ref()
+            .or(backend.graphics.as_ref())
+            .expect("No queue context available for transfer barriers"),
     };
-    
+
     let frame_ctx = &queue_ctx.frame_contexts[backend.global_frame_index];
-    let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
+    let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()]
+        .lock()
+        .unwrap();
 
     // Allocate Command Buffer from Thread Pool
     let cmd = if tp.cursor < tp.allocated.len() {
@@ -880,13 +912,19 @@ pub fn record_pass(
     let thread_idx = rayon::current_thread_index().unwrap_or(0);
     let queue_ctx = match prepared.queue {
         QueueType::Graphics => backend.graphics.as_ref().unwrap(),
-        QueueType::AsyncCompute => backend.compute.as_ref()
+        QueueType::AsyncCompute => backend
+            .compute
+            .as_ref()
             .unwrap_or_else(|| backend.graphics.as_ref().unwrap()),
-        QueueType::Transfer => backend.transfer.as_ref()
+        QueueType::Transfer => backend
+            .transfer
+            .as_ref()
             .unwrap_or_else(|| backend.graphics.as_ref().unwrap()),
     };
     let frame_ctx = &queue_ctx.frame_contexts[backend.global_frame_index];
-    let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()].lock().unwrap();
+    let mut tp = frame_ctx.per_thread_pools[thread_idx % frame_ctx.per_thread_pools.len()]
+        .lock()
+        .unwrap();
 
     // Allocate Command Buffer from Thread Pool
     let cmd = if tp.cursor < tp.allocated.len() {
@@ -1008,11 +1046,15 @@ pub fn record_pass(
     if !prepared.sync.post_barriers.is_empty() {
         let mut img_barriers: Vec<vk::ImageMemoryBarrier2> = Vec::new();
         for b in &prepared.sync.post_barriers {
-            if let crate::sync::Barrier::Image(b) = b { img_barriers.push(b.clone()); }
+            if let crate::sync::Barrier::Image(b) = b {
+                img_barriers.push(b.clone());
+            }
         }
         if !img_barriers.is_empty() {
             let dep = vk::DependencyInfo::default().image_memory_barriers(&img_barriers);
-            unsafe { device.handle.cmd_pipeline_barrier2(cmd, &dep); }
+            unsafe {
+                device.handle.cmd_pipeline_barrier2(cmd, &dep);
+            }
         }
     }
 

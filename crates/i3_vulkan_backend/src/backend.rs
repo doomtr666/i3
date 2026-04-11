@@ -59,7 +59,7 @@ pub struct VulkanBackend {
     pub external_as_to_physical: HashMap<u64, u64>,     // Virtual AccelStructID -> Physical ID
 
     pub frame_count: u64,
-    pub dead_images: Vec<(u64, vk::Image, vk::ImageView, vk_mem::Allocation)>, // Frame, Image, View, Alloc
+    pub dead_images: Vec<(u64, vk::Image, Vec<vk::ImageView>, vk_mem::Allocation)>, // Frame, Image, Views, Alloc
     pub dead_buffers: Vec<(u64, vk::Buffer, vk_mem::Allocation)>,
     pub dead_semaphores: Vec<(u64, u64, vk::Semaphore)>, // Frame, ID, Handle
     pub recycled_semaphores: Vec<vk::Semaphore>,
@@ -834,9 +834,11 @@ impl RenderBackend for VulkanBackend {
             let mut i = 0;
             while i < self.dead_images.len() {
                 if self.dead_images[i].0 <= safe_frame {
-                    let (_, image, view, mut alloc) = self.dead_images.remove(i);
+                    let (_, image, views, mut alloc) = self.dead_images.remove(i);
                     unsafe {
-                        device.handle.destroy_image_view(view, None);
+                        for view in views {
+                            device.handle.destroy_image_view(view, None);
+                        }
                         allocator.destroy_image(image, &mut alloc);
                     }
                 } else {
@@ -1366,7 +1368,15 @@ impl Drop for VulkanBackend {
                     let allocator = device.allocator.lock().unwrap();
                     for (_id, physical) in self.images.iter_mut() {
                         if let Some(alloc) = physical.allocation.as_mut() {
+                            // Destroy main view
                             device.handle.destroy_image_view(physical.view, None);
+                            
+                            // Destroy all subresource views (mips/layers)
+                            let mut views = physical.subresource_views.lock().unwrap();
+                            for (_, view) in views.drain() {
+                                device.handle.destroy_image_view(view, None);
+                            }
+                            
                             allocator.destroy_image(physical.image, alloc);
                         } else {
                             // This is likely a swapchain image, DO NOT destroy its view/image as it's owned elsewhere.
@@ -1381,8 +1391,10 @@ impl Drop for VulkanBackend {
                     for (_, buffer, mut alloc) in self.dead_buffers.drain(..) {
                         allocator.destroy_buffer(buffer, &mut alloc);
                     }
-                    for (_, image, view, mut alloc) in self.dead_images.drain(..) {
-                        device.handle.destroy_image_view(view, None);
+                    for (_, image, views, mut alloc) in self.dead_images.drain(..) {
+                        for view in views {
+                            device.handle.destroy_image_view(view, None);
+                        }
                         allocator.destroy_image(image, &mut alloc);
                     }
                     if let Some(as_loader) = &self.accel_struct {
