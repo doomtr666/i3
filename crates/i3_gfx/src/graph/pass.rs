@@ -167,6 +167,21 @@ impl<'a> PassBuilder<'a> {
         self.inner.read_buffer_history(name)
     }
 
+    /// Declares a persistent image that requires N-1 temporal history support.
+    pub fn declare_image_history(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
+        self.inner.declare_image_history(name, desc)
+    }
+
+    /// Declares a persistent image with temporal history, promoted to the parent scope.
+    pub fn declare_image_history_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
+        self.inner.declare_image_history_output(name, desc)
+    }
+
+    /// Reads the N-1 temporal history of an image as an external input.
+    pub fn read_image_history(&mut self, name: &str) -> ImageHandle {
+        self.inner.read_image_history(name)
+    }
+
     /// Imports an existing physical buffer into the frame graph.
     pub fn import_buffer(
         &mut self,
@@ -422,6 +437,10 @@ pub(crate) trait InternalPassBuilder {
         desc: crate::graph::types::BufferDesc,
     ) -> BufferHandle;
     fn read_buffer_history(&mut self, name: &str) -> BufferHandle;
+
+    fn declare_image_history(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    fn declare_image_history_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    fn read_image_history(&mut self, name: &str) -> ImageHandle;
 
     fn import_buffer(&mut self, name: &str, physical: crate::graph::backend::BackendBuffer) -> BufferHandle;
 

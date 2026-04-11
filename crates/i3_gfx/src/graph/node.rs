@@ -94,7 +94,13 @@ pub struct PassRecorder<'a> {
 }
 
 impl<'a> PassRecorder<'a> {
-    fn declare_image_impl(&mut self, name: &str, desc: ImageDesc, is_output: bool) -> ImageHandle {
+    fn declare_image_impl(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        lifetime: SymbolLifetime,
+        is_output: bool,
+    ) -> ImageHandle {
         let index = self.storage.symbols.symbols.len() as u64;
         let id = SymbolId((self.storage.node_id << 32) | index);
         let actual_handle = ImageHandle(id);
@@ -103,7 +109,7 @@ impl<'a> PassRecorder<'a> {
             Symbol {
                 name: name.to_string(),
                 symbol_type: SymbolType::Image(desc),
-                lifetime: SymbolLifetime::Transient,
+                lifetime,
                 data: Some(Arc::new(actual_handle)),
                 is_output,
             },
@@ -219,11 +225,29 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
     }
 
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
-        self.declare_image_impl(name, desc, false)
+        self.declare_image_impl(name, desc, SymbolLifetime::Transient, false)
     }
 
     fn declare_image_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
-        self.declare_image_impl(name, desc, true)
+        self.declare_image_impl(name, desc, SymbolLifetime::Transient, true)
+    }
+
+    fn declare_image_history(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
+        self.declare_image_impl(name, desc, SymbolLifetime::TemporalHistory, false)
+    }
+
+    fn declare_image_history_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle {
+        self.declare_image_impl(name, desc, SymbolLifetime::TemporalHistory, true)
+    }
+
+    fn read_image_history(&mut self, name: &str) -> ImageHandle {
+        let history_name = format!("{}_History", name);
+        self.declare_image_impl(
+            &history_name,
+            ImageDesc::default(),
+            SymbolLifetime::TemporalHistory,
+            false,
+        )
     }
 
     fn declare_buffer(&mut self, name: &str, desc: BufferDesc) -> BufferHandle {

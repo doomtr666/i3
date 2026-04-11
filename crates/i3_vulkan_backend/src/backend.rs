@@ -603,6 +603,13 @@ impl RenderBackend for VulkanBackend {
         crate::window_context::poll_events(self)
     }
 
+    fn swapchain_image_count(&self, window: WindowHandle) -> usize {
+        self.windows
+            .get(&window.0)
+            .and_then(|w| w.swapchain.as_ref().map(|s| s.images.len()))
+            .unwrap_or(3)
+    }
+
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage {
         crate::resources::create_image(self, desc)
     }

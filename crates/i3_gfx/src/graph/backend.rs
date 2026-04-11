@@ -368,6 +368,9 @@ pub trait RenderBackend {
     /// Poll events from the windowing system.
     fn poll_events(&mut self) -> Vec<Event>;
 
+    /// Returns the number of images in the swapchain for the given window.
+    fn swapchain_image_count(&self, window: crate::graph::types::WindowHandle) -> usize;
+
     // --- Resource Management ---
     fn create_image(&mut self, desc: &ImageDesc) -> BackendImage;
     fn create_buffer(&mut self, desc: &BufferDesc) -> BackendBuffer;

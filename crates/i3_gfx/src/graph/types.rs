@@ -283,6 +283,12 @@ impl ImageDesc {
     }
 }
 
+impl Default for ImageDesc {
+    fn default() -> Self {
+        Self::new(0, 0, Format::Undefined)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ClearValue {
     Color(u32, u32, u32, u32),

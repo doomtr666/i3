@@ -31,6 +31,7 @@ pub struct CommonData {
     pub screen_height: u32,
     pub camera_pos: nalgebra_glm::Vec3,
     pub light_count: u32,
+    pub prev_view_projection: nalgebra_glm::Mat4,
 }
 
 /// Indices of IBL textures in the global bindless array.
@@ -139,6 +140,8 @@ pub struct DefaultRenderGraph {
     pub accel_struct_system: crate::passes::accel_struct::AccelStructSystem,
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
+
+    pub prev_view_projection: nalgebra_glm::Mat4,
 
     // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
@@ -314,6 +317,7 @@ impl DefaultRenderGraph {
             last_compiled_debug_channel: DebugChannel::Lit,
             graph_dirty: true,
             compiled_had_staging: false,
+            prev_view_projection: nalgebra_glm::identity(),
         };
 
         // 4. Initialization: Run pass-specific initialization logic
@@ -603,8 +607,9 @@ struct GpuLightData {
 }
 
 impl DefaultRenderGraph {
-    pub fn sync(&mut self, backend: &mut dyn RenderBackend, scene: &dyn SceneProvider) {
-        self.temporal_registry.advance_frame();
+    pub fn sync(&mut self, backend: &mut dyn RenderBackend, window: WindowHandle, scene: &dyn SceneProvider) {
+        let capacity = backend.swapchain_image_count(window);
+        self.temporal_registry.advance_frame(capacity);
 
         // Prefetch mesh descriptors (they need RenderBackend to resolve BDA)
         self.scene_mesh_descriptors = scene.iter_mesh_descriptors(backend).collect();
@@ -737,7 +742,7 @@ impl DefaultRenderGraph {
         dt: f32,
     ) -> Result<Option<u64>, i3_gfx::graph::types::GraphError> {
         // 1. GPU sync
-        self.sync(backend, scene);
+        self.sync(backend, window, scene);
 
         // 2. Build CommonData
         let view_projection = projection * view;
@@ -766,7 +771,10 @@ impl DefaultRenderGraph {
             screen_height,
             camera_pos,
             light_count,
+            prev_view_projection: self.prev_view_projection,
         };
+
+        self.prev_view_projection = view_projection;
 
         // When IBL is loaded, its extracted sun overrides any scene directional light.
         let (sun_dir, sun_int, sun_col) = if !self.ibl_images.is_empty() {
@@ -948,6 +956,7 @@ impl DefaultRenderGraph {
             screen_height,
             camera_pos,
             light_count,
+            prev_view_projection: self.prev_view_projection,
         };
 
         let channel = self.debug_channel;

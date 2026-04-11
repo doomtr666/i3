@@ -175,6 +175,10 @@ impl RenderBackend for NullBackend {
         Vec::new()
     }
 
+    fn swapchain_image_count(&self, _window: WindowHandle) -> usize {
+        3
+    }
+
     fn upload_buffer(
         &mut self,
         _handle: BackendBuffer,
