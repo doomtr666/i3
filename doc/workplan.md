@@ -73,6 +73,7 @@ graph TD
 | GFX-12 | i3_vulkan_backend | Medium | Implement `VkBufferView` for `UniformTexelBuffer` and `StorageTexelBuffer` support. |
 | GFX-13 | i3_gfx / i3_vulkan_backend | Medium | Support subresource views (mip/layer) via explicit `ImageViewDesc` in the Frame Graph. |
 | GFX-14 | i3_gfx / i3_vulkan_backend | Medium | GPU→CPU readback absent. `copy_image_to_buffer` manquant dans `PassContext` + implémentation `vkCmdCopyImageToBuffer`. `OutputKind::Readback` dans `types.rs` déclaré mais non implémenté dans le SyncPlanner (pas de barrier finale `TRANSFER_SRC_OPTIMAL`). Prérequis pour : bake IBL GPU-side, lightmaps, capture de frames, debug texture dumps. |
+| GFX-15 | i3_renderer | Medium | CommonData Uniform Buffer. Currently, every pass copies `CommonData` fields (matrices, screen size, camera pos) into push constants. Should be a single global UBO synchronized once per frame to reduce overhead and improve consistency. |
 
 ### 2.2 Renderer & Shading (i3_renderer)
 

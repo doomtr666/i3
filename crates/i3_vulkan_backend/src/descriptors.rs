@@ -273,6 +273,19 @@ pub fn update_descriptor_set(
                         };
 
                     if let Some(img) = backend.images.get(physical_id) {
+                        // Defensive check: ensure base_mip is within bounds of the physical image
+                        let safe_base_mip = if info.base_mip >= img.desc.mip_levels {
+                            tracing::debug!(
+                                "Validation Shadow: Requested base_mip ({}) is out of bounds for image with {} mips (Handle: {:?}). Clamping to 0.",
+                                info.base_mip,
+                                img.desc.mip_levels,
+                                info.image
+                            );
+                            0
+                        } else {
+                            info.base_mip
+                        };
+
                         let layout = match info.image_layout {
                             DescriptorImageLayout::General => vk::ImageLayout::GENERAL,
                             DescriptorImageLayout::ShaderReadOnlyOptimal => {
@@ -291,10 +304,10 @@ pub fn update_descriptor_set(
                         };
 
                         // Select the correct image view (main or subresource)
-                        let image_view = if info.base_mip == 0 && (info.mip_count == !0 || info.mip_count == img.desc.mip_levels) {
+                        let image_view = if safe_base_mip == 0 && (info.mip_count == !0 || info.mip_count == img.desc.mip_levels) {
                             img.view
                         } else {
-                            let key = (info.base_mip, info.mip_count);
+                            let key = (safe_base_mip, info.mip_count);
                             let mut views = img.subresource_views.lock().unwrap();
                             if let Some(&view) = views.get(&key) {
                                 view
@@ -312,7 +325,7 @@ pub fn update_descriptor_set(
                                     .format(img.format)
                                     .subresource_range(vk::ImageSubresourceRange {
                                         aspect_mask,
-                                        base_mip_level: info.base_mip,
+                                        base_mip_level: safe_base_mip,
                                         level_count: if info.mip_count == !0 { img.desc.mip_levels - info.base_mip } else { info.mip_count },
                                         base_array_layer: 0,
                                         layer_count: img.desc.array_layers.max(1),

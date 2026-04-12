@@ -29,13 +29,9 @@ struct GpuMeshDescriptor
     uint vertexStride;
     uint firstIndex;
     int vertexOffset;
-    float aabbMinX;
-    float aabbMinY;
-    float aabbMinZ;
+    float3 aabbMin;
     uint indexStride; // 2 = U16, 4 = U32 — must match GpuMeshDescriptor::index_stride in scene.rs
-    float aabbMaxX;
-    float aabbMaxY;
-    float aabbMaxZ;
+    float3 aabbMax;
     float _pad1;
 };
 
@@ -47,13 +43,9 @@ struct GpuInstanceData
     uint materialId;
     uint flags;
     uint _pad;
-    float worldAabbMinX;
-    float worldAabbMinY;
-    float worldAabbMinZ;
+    float3 worldAabbMin;
     float _pad2;
-    float worldAabbMaxX;
-    float worldAabbMaxY;
-    float worldAabbMaxZ;
+    float3 worldAabbMax;
     float _pad3;
 };
 

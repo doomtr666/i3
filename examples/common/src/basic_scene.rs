@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
 use i3_gfx::prelude::*;
-use i3_io::mesh::MeshAsset;
+use i3_io::mesh::{BoundingBox, MeshAsset};
 use i3_io::scene_asset::{LightType as AssetLightType, SceneAsset};
 use i3_renderer::scene::{
     GpuInstanceData, GpuMeshDescriptor, LightData, LightId, LightType, MaterialData, MaterialId,
@@ -31,7 +31,8 @@ pub struct BasicScene {
     next_object_id: u64,
     next_material_id: u32,
     next_light_id: u64,
-    bounds: i3_io::mesh::BoundingBox,
+    bounds: BoundingBox,
+    mesh_aabbs: Vec<BoundingBox>,
 }
 
 impl BasicScene {
@@ -49,7 +50,8 @@ impl BasicScene {
             next_object_id: 0,
             next_material_id: 0,
             next_light_id: 0,
-            bounds: i3_io::mesh::BoundingBox::empty(),
+            bounds: BoundingBox::empty(),
+            mesh_aabbs: Vec::new(),
         };
 
         // Add default material at index 0
@@ -82,6 +84,7 @@ impl BasicScene {
         vertices: &[u8],
         vertex_count: u32,
         indices: &[u16],
+        aabb: BoundingBox,
     ) -> u32 {
         let vb = backend.create_buffer(&BufferDesc {
             size: vertices.len() as u64,
@@ -116,6 +119,7 @@ impl BasicScene {
             index_type: IndexType::Uint16,
             stride: 48, // Match GBufferVertex [f32; 12]
         });
+        self.mesh_aabbs.push(aabb);
 
         let _ = vertex_count; // Reserved for future validation
         id
@@ -215,6 +219,10 @@ impl BasicScene {
             index_type: IndexType::Uint32,
             stride: 48,
         });
+        self.mesh_aabbs.push(BoundingBox {
+            min: [-0.5, -0.5, -0.5],
+            max: [0.5, 0.5, 0.5],
+        });
 
         id
     }
@@ -265,6 +273,10 @@ impl BasicScene {
             vertex_count: vertices.len() as u32,
             index_type: IndexType::Uint32,
             stride: 48,
+        });
+        self.mesh_aabbs.push(BoundingBox {
+            min: [-0.5, -0.5, -0.5],
+            max: [0.5, 0.5, 0.5],
         });
 
         id
@@ -344,6 +356,7 @@ impl BasicScene {
             index_type,
             stride: mesh_asset.header.vertex_stride,
         });
+        self.mesh_aabbs.push(mesh_asset.bounds);
 
         // Register UUID mapping
         self.mesh_uuid_to_index.insert(mesh_uuid, id);
@@ -548,9 +561,9 @@ impl SceneProvider for BasicScene {
                 vertex_stride: m.stride,
                 first_index: 0,
                 vertex_offset: 0,
-                aabb_min: [0.0; 3],
+                aabb_min: self.mesh_aabbs[i].min,
                 index_stride: 4,
-                aabb_max: [0.0; 3],
+                aabb_max: self.mesh_aabbs[i].max,
                 _pad1: 0.0,
             };
             (i as u32, desc)
@@ -565,17 +578,20 @@ impl SceneProvider for BasicScene {
     }
 
     fn iter_instances(&self) -> Box<dyn Iterator<Item = GpuInstanceData> + '_> {
-        Box::new(self.objects.iter().map(|(_, obj)| GpuInstanceData {
-            world_transform: obj.world_transform,
-            prev_transform: obj.prev_transform,
-            mesh_idx: obj.mesh_id,
-            material_id: obj.material_id,
-            flags: 0,
-            _pad: 0,
-            world_aabb_min: [0.0; 3],
-            _pad2: 0.0,
-            world_aabb_max: [0.0; 3],
-            _pad3: 0.0,
+        Box::new(self.objects.iter().map(|(_, obj)| {
+            let world_aabb = self.mesh_aabbs[obj.mesh_id as usize].transform(obj.world_transform.as_ref());
+            GpuInstanceData {
+                world_transform: obj.world_transform,
+                prev_transform: obj.prev_transform,
+                mesh_idx: obj.mesh_id,
+                material_id: obj.material_id,
+                flags: 0,
+                _pad: 0,
+                world_aabb_min: world_aabb.min,
+                _pad2: 0.0,
+                world_aabb_max: world_aabb.max,
+                _pad3: 0.0,
+            }
         }))
     }
 

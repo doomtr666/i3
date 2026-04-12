@@ -1021,11 +1021,12 @@ impl DefaultRenderGraph {
                 let common = builder.consume::<CommonData>("Common");
                 let w = common.screen_width;
                 let h = common.screen_height;
-                let mips = ((w.max(h) as f32).log2().floor() as u32) + 1;
+                let max_dim = w.max(h);
+                let mips = if max_dim > 0 { (31 - max_dim.leading_zeros()) + 1 } else { 1 };
                 (w, h, mips)
             };
 
-            builder.declare_image_output(
+            builder.declare_image_history_output(
                 "HiZPyramid",
                 ImageDesc {
                     width: hiz_w,

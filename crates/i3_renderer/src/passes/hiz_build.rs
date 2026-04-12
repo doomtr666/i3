@@ -68,6 +68,15 @@ impl RenderPass for HiZBuildPass {
         let depth_desc = builder.get_image_desc(depth_buffer);
         let mips = hiz_desc.mip_levels;
 
+        // Defensive check: ensure we don't exceed what Vulkan actually allows for this resolution
+        let max_dim = hiz_desc.width.max(hiz_desc.height);
+        let theoretical_max_mips = if max_dim > 0 { (31 - max_dim.leading_zeros()) + 1 } else { 1 };
+        let safe_mips = mips.min(theoretical_max_mips);
+
+        if mips != theoretical_max_mips {
+             tracing::warn!("HiZBuildPass: Descriptor mips ({}) differs from theoretical max ({}). Clamping to safe value.", mips, theoretical_max_mips);
+        }
+
         if let Some(blit) = self.blit_pipeline {
             builder.add_owned_pass(HiZBlitSubPass {
                 depth_buffer,
@@ -79,7 +88,7 @@ impl RenderPass for HiZBuildPass {
         }
 
         if let Some(reduce) = self.reduce_pipeline {
-            for mip in 0..(mips - 1) {
+            for mip in 0..(safe_mips.saturating_sub(1)) {
                 let src_w = (hiz_desc.width >> mip).max(1);
                 let src_h = (hiz_desc.height >> mip).max(1);
                 let dst_w = (src_w >> 1).max(1);

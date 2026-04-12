@@ -63,9 +63,12 @@ pub fn create_image(backend: &mut VulkanBackend, desc: &ImageDesc) -> BackendIma
 
     let (image, allocation) = unsafe {
         let allocator = device.allocator.lock().unwrap();
-        allocator
-            .create_image(&create_info, &allocation_info)
-            .expect(&format!("Failed to create image with extent {:?}", actual_extent))
+        let res = allocator
+            .create_image(&create_info, &allocation_info);
+        if let Ok((img, _)) = &res {
+            tracing::debug!("Vulkan Image Created - Extent: {}x{}, Mips: {}, Handle: {:?}", actual_extent.width, actual_extent.height, create_info.mip_levels, img);
+        }
+        res.expect(&format!("Failed to create image with extent {:?}", actual_extent))
     };
 
     // Create View
