@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-use crate::resource_arena::{PhysicalBuffer, PhysicalImage, PhysicalPipeline, ResourceArena};
+use crate::resource_arena::{
+    PhysicalAccelerationStructure, PhysicalBuffer, PhysicalImage, PhysicalPipeline, ResourceArena,
+};
 use crate::window_context::WindowContext;
 
 pub(crate) use crate::commands::{
@@ -64,7 +66,7 @@ pub struct VulkanBackend {
     pub dead_semaphores: Vec<(u64, u64, vk::Semaphore)>, // Frame, ID, Handle
     pub recycled_semaphores: Vec<vk::Semaphore>,
 
-    pub accel_structs: ResourceArena<crate::accel_struct::PhysicalAccelerationStructure>,
+    pub accel_structs: ResourceArena<PhysicalAccelerationStructure>,
     pub dead_accel_structs: Vec<(
         u64,
         vk::AccelerationStructureKHR,
@@ -1184,6 +1186,7 @@ impl RenderBackendInternal for VulkanBackend {
             current_pipeline_layout: vk::PipelineLayout::null(),
             current_bind_point: vk::PipelineBindPoint::GRAPHICS,
             pending_descriptor_sets: prepared.descriptor_sets.clone(),
+            is_structural: false,
         };
 
         // If pipeline is set, determine bind point and bind it
@@ -1237,6 +1240,13 @@ impl RenderBackendInternal for VulkanBackend {
         }
 
         pass.execute(&mut ctx, frame_data);
+        
+        // Skip purely structural nodes if they have no work to do (no barriers, no present).
+        let has_sync = !prepared.sync.pre_barriers.is_empty() || !prepared.sync.post_barriers.is_empty();
+        if ctx.is_structural && ctx.present_request.is_none() && !has_sync {
+            tracing::debug!("record_pass: skipping structural/empty pass '{}'", pass.name());
+            return (None, None, None);
+        }
 
         if !is_compute {
             if let PreparedDomain::Graphics {
@@ -1353,23 +1363,37 @@ impl Drop for VulkanBackend {
                     device.handle.destroy_descriptor_set_layout(dsl, None);
                 }
 
-                debug!("Destroying active buffers and allocations...");
                 {
                     let allocator = device.allocator.lock().unwrap();
-                    for (_id, physical) in self.buffers.iter_mut() {
-                        if let Some(alloc) = physical.allocation.as_mut() {
-                            allocator.destroy_buffer(physical.buffer, alloc);
+
+                    debug!("Destroying active acceleration structures...");
+                    for (_id, pas) in self.accel_structs.iter_mut() {
+                        if let Some(as_ext) = &self.accel_struct {
+                            if pas.handle != vk::AccelerationStructureKHR::null() {
+                                as_ext.destroy_acceleration_structure(pas.handle, None);
+                                pas.handle = vk::AccelerationStructureKHR::null();
+                            }
+                        }
+                        if let Some(mut alloc) = pas.allocation.take() {
+                            allocator.destroy_buffer(pas.buffer, &mut alloc);
                         }
                     }
-                }
 
-                debug!("Destroying active images and views...");
-                {
-                    let allocator = device.allocator.lock().unwrap();
+                    debug!("Destroying active buffers...");
+                    for (_id, physical) in self.buffers.iter_mut() {
+                        if let Some(mut alloc) = physical.allocation.take() {
+                            allocator.destroy_buffer(physical.buffer, &mut alloc);
+                        }
+                    }
+
+                    debug!("Destroying active images...");
                     for (_id, physical) in self.images.iter_mut() {
-                        if let Some(alloc) = physical.allocation.as_mut() {
+                        if let Some(mut alloc) = physical.allocation.take() {
                             // Destroy main view
-                            device.handle.destroy_image_view(physical.view, None);
+                            if physical.view != vk::ImageView::null() {
+                                device.handle.destroy_image_view(physical.view, None);
+                                physical.view = vk::ImageView::null();
+                            }
                             
                             // Destroy all subresource views (mips/layers)
                             let mut views = physical.subresource_views.lock().unwrap();
@@ -1377,17 +1401,11 @@ impl Drop for VulkanBackend {
                                 device.handle.destroy_image_view(view, None);
                             }
                             
-                            allocator.destroy_image(physical.image, alloc);
-                        } else {
-                            // This is likely a swapchain image, DO NOT destroy its view/image as it's owned elsewhere.
-                            debug!("Skipping destruction of external image {:?}", _id);
+                            allocator.destroy_image(physical.image, &mut alloc);
                         }
                     }
-                }
 
-                debug!("Destroying dead resources...");
-                {
-                    let allocator = device.allocator.lock().unwrap();
+                    debug!("Destroying dead resources...");
                     for (_, buffer, mut alloc) in self.dead_buffers.drain(..) {
                         allocator.destroy_buffer(buffer, &mut alloc);
                     }
@@ -1397,53 +1415,41 @@ impl Drop for VulkanBackend {
                         }
                         allocator.destroy_image(image, &mut alloc);
                     }
-                    if let Some(as_loader) = &self.accel_struct {
+                    if let Some(as_ext) = &self.accel_struct {
                         for (_, handle, buffer, mut alloc) in self.dead_accel_structs.drain(..) {
-                            as_loader.destroy_acceleration_structure(handle, None);
+                            if handle != vk::AccelerationStructureKHR::null() {
+                                as_ext.destroy_acceleration_structure(handle, None);
+                            }
                             allocator.destroy_buffer(buffer, &mut alloc);
                         }
                     }
-                    for (_, sampler) in self.dead_samplers.drain(..) {
-                        device.handle.destroy_sampler(sampler, None);
-                    }
-                    for (_, _, sem_handle) in self.dead_semaphores.drain(..) {
-                        device.handle.destroy_semaphore(sem_handle, None);
-                    }
                 }
 
-                debug!("Destroying acceleration structures...");
-                if let Some(as_loader) = &self.accel_struct {
-                    let allocator = device.allocator.lock().unwrap();
-                    for (_id, pas) in self.accel_structs.iter_mut() {
-                        as_loader.destroy_acceleration_structure(pas.handle, None);
-                        allocator.destroy_buffer(pas.buffer, &mut pas.allocation);
-                    }
+                debug!("Destroying samplers...");
+                for (_, &sampler) in self.samplers.iter() {
+                    device.handle.destroy_sampler(sampler, None);
+                }
+                for (_, sampler) in self.dead_samplers.drain(..) {
+                    device.handle.destroy_sampler(sampler, None);
                 }
 
                 debug!("Destroying semaphores...");
-                // Iterate over all remaining semaphores in the arena and destroy them
-                let semaphore_ids = self.semaphores.ids();
-                for id in semaphore_ids {
+                for id in self.semaphores.ids() {
                     self.destroy_semaphore_internal(id);
                 }
                 for &sem in &self.recycled_semaphores {
                     device.handle.destroy_semaphore(sem, None);
                 }
-                debug!("Destroying samplers...");
-                for (_, sampler) in self.samplers.iter() {
-                    device.handle.destroy_sampler(*sampler, None);
+                for (_, _, sem_handle) in self.dead_semaphores.drain(..) {
+                    device.handle.destroy_semaphore(sem_handle, None);
                 }
 
-                debug!("Destroying descriptor pool...");
+                debug!("Destroying descriptor pools...");
                 if self.static_descriptor_pool != vk::DescriptorPool::null() {
-                    device
-                        .handle
-                        .destroy_descriptor_pool(self.static_descriptor_pool, None);
+                    device.handle.destroy_descriptor_pool(self.static_descriptor_pool, None);
                 }
                 if self.bindless_set_layout != vk::DescriptorSetLayout::null() {
-                    device
-                        .handle
-                        .destroy_descriptor_set_layout(self.bindless_set_layout, None);
+                    device.handle.destroy_descriptor_set_layout(self.bindless_set_layout, None);
                 }
                 info!("Vulkan Backend shutdown complete.");
             }

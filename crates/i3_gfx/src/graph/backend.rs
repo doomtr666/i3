@@ -275,6 +275,10 @@ pub trait PassContext {
 
     fn map_buffer(&mut self, handle: crate::graph::types::BufferHandle) -> *mut u8;
     fn unmap_buffer(&mut self, handle: crate::graph::types::BufferHandle);
+
+    /// Internal: Mark the current pass as structural (no commands).
+    /// Called by the default implementation of RenderPass::execute.
+    fn mark_as_structural(&mut self);
 }
 
 /// Extension trait for [PassContext] to provide typed helpers.

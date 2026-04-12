@@ -573,7 +573,7 @@ impl DefaultRenderGraph {
                 intensity_scale: h.intensity_scale,
             };
 
-            tracing::info!(
+            tracing::debug!(
                 "IBL loaded: Sun intensity={}, dir={:?}, bindless indices: lut={} irr={} pref={} env={}",
                 h.sun.intensity,
                 h.sun.direction,
@@ -997,8 +997,6 @@ impl DefaultRenderGraph {
             // LightBuffer is owned here; mesh/instance/material/draw buffers are imported by their passes
             builder.import_buffer("LightBuffer", light_buffer_physical);
 
-            builder.publish("LinearSampler", self.linear_sampler);
-            builder.publish("NearestSampler", self.nearest_sampler);
 
             // 0. Sync CPU scene delta to GPU (imports MeshDescriptorBuffer, InstanceBuffer, MaterialBuffer)
             builder.add_pass(&mut self.sync_group);
@@ -1021,8 +1019,8 @@ impl DefaultRenderGraph {
             // 2b. Hi-Z Pyramid Generation
             let (hiz_w, hiz_h, hiz_mips) = {
                 let common = builder.consume::<CommonData>("Common");
-                let w = (common.screen_width / 2).next_power_of_two();
-                let h = (common.screen_height / 2).next_power_of_two();
+                let w = common.screen_width;
+                let h = common.screen_height;
                 let mips = ((w.max(h) as f32).log2().floor() as u32) + 1;
                 (w, h, mips)
             };

@@ -119,6 +119,7 @@ pub struct VulkanPassContext {
     pub current_pipeline_layout: vk::PipelineLayout,
     pub current_bind_point: vk::PipelineBindPoint,
     pub pending_descriptor_sets: Vec<(u32, Vec<DescriptorWrite>)>,
+    pub is_structural: bool,
 }
 
 impl VulkanPassContext {
@@ -210,6 +211,7 @@ impl VulkanPassContext {
 
 impl PassContext for VulkanPassContext {
     fn bind_pipeline(&mut self, pipeline: PipelineHandle) {
+
         let p = if let Some(p) = self.backend().pipeline_resources.get(pipeline.0.0) {
             p.clone()
         } else {
@@ -229,6 +231,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn bind_pipeline_raw(&mut self, pipeline: BackendPipeline) {
+
         let p = if let Some(p) = self.backend().pipeline_resources.get(pipeline.0) {
             p.clone()
         } else {
@@ -248,6 +251,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
+
         let physical_id =
             if let Some(&phy) = self.backend().external_buffer_to_physical.get(&handle.0.0) {
                 phy
@@ -265,6 +269,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn bind_index_buffer(&mut self, handle: BufferHandle, index_type: IndexType) {
+
         let physical_id =
             if let Some(&phy) = self.backend().external_buffer_to_physical.get(&handle.0.0) {
                 phy
@@ -286,6 +291,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn bind_descriptor_set(&mut self, set_index: u32, handle: DescriptorSetHandle) {
+
         if let Some(set) = self.backend().descriptor_sets.lock().unwrap().get(handle.0) {
             unsafe {
                 self.device.handle.cmd_bind_descriptor_sets(
@@ -301,6 +307,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
+
         // Engine Convention: Vulkan uses Negative Viewport to flip Y-Up → Y-Down.
         // (see engine_conventions.md §2). The caller passes logical (Y-Up) values;
         // the backend transparently applies the flip.
@@ -320,6 +327,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32) {
+
         let scissor = vk::Rect2D {
             offset: vk::Offset2D { x, y },
             extent: vk::Extent2D { width, height },
@@ -330,6 +338,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn draw(&mut self, vertex_count: u32, first_vertex: u32) {
+
         unsafe {
             self.device
                 .handle
@@ -338,6 +347,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32) {
+
         unsafe {
             self.device.handle.cmd_draw_indexed(
                 self.cmd,
@@ -351,6 +361,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn push_bytes(&mut self, stages: ShaderStageFlags, offset: u32, data: &[u8]) {
+
         unsafe {
             self.device.handle.cmd_push_constants(
                 self.cmd,
@@ -363,6 +374,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn dispatch(&mut self, x: u32, y: u32, z: u32) {
+
         unsafe {
             let device = self.backend().get_device();
             device.handle.cmd_dispatch(self.cmd, x, y, z);
@@ -378,6 +390,8 @@ impl PassContext for VulkanPassContext {
         max_draw_count: u32,
         stride: u32,
     ) {
+
+
         let indirect_buf = self.backend().resolve_buffer(indirect_buffer);
         let count_buf = self.backend().resolve_buffer(count_buffer);
 
@@ -406,6 +420,7 @@ impl PassContext for VulkanPassContext {
         max_draw_count: u32,
         stride: u32,
     ) {
+
         let indirect_buf = self.backend().resolve_buffer(indirect_buffer);
         let count_buf = self.backend().resolve_buffer(count_buffer);
 
@@ -426,6 +441,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn clear_buffer(&mut self, buffer: BufferHandle, clear_value: u32) {
+
         let physical_id =
             if let Some(&phy) = self.backend().external_buffer_to_physical.get(&buffer.0.0) {
                 phy
@@ -463,6 +479,7 @@ impl PassContext for VulkanPassContext {
     }
 
     fn build_blas(&mut self, handle: BackendAccelerationStructure, update: bool) {
+
         crate::accel_struct::build_blas(self, handle, update);
     }
 
@@ -472,6 +489,7 @@ impl PassContext for VulkanPassContext {
         instances: &[TlasInstanceDesc],
         update: bool,
     ) {
+
         crate::accel_struct::build_tlas(self, handle, instances, update);
     }
 
@@ -483,6 +501,7 @@ impl PassContext for VulkanPassContext {
         dst_offset: u64,
         size: u64,
     ) {
+
         let src_buf = self.backend().resolve_buffer(src);
         let dst_buf = self.backend().resolve_buffer(dst);
 
@@ -572,6 +591,10 @@ impl PassContext for VulkanPassContext {
                 allocator.unmap_memory(alloc);
             }
         }
+    }
+
+    fn mark_as_structural(&mut self) {
+        self.is_structural = true;
     }
 }
 
@@ -975,6 +998,7 @@ pub fn record_pass(
         current_pipeline_layout: vk::PipelineLayout::null(),
         current_bind_point: default_bind_point,
         pending_descriptor_sets: prepared.descriptor_sets.clone(),
+        is_structural: false,
     };
 
     // If pipeline is set, determine bind point and bind it
@@ -1026,6 +1050,13 @@ pub fn record_pass(
     }
 
     pass.execute(&mut ctx, frame_data);
+
+    // Skip purely structural nodes if they have no work to do (no barriers, no present).
+    let has_sync = !prepared.sync.pre_barriers.is_empty() || !prepared.sync.post_barriers.is_empty();
+    if ctx.is_structural && ctx.present_request.is_none() && !has_sync {
+        tracing::debug!("record_pass: skipping structural/empty pass '{}'", pass.name());
+        return (None, None, None);
+    }
 
     if !is_compute {
         if let PreparedDomain::Graphics {

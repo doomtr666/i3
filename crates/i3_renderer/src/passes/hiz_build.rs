@@ -1,9 +1,12 @@
-use i3_gfx::graph::pass::{PassBuilder, RenderPass};
-use i3_gfx::graph::backend::{PassContext, BackendPipeline, DescriptorImageLayout, DescriptorWrite, RenderBackend};
-use i3_gfx::graph::types::*;
-use i3_gfx::graph::pipeline::ShaderStageFlags;
-use i3_gfx::graph::compiler::FrameBlackboard;
 use bytemuck::{Pod, Zeroable};
+use i3_gfx::graph::backend::{
+    BackendPipeline, DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, PassContext,
+    RenderBackend,
+};
+use i3_gfx::graph::compiler::FrameBlackboard;
+use i3_gfx::graph::pass::{PassBuilder, RenderPass};
+use i3_gfx::graph::pipeline::ShaderStageFlags;
+use i3_gfx::graph::types::*;
 use std::sync::Arc;
 
 #[repr(C)]
@@ -16,7 +19,6 @@ struct HiZPushConstants {
 }
 
 /// Root pass for Hi-Z Pyramid construction.
-/// This pass acts as a coordinator, adding sub-passes for each pyramid level.
 pub struct HiZBuildPass {
     blit_pipeline: Option<BackendPipeline>,
     reduce_pipeline: Option<BackendPipeline>,
@@ -32,25 +34,29 @@ impl HiZBuildPass {
 }
 
 impl RenderPass for HiZBuildPass {
-    fn name(&self) -> &str { "HiZBuild" }
+    fn name(&self) -> &str {
+        "HiZBuild"
+    }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-        
-        // Load Blit Pipeline
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("hiz_build_blit").wait_loaded() {
-            self.blit_pipeline = Some(backend.create_compute_pipeline_from_baked(
-                &asset.reflection_data,
-                &asset.bytecode,
-            ));
+
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("hiz_build_blit")
+            .wait_loaded()
+        {
+            self.blit_pipeline = Some(
+                backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
+            );
         }
 
-        // Load Reduce Pipeline
-        if let Ok(asset) = loader.load::<i3_io::pipeline_asset::PipelineAsset>("hiz_build_reduce").wait_loaded() {
-            self.reduce_pipeline = Some(backend.create_compute_pipeline_from_baked(
-                &asset.reflection_data,
-                &asset.bytecode,
-            ));
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("hiz_build_reduce")
+            .wait_loaded()
+        {
+            self.reduce_pipeline = Some(
+                backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
+            );
         }
     }
 
@@ -89,8 +95,6 @@ impl RenderPass for HiZBuildPass {
             }
         }
     }
-
-    fn execute(&self, _ctx: &mut dyn PassContext, _frame: &FrameBlackboard) {}
 }
 
 struct HiZBlitSubPass {
@@ -102,16 +106,18 @@ struct HiZBlitSubPass {
 }
 
 impl RenderPass for HiZBlitSubPass {
-    fn name(&self) -> &str { "HiZBlit" }
+    fn name(&self) -> &str {
+        "HiZBlit"
+    }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
         builder.read_image(self.depth_buffer, ResourceUsage::SHADER_READ);
         builder.write_image(self.hiz_pyramid, ResourceUsage::SHADER_WRITE);
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext, _frame: &FrameBlackboard) {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
         ctx.bind_pipeline_raw(self.pipeline);
-        
+
         let pc = HiZPushConstants {
             src_size: self.src_size,
             hiz_size: self.dst_size,
@@ -120,10 +126,29 @@ impl RenderPass for HiZBlitSubPass {
         };
         ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
 
-        let descriptor_set = ctx.create_descriptor_set(self.pipeline, 0, &[
-            DescriptorWrite::sampled_image(0, 0, self.depth_buffer, DescriptorImageLayout::ShaderReadOnlyOptimal),
-            DescriptorWrite::storage_image_mip(1, 0, self.hiz_pyramid, DescriptorImageLayout::General, 0),
-        ]);
+        // Note: BindlessSet is on Set 2, but not needed here as we use .Load()
+        let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
+        ctx.bind_descriptor_set(2, bindless_set);
+
+        let descriptor_set = ctx.create_descriptor_set(
+            self.pipeline,
+            0,
+            &[
+                DescriptorWrite::sampled_image(
+                    0,
+                    0,
+                    self.depth_buffer,
+                    DescriptorImageLayout::ShaderReadOnlyOptimal,
+                ),
+                DescriptorWrite::storage_image_mip(
+                    1,
+                    0,
+                    self.hiz_pyramid,
+                    DescriptorImageLayout::General,
+                    0,
+                ),
+            ],
+        );
         ctx.bind_descriptor_set(0, descriptor_set);
 
         let groups_x = (self.dst_size[0] + 7) / 8;
@@ -141,14 +166,16 @@ struct HiZReduceSubPass {
 }
 
 impl RenderPass for HiZReduceSubPass {
-    fn name(&self) -> &str { "HiZReduce" }
+    fn name(&self) -> &str {
+        "HiZReduce"
+    }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
         builder.read_image(self.hiz_pyramid, ResourceUsage::SHADER_READ);
         builder.write_image(self.hiz_pyramid, ResourceUsage::SHADER_WRITE);
     }
 
-    fn execute(&self, ctx: &mut dyn PassContext, _frame: &FrameBlackboard) {
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
         ctx.bind_pipeline_raw(self.pipeline);
 
         let pc = HiZPushConstants {
@@ -159,10 +186,31 @@ impl RenderPass for HiZReduceSubPass {
         };
         ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
 
-        let descriptor_set = ctx.create_descriptor_set(self.pipeline, 0, &[
-            DescriptorWrite::sampled_image_mip(0, 0, self.hiz_pyramid, DescriptorImageLayout::General, self.src_mip, 1),
-            DescriptorWrite::storage_image_mip(1, 0, self.hiz_pyramid, DescriptorImageLayout::General, self.src_mip + 1),
-        ]);
+        // Bind bindless set for future-proofing even if Load doesn't need it
+        let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
+        ctx.bind_descriptor_set(2, bindless_set);
+
+        let descriptor_set = ctx.create_descriptor_set(
+            self.pipeline,
+            0,
+            &[
+                DescriptorWrite::sampled_image_mip(
+                    0,
+                    0,
+                    self.hiz_pyramid,
+                    DescriptorImageLayout::General,
+                    self.src_mip,
+                    1,
+                ),
+                DescriptorWrite::storage_image_mip(
+                    1,
+                    0,
+                    self.hiz_pyramid,
+                    DescriptorImageLayout::General,
+                    self.src_mip + 1,
+                ),
+            ],
+        );
         ctx.bind_descriptor_set(0, descriptor_set);
 
         let groups_x = (self.dst_size[0] + 7) / 8;

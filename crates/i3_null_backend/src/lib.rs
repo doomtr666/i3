@@ -493,6 +493,10 @@ impl<'a> PassContext for NullPassContext<'a> {
         }
     }
 
+    fn mark_as_structural(&mut self) {
+        info!(pass = %self.pass_name, "MARK_AS_STRUCTURAL");
+    }
+
     fn bind_vertex_buffer(&mut self, binding: u32, handle: BufferHandle) {
         info!(pass = %self.pass_name, binding, ?handle, "BIND_VERTEX_BUFFER");
         if !self.allocated_buffers.contains(&handle.0.0) {

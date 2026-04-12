@@ -2,7 +2,7 @@ use crate::backend::VulkanBackend;
 use crate::commands::VulkanPassContext;
 use ash::vk;
 use i3_gfx::graph::backend::*;
-use i3_gfx::graph::types::{BufferDesc, BufferUsageFlags, MemoryType};
+use i3_gfx::graph::types::{AccelerationStructureDesc, BufferDesc, BufferUsageFlags, MemoryType};
 use vk_mem::Alloc;
 
 /// Allocates a buffer with a guaranteed minimum address alignment via VMA.
@@ -60,13 +60,7 @@ fn create_scratch_buffer(ctx: &mut VulkanPassContext, size: u64) -> BackendBuffe
     }, alignment)
 }
 
-pub struct PhysicalAccelerationStructure {
-    pub handle: vk::AccelerationStructureKHR,
-    pub buffer: vk::Buffer,
-    pub allocation: vk_mem::Allocation,
-    pub address: u64,
-    pub build_info: Option<BlasCreateInfo>, // Store for BLAS rebuilds
-}
+use crate::resource_arena::{PhysicalAccelerationStructure};
 
 pub fn create_blas(
     backend: &mut VulkanBackend,
@@ -186,7 +180,7 @@ pub fn create_blas(
     let physical = PhysicalAccelerationStructure {
         handle,
         buffer,
-        allocation,
+        allocation: Some(allocation),
         address,
         build_info: Some(BlasCreateInfo {
             geometries: info
@@ -206,6 +200,10 @@ pub fn create_blas(
                 .collect(),
             flags: info.flags,
         }),
+        desc: AccelerationStructureDesc {
+            size: size_info.acceleration_structure_size,
+        },
+        is_transient: false,
     };
 
     let id = backend.accel_structs.insert(physical);
@@ -214,12 +212,14 @@ pub fn create_blas(
 
 pub fn destroy_blas(backend: &mut VulkanBackend, handle: BackendAccelerationStructure) {
     if let Some(pas) = backend.accel_structs.remove(handle.0) {
-        backend.dead_accel_structs.push((
-            backend.frame_count,
-            pas.handle,
-            pas.buffer,
-            pas.allocation,
-        ));
+        if let Some(alloc) = pas.allocation {
+            backend.dead_accel_structs.push((
+                backend.frame_count,
+                pas.handle,
+                pas.buffer,
+                alloc,
+            ));
+        }
     }
 }
 
@@ -310,9 +310,13 @@ pub fn create_tlas(
     let physical = PhysicalAccelerationStructure {
         handle,
         buffer,
-        allocation,
+        allocation: Some(allocation),
         address,
         build_info: None,
+        desc: AccelerationStructureDesc {
+            size: size_info.acceleration_structure_size,
+        },
+        is_transient: false,
     };
 
     let id = backend.accel_structs.insert(physical);

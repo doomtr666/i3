@@ -410,7 +410,9 @@ pub trait RenderPass: Any + Send + Sync {
     fn declare(&mut self, builder: &mut PassBuilder);
 
     /// Record GPU commands (optional for purely grouping nodes).
-    fn execute(&self, _ctx: &mut dyn PassContext, _frame: &FrameBlackboard) {}
+    fn execute(&self, ctx: &mut dyn PassContext, _frame: &FrameBlackboard) {
+        ctx.mark_as_structural();
+    }
 }
 
 /// Internal trait to hide implementation details from the public PassBuilder API.
