@@ -53,6 +53,20 @@ impl SlangCompiler {
         Ok(Self { global_session })
     }
 
+    fn create_options() -> slang::CompilerOptions {
+        if cfg!(debug_assertions) {
+            slang::CompilerOptions::default()
+                .optimization(slang::OptimizationLevel::None)
+                .debug_information(slang::DebugInfoLevel::Maximal)
+                .matrix_layout_column(true)
+        } else {
+            slang::CompilerOptions::default()
+                .optimization(slang::OptimizationLevel::High)
+                .debug_information(slang::DebugInfoLevel::None)
+                .matrix_layout_column(true)
+        }
+    }
+
     /// Extract reflection data from linked program
     fn extract_reflection(
         &self,
@@ -297,8 +311,9 @@ impl SlangCompiler {
                         slang::BindingType::Sampler => BindingType::Sampler,
                         slang::BindingType::TypedBuffer => BindingType::UniformTexelBuffer,
                         slang::BindingType::MutableTypedBuffer => BindingType::StorageTexelBuffer,
-                        slang::BindingType::RawBuffer
-                        | slang::BindingType::MutableRawBuffer => BindingType::StorageBuffer,
+                        slang::BindingType::RawBuffer | slang::BindingType::MutableRawBuffer => {
+                            BindingType::StorageBuffer
+                        }
                         slang::BindingType::RayTracingAccelerationStructure => {
                             BindingType::AccelerationStructure
                         }
@@ -344,9 +359,7 @@ impl SlangCompiler {
         }
 
         // Configure compiler options
-        let session_options = slang::CompilerOptions::default()
-            .optimization(slang::OptimizationLevel::High)
-            .matrix_layout_column(true);
+        let session_options = Self::create_options();
 
         // Configure target
         let target_desc = slang::TargetDesc::default()
@@ -439,7 +452,8 @@ impl SlangCompiler {
         target: ShaderTarget,
         search_paths: &[&str],
     ) -> Result<ShaderModule, String> {
-        let mut final_search_paths: Vec<String> = search_paths.iter().map(|s| s.to_string()).collect();
+        let mut final_search_paths: Vec<String> =
+            search_paths.iter().map(|s| s.to_string()).collect();
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 final_search_paths.push(exe_dir.join("shaders").to_string_lossy().to_string());
@@ -447,12 +461,13 @@ impl SlangCompiler {
         }
         final_search_paths.push("crates/i3_renderer/assets/shaders".to_string());
 
-        let search_path_cstrings: Vec<_> = final_search_paths.iter().map(|p| std::ffi::CString::new(p.as_str()).unwrap()).collect();
+        let search_path_cstrings: Vec<_> = final_search_paths
+            .iter()
+            .map(|p| std::ffi::CString::new(p.as_str()).unwrap())
+            .collect();
         let search_path_ptrs: Vec<_> = search_path_cstrings.iter().map(|s| s.as_ptr()).collect();
 
-        let session_options = slang::CompilerOptions::default()
-            .optimization(slang::OptimizationLevel::High)
-            .matrix_layout_column(true);
+        let session_options = Self::create_options();
 
         let target_desc = slang::TargetDesc::default()
             .format(target.to_slang_target())
@@ -464,29 +479,54 @@ impl SlangCompiler {
             .options(&session_options);
 
         let session = self.global_session.create_session(&session_desc).unwrap();
-        let module = session.load_module(module_name).map_err(|e| format!("Module {} load failed: {}", module_name, e))?;
+        let module = session
+            .load_module(module_name)
+            .map_err(|e| format!("Module {} load failed: {}", module_name, e))?;
 
-        let entry_point = module.find_entry_point_by_name(entry_point_name)
-            .ok_or_else(|| format!("Entry point {} not found in module {}", entry_point_name, module_name))?;
+        let entry_point = module
+            .find_entry_point_by_name(entry_point_name)
+            .ok_or_else(|| {
+                format!(
+                    "Entry point {} not found in module {}",
+                    entry_point_name, module_name
+                )
+            })?;
 
         let components = [module.into(), entry_point.into()];
-        let program = session.create_composite_component_type(&components).unwrap();
+        let program = session
+            .create_composite_component_type(&components)
+            .unwrap();
         let linked = program.link().map_err(|e| format!("Link failed: {}", e))?;
 
         let reflection = self.extract_reflection(&linked)?;
-        let bytecode = linked.target_code(0).map_err(|e| format!("Target code failed: {}", e))?.as_slice().to_vec();
+        let bytecode = linked
+            .target_code(0)
+            .map_err(|e| format!("Target code failed: {}", e))?
+            .as_slice()
+            .to_vec();
 
-        let stages = reflection.entry_points.iter().map(|ep| {
-             let stage = match ep.stage.as_str() {
-                "vertex" => ShaderStageFlags::Vertex,
-                "fragment" => ShaderStageFlags::Fragment,
-                "compute" => ShaderStageFlags::Compute,
-                _ => ShaderStageFlags::Compute,
-            };
-            ShaderStageInfo { stage, entry_point: ep.name.clone() }
-        }).collect();
+        let stages = reflection
+            .entry_points
+            .iter()
+            .map(|ep| {
+                let stage = match ep.stage.as_str() {
+                    "vertex" => ShaderStageFlags::Vertex,
+                    "fragment" => ShaderStageFlags::Fragment,
+                    "compute" => ShaderStageFlags::Compute,
+                    _ => ShaderStageFlags::Compute,
+                };
+                ShaderStageInfo {
+                    stage,
+                    entry_point: ep.name.clone(),
+                }
+            })
+            .collect();
 
-        Ok(ShaderModule { bytecode, stages, reflection })
+        Ok(ShaderModule {
+            bytecode,
+            stages,
+            reflection,
+        })
     }
 
     /// Compile Slang shader from file
@@ -533,9 +573,7 @@ impl SlangCompiler {
         let search_path_ptrs: Vec<_> = search_path_cstrings.iter().map(|s| s.as_ptr()).collect();
 
         // Configure compiler options
-        let session_options = slang::CompilerOptions::default()
-            .optimization(slang::OptimizationLevel::High)
-            .matrix_layout_column(true);
+        let session_options = Self::create_options();
 
         // Configure target
         let target_desc = slang::TargetDesc::default()

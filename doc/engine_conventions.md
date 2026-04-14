@@ -10,10 +10,12 @@ The engine logic (Gameplay, Physics, Camera) operates in a unified space regardl
 - **Handedness:** **Right-Handed (RH)**.
 - **Up Axis:** **+Y Up**.
 - **Forward Axis:** **-Z Forward** (Standard GL/Mathematic convention).
-- **Z Range:** **[0, 1]** (Zero to One).
-    - 0 = Near Plane.
-    - 1 = Far Plane.
-    - *Note: This matches modern APIs (Vulkan, DX12) directly.*
+- **Z Range:** **[0, 1]** (Zero to One), **Reverse-Z**.
+    - 1.0 = Near Plane (closest to camera).
+    - 0.0 = Far Plane (furthest from camera).
+    - *Depth buffer clear value: 0.0 (far = background).*
+    - *Depth test: GREATER (larger value = closer to camera wins).*
+    - *Benefit: floating-point precision concentrated near the camera where it matters most.*
 - **Matrix Storage:** **Column-Major**.
     - $v' = P \cdot V \cdot M \cdot v$ (Pre-multiplication).
     - Memory: `[col0, col1, col2, col3]`.
@@ -79,10 +81,18 @@ Legacy GL differs in Z-Range [-1, 1]. Modern GL (4.5+) resolves this.
 | **System** | Right-Handed | RH | RH | RH |
 | **Up Axis** | +Y | -Y (Clip) | +Y (Clip) | +Y (Clip) |
 | **Forward** | -Z | +Z (Clip) | +Z (Clip) | -Z (Clip) |
-| **Z Range** | [0, 1] | [0, 1] | [0, 1] | [0, 1] (ClipControl) |
+| **Z Range** | [0,1] Reverse-Z | [0,1] Reverse-Z | [0,1] Reverse-Z | [0,1] Reverse-Z (ClipControl) |
 | **Winding** | CCW (Fixed) | **CW** (Compensated) | **CCW** (Native) | **CCW** |
 | **Viewport** | N/A | `height = -h` | `height = +h` | `height = +h` |
 | **Matrices** | Column-Major | Column-Major | Column-Major | Column-Major |
+
+### Reverse-Z Notes
+- Projection matrix: use `perspective_rh_zo(fov, aspect, far, near)` (swap near/far) **or** a dedicated reverse-Z matrix.
+- Hi-Z pyramid: **MAX** reduction — stores the highest (= closest) depth per region.
+- In compute shaders (e.g. occlusion culling), when converting clip coords to Hi-Z UV:
+  - `uv.xy = clip.xy * 0.5 + 0.5`
+  - On Vulkan with negative viewport (Y-Up): **flip Y** → `uv.y = 1.0 - uv.y`
+  - On DX12/GL with standard viewport: no Y flip needed.
 
 ### Shader Reference (Slang/HLSL)
 ```hlsl

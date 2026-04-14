@@ -1,0 +1,29 @@
+PipelineConfig(
+    name: "debug_draw",
+    shader: Path("../shaders/debug_draw.slang"),
+    graphics: Some(GraphicsConfig(
+        topology: LineList,
+        rasterization: (
+            cull_mode: None,
+        ),
+        depth_stencil: (
+            depth_test_enable: false,
+            depth_write_enable: false,
+        ),
+        depth_stencil_format: None,
+        targets: [
+            (
+                format: B8G8R8A8_SRGB,
+                blend: Some((
+                    src_color_factor: SrcAlpha,
+                    dst_color_factor: OneMinusSrcAlpha,
+                    color_op: Add,
+                    src_alpha_factor: One,
+                    dst_alpha_factor: Zero,
+                    alpha_op: Add,
+                )),
+            ),
+        ],
+        vertex_layout: None,
+    ))
+)

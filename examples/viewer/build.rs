@@ -26,6 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let normal_tangent_src = manifest_path.join("../../assets/gltf-sample-assets/Models/NormalTangentTest/glTF/NormalTangentTest.gltf");
     let normal_tangent_mirror_src = manifest_path.join("../../assets/gltf-sample-assets/Models/NormalTangentMirrorTest/glTF/NormalTangentMirrorTest.gltf");
 
+    let culling_test_src = manifest_path.join("../../assets/test/culling.glb");
+
     BundleBaker::new("viewer_scenes")?
         .with_output_dir(target_dir)
         .add_asset(&helmet_src, AssimpImporter::new())
@@ -34,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_asset(&bistro_int_src, AssimpImporter::new())
         .add_asset(&normal_tangent_src, AssimpImporter::new())
         .add_asset(&normal_tangent_mirror_src, AssimpImporter::new())
+        .add_asset(&culling_test_src, AssimpImporter::new())
         .execute()?;
 
     // Copy shaders to target directory

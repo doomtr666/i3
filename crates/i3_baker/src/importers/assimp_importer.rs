@@ -65,9 +65,19 @@ pub struct ExtractedMesh {
     pub material_index: Option<usize>,
 }
 
+/// One (mesh_index, world_transform) pair collected from the Assimp node tree.
+/// Multiple instances may reference the same mesh_index with different transforms.
+#[derive(Debug, Clone)]
+pub struct MeshInstance {
+    pub mesh_idx: usize,
+    /// Row-major 4×4 world transform (same layout as `glm_to_array` output).
+    pub world_transform: [[f32; 4]; 4],
+}
+
 pub struct AssimpScene {
     pub source_path: PathBuf,
     pub meshes: Vec<ExtractedMesh>,
+    pub instances: Vec<MeshInstance>,
     pub materials: Vec<ExtractedMaterial>,
     pub embedded_textures: Vec<Vec<u8>>,
     pub mesh_count: usize,
@@ -128,20 +138,16 @@ impl Importer for AssimpImporter {
             .unwrap_or_else(|_| source_path.to_path_buf());
         let path_str = clean_path.to_string_lossy();
 
-        // Optimized flags for i3 engine:
-        // - TRIANGULATE: ensure we only have triangles
-        // - CALC_TANGENT_SPACE: required for normal mapping
-        // - JOIN_IDENTICAL_VERTICES: optimize mesh data
-        // - SORT_BY_PTYPE: remove non-triangle primitives
-        // - MAKE_LEFT_HANDED: convert to Y-up left-handed system (Vulkan/i3 standard)
-        // - FLIP_UVS: match our texture coordinate system
+        // Flags for i3 engine.
+        // NOTE: PRE_TRANSFORM_VERTICES is intentionally NOT used — it merges all meshes
+        // of the same material into one giant mesh, destroying instancing information.
+        // Instead we walk the node tree to collect (mesh_idx, world_transform) pairs.
         let scene = Scene::from_file_with_flags(
             path_str.as_ref(),
             PostProcessSteps::CALC_TANGENT_SPACE
                 | PostProcessSteps::TRIANGULATE
                 | PostProcessSteps::JOIN_IDENTICAL_VERTICES
                 | PostProcessSteps::SORT_BY_PTYPE
-                | PostProcessSteps::PRE_TRANSFORM_VERTICES
                 | PostProcessSteps::FLIP_UVS
                 | PostProcessSteps::FLIP_WINDING_ORDER,
         )
@@ -149,6 +155,12 @@ impl Importer for AssimpImporter {
 
         let materials = extract_materials(&scene, source_path);
         let meshes = extract_meshes(&scene);
+
+        // Walk the node tree to collect all mesh instances with their world transforms.
+        let mut instances = Vec::new();
+        if let Some(root) = scene.root_node() {
+            collect_instances(root, &Mat4::identity(), &mut instances);
+        }
 
         let mut embedded_textures = Vec::new();
         for tex in scene.textures() {
@@ -178,6 +190,7 @@ impl Importer for AssimpImporter {
         Ok(Box::new(AssimpScene {
             source_path: source_path.to_path_buf(),
             meshes,
+            instances,
             materials,
             embedded_textures,
             mesh_count,
@@ -697,28 +710,44 @@ impl Extractor for SceneExtractor {
         let file_stem = assimp_data.source_path.file_stem().unwrap().to_string_lossy();
         let mut scene_bounds = BoundingBox::empty();
 
-        for (mesh_idx, mesh_data) in assimp_data.meshes.iter().enumerate() {
-            let mesh_name = format!("{}_mesh_{}", file_stem, mesh_idx);
-            let mesh_id = Uuid::new_v5(&namespace, mesh_name.as_bytes());
-            let mesh_ref_index = mesh_refs.len() as u32;
-            mesh_refs.push(mesh_id);
+        // Map Assimp mesh_idx → index in mesh_refs (deduplication: one mesh asset shared
+        // by all instances referencing the same mesh_idx).
+        let mut mesh_ref_map: HashMap<usize, u32> = HashMap::new();
 
-            let name = format!("mesh_{}", mesh_idx);
+        for (inst_idx, instance) in assimp_data.instances.iter().enumerate() {
+            let mesh_idx = instance.mesh_idx;
+            if mesh_idx >= assimp_data.meshes.len() { continue; }
+
+            // Deduplicate: reuse existing mesh_ref entry if already seen.
+            let mesh_ref_index = if let Some(&idx) = mesh_ref_map.get(&mesh_idx) {
+                idx
+            } else {
+                let mesh_name = format!("{}_mesh_{}", file_stem, mesh_idx);
+                let mesh_id = Uuid::new_v5(&namespace, mesh_name.as_bytes());
+                let idx = mesh_refs.len() as u32;
+                mesh_refs.push(mesh_id);
+                mesh_ref_map.insert(mesh_idx, idx);
+                idx
+            };
+
+            let name = format!("inst_{}", inst_idx);
             let name_offset = string_table.len() as u32;
             string_table.extend_from_slice(name.as_bytes());
             string_table.push(0);
 
             objects.push(ObjectInstance {
-                transform: glm_to_array(&Mat4::identity()),
+                transform: instance.world_transform,
                 mesh_ref_index,
                 skeleton_ref_index: u32::MAX,
                 name_offset,
                 _reserved: [0u32; 3],
             });
 
+            // Accumulate scene bounds: transform the local AABB into world space.
+            let mesh_data = &assimp_data.meshes[mesh_idx];
             let mesh_format = if mesh_data.has_uvs { VertexFormat::POSITION_NORMAL_UV_TANGENT } else { VertexFormat::POSITION_NORMAL_COLOR };
-            let mesh_bounds = calculate_bounds(&mesh_data.vertices, mesh_format.stride() as usize / 4);
-            scene_bounds.merge(&mesh_bounds);
+            let local_bounds = calculate_bounds(&mesh_data.vertices, mesh_format.stride() as usize / 4);
+            scene_bounds.merge(&local_bounds.transform(&instance.world_transform));
         }
 
         let header = SceneHeader {
@@ -742,6 +771,7 @@ impl Extractor for SceneExtractor {
         for id in &mesh_refs { binary.extend_from_slice(id.as_bytes()); }
         binary.extend_from_slice(&string_table);
 
+        eprintln!("[baker] SceneExtractor: {} objects, {} unique mesh refs -> '{}_scene'", objects.len(), mesh_refs.len(), file_stem);
         Ok(vec![BakeOutput {
             asset_id: Uuid::new_v5(&namespace, format!("{}_scene", file_stem).as_bytes()),
             asset_type: SCENE_TYPE_UUID,
@@ -752,7 +782,36 @@ impl Extractor for SceneExtractor {
 }
 
 fn glm_to_array(m: &Mat4) -> [[f32; 4]; 4] {
-    let mut r = [[0.0; 4]; 4];
-    for i in 0..4 { for j in 0..4 { r[i][j] = m[(i, j)]; } }
-    r
+    // nalgebra's From<SMatrix> for [[T;R];C] gives column-major (arr[col][row]),
+    // which matches ObjectInstance::transform's expected layout and the GPU shader.
+    (*m).into()
+}
+
+/// Convert an asset-importer column-major `Matrix4x4` to a nalgebra `Mat4`.
+fn ai_mat4_to_glm(m: asset_importer::types::Matrix4x4) -> Mat4 {
+    let c = m.to_cols_array_2d(); // [[f32;4];4], c[col][row]
+    Mat4::from_column_slice(&[
+        c[0][0], c[0][1], c[0][2], c[0][3],
+        c[1][0], c[1][1], c[1][2], c[1][3],
+        c[2][0], c[2][1], c[2][2], c[2][3],
+        c[3][0], c[3][1], c[3][2], c[3][3],
+    ])
+}
+
+/// Recursively walk the Assimp node tree and accumulate (mesh_idx, world_transform) pairs.
+fn collect_instances(
+    node: asset_importer::node::Node,
+    parent_world: &Mat4,
+    instances: &mut Vec<MeshInstance>,
+) {
+    let local = ai_mat4_to_glm(node.transformation());
+    let world = parent_world * local;
+    let world_arr = glm_to_array(&world);
+
+    for mesh_idx in node.mesh_indices_iter() {
+        instances.push(MeshInstance { mesh_idx, world_transform: world_arr });
+    }
+    for child in node.children() {
+        collect_instances(child, &world, instances);
+    }
 }

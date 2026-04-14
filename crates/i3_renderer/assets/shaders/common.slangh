@@ -78,6 +78,7 @@ Texture2D bindlessTextures[4096];
 #define SAMPLER_LINEAR 0
 #define SAMPLER_NEAREST 1
 #define SAMPLER_ANISO 2
+#define SAMPLER_NEAREST_BORDER 3  // ClampToBorder, border=0.0 (far in reverse-Z) — conservative
 
 [[vk::binding(1, BINDLESS_SET)]]
 SamplerState bindlessSamplers[64];

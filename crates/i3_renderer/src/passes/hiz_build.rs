@@ -187,8 +187,10 @@ impl RenderPass for HiZReduceSubPass {
     fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
         ctx.bind_pipeline_raw(self.pipeline);
 
+        // The reduce shader reads the first field (src_size) as output_size.
+        // Pass dst_size here so the bounds check doesn't immediately discard all threads.
         let pc = HiZPushConstants {
-            src_size: [0, 0],
+            src_size: self.dst_size,
             hiz_size: self.hiz_size,
             src_mip: self.src_mip,
             _pad: 0,

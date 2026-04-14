@@ -288,6 +288,15 @@ pub fn create_sampler(backend: &mut VulkanBackend, desc: &SamplerDesc) -> Sample
         AddressMode::MirrorClampToEdge => vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE,
     };
 
+    let border_color = match desc.border_color {
+        None | Some(BorderColor::FloatTransparentBlack) => vk::BorderColor::FLOAT_TRANSPARENT_BLACK,
+        Some(BorderColor::IntTransparentBlack) => vk::BorderColor::INT_TRANSPARENT_BLACK,
+        Some(BorderColor::FloatOpaqueBlack) => vk::BorderColor::FLOAT_OPAQUE_BLACK,
+        Some(BorderColor::IntOpaqueBlack) => vk::BorderColor::INT_OPAQUE_BLACK,
+        Some(BorderColor::FloatOpaqueWhite) => vk::BorderColor::FLOAT_OPAQUE_WHITE,
+        Some(BorderColor::IntOpaqueWhite) => vk::BorderColor::INT_OPAQUE_WHITE,
+    };
+
     let create_info = vk::SamplerCreateInfo::default()
         .mag_filter(mag_filter)
         .min_filter(min_filter)
@@ -297,6 +306,7 @@ pub fn create_sampler(backend: &mut VulkanBackend, desc: &SamplerDesc) -> Sample
         .address_mode_w(convert_address(desc.address_mode_w))
         .anisotropy_enable(desc.anisotropy > 1)
         .max_anisotropy(desc.anisotropy as f32)
+        .border_color(border_color)
         .min_lod(0.0)
         .max_lod(vk::LOD_CLAMP_NONE);
 

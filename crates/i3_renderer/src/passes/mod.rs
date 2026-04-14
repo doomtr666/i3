@@ -1,6 +1,7 @@
 pub mod average_luminance;
 pub mod cluster_build;
 pub mod cull;
+pub mod debug_draw;
 pub mod debug_viz;
 pub mod deferred_resolve;
 pub mod gbuffer;

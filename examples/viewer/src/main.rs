@@ -16,6 +16,36 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+// ─── CPU frustum cull (mirrors the GPU shader logic) ─────────────────────────
+// Returns true = AABB is (at least partially) inside the frustum.
+
+fn frustum_cull_cpu(min: [f32; 3], max: [f32; 3], vp: &glm::Mat4) -> bool {
+    let corners = [
+        [min[0], min[1], min[2]], [max[0], min[1], min[2]],
+        [min[0], max[1], min[2]], [max[0], max[1], min[2]],
+        [min[0], min[1], max[2]], [max[0], min[1], max[2]],
+        [min[0], max[1], max[2]], [max[0], max[1], max[2]],
+    ];
+    // For each of the 6 clip planes, if ALL corners are outside → cull.
+    for plane in 0..6_usize {
+        let all_outside = corners.iter().all(|&[x, y, z]| {
+            let c = vp * glm::vec4(x, y, z, 1.0);
+            match plane {
+                0 => c.x < -c.w,
+                1 => c.x >  c.w,
+                2 => c.y < -c.w,
+                3 => c.y >  c.w,
+                4 => c.z <  0.0,       // near (reverse-Z)
+                _ => c.z >  c.w,       // far
+            }
+        });
+        if all_outside { return false; }
+    }
+    true
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 struct DeferredGltfApp {
     backend: VulkanBackend,
     window: WindowHandle,
@@ -33,6 +63,9 @@ struct DeferredGltfApp {
     show_perf_graph: bool,
     sample_accum_time: f32,
     sample_max_dt: f32,
+    show_culling_debug: bool,
+    culling_show_visible: bool,
+    culling_show_culled: bool,
 }
 
 impl DeferredGltfApp {
@@ -173,7 +206,8 @@ impl DeferredGltfApp {
         }
 
         // Populate scene objects/lights
-        self.scene.load_baked_scene(&scene_asset);
+        let obj_count = self.scene.load_baked_scene(&scene_asset);
+        tracing::info!("Loaded scene '{}': {} objects, {} mesh refs", scene_name, obj_count, scene_asset.mesh_refs.len());
         if SceneProvider::light_count(&self.scene) == 0 {
             self.scene.add_default_lights();
         }
@@ -412,10 +446,27 @@ impl ExampleApp for DeferredGltfApp {
                     {
                         scene_to_load = Some("NormalTangentMirrorTest_scene");
                     }
+                    if ui
+                        .selectable_label(
+                            self.current_scene == "culling_scene",
+                            "Culling Test",
+                        )
+                        .clicked()
+                    {
+                        scene_to_load = Some("culling_scene");
+                    }
                 });
 
             ui.separator();
             ui.checkbox(&mut self.render_graph.fxaa_enabled, "FXAA");
+
+            ui.separator();
+            ui.label("Culling Debug:");
+            ui.checkbox(&mut self.show_culling_debug, "Show bounding boxes");
+            if self.show_culling_debug {
+                ui.checkbox(&mut self.culling_show_visible, "  Visible (green)");
+                ui.checkbox(&mut self.culling_show_culled,  "  Culled  (red)");
+            }
 
             ui.separator();
             ui.label("Debug Channel:");
@@ -481,6 +532,32 @@ impl ExampleApp for DeferredGltfApp {
             far,  // reverse-Z: swap near/far so near→1, far→0
             near,
         );
+
+        // ── Debug draw: fill AABB wireframes before submitting the frame ──
+        {
+            let vp = projection * view;
+            self.render_graph.debug_draw_pass.clear();
+
+            if self.show_culling_debug {
+                for inst in &self.render_graph.cached_instances {
+                    let visible = frustum_cull_cpu(inst.world_aabb_min, inst.world_aabb_max, &vp);
+                    let draw = (visible && self.culling_show_visible)
+                        || (!visible && self.culling_show_culled);
+                    if draw {
+                        let col = if visible {
+                            [0.0_f32, 1.0, 0.2, 0.85] // green
+                        } else {
+                            [1.0_f32, 0.15, 0.15, 0.85] // red
+                        };
+                        self.render_graph.debug_draw_pass.push_aabb(
+                            inst.world_aabb_min,
+                            inst.world_aabb_max,
+                            col,
+                        );
+                    }
+                }
+            }
+        }
 
         if let Err(e) = self.render_graph.render(
             &mut self.backend,
@@ -586,6 +663,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         show_perf_graph: false,
         sample_accum_time: 0.0,
         sample_max_dt: 0.0,
+        show_culling_debug: false,
+        culling_show_visible: false,
+        culling_show_culled: true,
     };
 
     // Initial load

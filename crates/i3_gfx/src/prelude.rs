@@ -28,9 +28,9 @@ pub use crate::graph::{
     },
     symbol_table::FrameBlackboard,
     types::{
-        AccelerationStructureHandle, AddressMode, BufferDesc, BufferHandle, BufferUsageFlags,
-        ComponentMapping, ComponentSwizzle, Filter, Format, GraphError, ImageDesc, ImageHandle,
-        ImageUsageFlags, ImageViewType, MemoryType, MipmapMode, PipelineHandle, ResourceUsage,
-        SamplerDesc, SwapChainImageHandle, SymbolId, WindowHandle,
+        AccelerationStructureHandle, AddressMode, BorderColor, BufferDesc, BufferHandle,
+        BufferUsageFlags, ComponentMapping, ComponentSwizzle, Filter, Format, GraphError,
+        ImageDesc, ImageHandle, ImageUsageFlags, ImageViewType, MemoryType, MipmapMode,
+        PipelineHandle, ResourceUsage, SamplerDesc, SwapChainImageHandle, SymbolId, WindowHandle,
     },
 };

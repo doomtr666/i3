@@ -1,4 +1,5 @@
 use crate::passes::cull::DrawCallGenPass;
+use crate::passes::debug_draw::DebugDrawPass;
 use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
 use crate::passes::deferred_resolve::DeferredResolvePass;
 use crate::passes::gbuffer::GBufferPass;
@@ -31,7 +32,6 @@ pub struct CommonData {
     pub screen_height: u32,
     pub camera_pos: nalgebra_glm::Vec3,
     pub light_count: u32,
-    pub prev_view_projection: nalgebra_glm::Mat4,
 }
 
 /// Indices of IBL textures in the global bindless array.
@@ -116,6 +116,7 @@ pub struct DefaultRenderGraph {
     pub deferred_resolve_pass: DeferredResolvePass,
     pub post_process_group: PostProcessGroup,
     pub debug_viz_pass: DebugVizPass,
+    pub debug_draw_pass: DebugDrawPass,
 
     pub linear_sampler: SamplerHandle,
     pub nearest_sampler: SamplerHandle,
@@ -141,8 +142,6 @@ pub struct DefaultRenderGraph {
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
     pub hiz_build_pass: crate::passes::hiz_build::HiZBuildPass,
-
-    pub prev_view_projection: nalgebra_glm::Mat4,
 
     // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
@@ -192,12 +191,24 @@ impl DefaultRenderGraph {
             ..Default::default()
         });
 
+        // Nearest sampler with transparent-black border (returns 0.0 for out-of-bounds UVs).
+        // Used by the Hi-Z occlusion test: depth 0.0 = far plane in reverse-Z → conservative.
+        let nearest_border_sampler = _backend.create_sampler(&SamplerDesc {
+            address_mode_u: AddressMode::ClampToBorder,
+            address_mode_v: AddressMode::ClampToBorder,
+            address_mode_w: AddressMode::ClampToBorder,
+            mag_filter: Filter::Nearest,
+            min_filter: Filter::Nearest,
+            border_color: Some(BorderColor::FloatTransparentBlack),
+            ..Default::default()
+        });
+
         // 2. Register Samplers in Bindless Set
-        // For now we use fixed slots as requested by "MAX_CONSTANTS" but stay flexible.
         let bindless_set = _backend.get_bindless_set_handle();
         _backend.update_bindless_sampler(linear_sampler, 0, bindless_set, 1);
         _backend.update_bindless_sampler(nearest_sampler, 1, bindless_set, 1);
         _backend.update_bindless_sampler(material_sampler, 2, bindless_set, 1);
+        _backend.update_bindless_sampler(nearest_border_sampler, 3, bindless_set, 1);
 
         let sampler_indices = GlobalSamplerIndices {
             linear: 0,
@@ -213,6 +224,7 @@ impl DefaultRenderGraph {
         let deferred_resolve_pass = DeferredResolvePass::new();
         let post_process_group = PostProcessGroup::new();
         let debug_viz_pass = DebugVizPass::new();
+        let debug_draw_pass = DebugDrawPass::new();
 
         let graph = FrameGraph::new();
 
@@ -288,6 +300,7 @@ impl DefaultRenderGraph {
             deferred_resolve_pass,
             post_process_group,
             debug_viz_pass,
+            debug_draw_pass,
             linear_sampler,
             material_sampler,
             nearest_sampler,
@@ -320,7 +333,6 @@ impl DefaultRenderGraph {
             last_compiled_debug_channel: DebugChannel::Lit,
             graph_dirty: true,
             compiled_had_staging: false,
-            prev_view_projection: nalgebra_glm::identity(),
         };
 
         // 4. Initialization: Run pass-specific initialization logic
@@ -440,6 +452,8 @@ impl DefaultRenderGraph {
             .init_pass_direct(&mut self.post_process_group, backend);
         self.graph
             .init_pass_direct(&mut self.debug_viz_pass, backend);
+        self.graph
+            .init_pass_direct(&mut self.debug_draw_pass, backend);
 
         // Egui pipeline lives in an Arc<Mutex<EguiRenderer>> shared across all per-frame passes.
         // Call init() once on a dummy pass so the pipeline gets loaded into that shared renderer.
@@ -775,10 +789,7 @@ impl DefaultRenderGraph {
             screen_height,
             camera_pos,
             light_count,
-            prev_view_projection: self.prev_view_projection,
         };
-
-        self.prev_view_projection = view_projection;
 
         // When IBL is loaded, its extracted sun overrides any scene directional light.
         let (sun_dir, sun_int, sun_col) = if !self.ibl_images.is_empty() {
@@ -960,7 +971,6 @@ impl DefaultRenderGraph {
             screen_height,
             camera_pos,
             light_count,
-            prev_view_projection: self.prev_view_projection,
         };
 
         let channel = self.debug_channel;
@@ -1068,14 +1078,17 @@ impl DefaultRenderGraph {
                 builder.add_pass(&mut self.debug_viz_pass);
             }
 
-            // 6. Egui UI
+            // 6. Debug line overlay (no-op when no lines are queued)
+            builder.add_pass(&mut self.debug_draw_pass);
+
+            // 7. Egui UI
             if let Some(ui) = builder.try_consume::<Arc<UiSystem>>("UiSystem") {
                 if let Some(egui_pass) = ui.create_pass(backbuffer) {
                     builder.add_owned_pass(egui_pass);
                 }
             }
 
-            // 7. Final Presentation
+            // 8. Final Presentation
             builder.add_owned_pass(PresentPass { backbuffer });
         });
     }

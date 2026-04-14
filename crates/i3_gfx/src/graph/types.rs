@@ -541,6 +541,7 @@ pub struct SamplerDesc {
     pub address_mode_v: AddressMode,
     pub address_mode_w: AddressMode,
     pub anisotropy: u32, // Use discrete levels (1, 2, 4, 8, 16)
+    pub border_color: Option<BorderColor>,
 }
 
 impl Default for SamplerDesc {
@@ -553,6 +554,7 @@ impl Default for SamplerDesc {
             address_mode_v: AddressMode::Repeat,
             address_mode_w: AddressMode::Repeat,
             anisotropy: 1,
+            border_color: None,
         }
     }
 }

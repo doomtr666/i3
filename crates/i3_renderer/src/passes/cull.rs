@@ -6,11 +6,9 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy)]
 pub struct DrawCallGenPushConstants {
     pub view_projection: nalgebra_glm::Mat4,
-    pub prev_view_projection: nalgebra_glm::Mat4,
-    pub screen_size: [f32; 2],
-    pub hiz_mip_count: u32,
     pub instance_count: u32,
     pub max_draw_calls: u32,
+    pub _pad: [u32; 2],
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,7 +23,6 @@ struct DrawCallGenComputePass {
     instance_buffer: BufferHandle,
     draw_call_buffer: BufferHandle,
     draw_count_buffer: BufferHandle,
-    hiz_pyramid: ImageHandle,
 
     pipeline: Option<BackendPipeline>,
 }
@@ -38,7 +35,6 @@ impl DrawCallGenComputePass {
             instance_buffer: BufferHandle::INVALID,
             draw_call_buffer: BufferHandle::INVALID,
             draw_count_buffer: BufferHandle::INVALID,
-            hiz_pyramid: ImageHandle::INVALID,
             pipeline: None,
         }
     }
@@ -66,7 +62,6 @@ impl RenderPass for DrawCallGenComputePass {
         self.instance_buffer = builder.resolve_buffer("InstanceBuffer");
         self.draw_call_buffer = builder.resolve_buffer("DrawCallBuffer");
         self.draw_count_buffer = builder.resolve_buffer("DrawCountBuffer");
-        self.hiz_pyramid = builder.read_image_history("HiZPyramid");
 
         self.instance_count = builder
             .try_consume::<Vec<crate::scene::GpuInstanceData>>("SceneInstances")
@@ -77,14 +72,12 @@ impl RenderPass for DrawCallGenComputePass {
         builder.read_buffer(self.instance_buffer, ResourceUsage::SHADER_READ);
         builder.write_buffer(self.draw_call_buffer, ResourceUsage::SHADER_WRITE);
         builder.write_buffer(self.draw_count_buffer, ResourceUsage::SHADER_WRITE);
-        builder.read_image(self.hiz_pyramid, ResourceUsage::SHADER_READ);
 
         builder.descriptor_set(0, |d| {
             d.storage_buffer(self.mesh_descriptor_buffer)
                 .storage_buffer(self.instance_buffer)
                 .storage_buffer(self.draw_call_buffer)
-                .storage_buffer(self.draw_count_buffer)
-                .sampled_image(self.hiz_pyramid, DescriptorImageLayout::ShaderReadOnlyOptimal);
+                .storage_buffer(self.draw_count_buffer);
         });
     }
 
@@ -104,12 +97,6 @@ impl RenderPass for DrawCallGenComputePass {
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
 
-        // Calculate Hi-Z mip count (must match the one declared in render_graph.rs)
-        let hiz_mip_count = ((common.screen_width.max(common.screen_height) as f32)
-            .log2()
-            .floor() as u32)
-            + 1;
-
         ctx.bind_pipeline_raw(pipeline);
         ctx.bind_descriptor_set(2, bindless_set);
         ctx.push_constant_data(
@@ -117,11 +104,9 @@ impl RenderPass for DrawCallGenComputePass {
             0,
             &DrawCallGenPushConstants {
                 view_projection: common.view_projection,
-                prev_view_projection: common.prev_view_projection,
-                screen_size: [common.screen_width as f32, common.screen_height as f32],
-                hiz_mip_count,
                 instance_count: self.instance_count,
                 max_draw_calls: MAX_INSTANCES as u32,
+                _pad: [0; 2],
             },
         );
         let group_count = (self.instance_count + 63) / 64;

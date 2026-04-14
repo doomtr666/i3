@@ -1,5 +1,0 @@
-PipelineConfig(
-    name: "hiz_reduce",
-    shader: Path("../shaders/hiz_reduce.slang"),
-    graphics: None,
-)
