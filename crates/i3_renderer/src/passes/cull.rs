@@ -115,31 +115,23 @@ impl RenderPass for DrawCallGenComputePass {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DrawCallGenPass — group: imports draw buffers, adds ClearDrawCount then compute
+// DrawCallGenPass — group: declares transient draw buffers, clears count, dispatches
 //
-// Declared as a pure group (no execute, no resource intents in own storage).
-// flatten_recursive skips groups with no intents, so children are flattened in
-// declaration order: ClearDrawCount (index 0) → DrawCallGenCompute (index 1).
-// This guarantees the draw count is zeroed before the compute shader fills it.
+// Both buffers are fully rewritten every frame — they are transient frame graph
+// resources, not persistent GPU allocations. declare_buffer_output publishes them
+// to the parent scope so GBufferFillPass and other siblings can resolve them.
+// Children are flattened in declaration order: ClearDrawCount → DrawCallGenCompute.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DrawCallGenPass {
-    // Owned persistent GPU buffers
-    draw_call_buffer_physical: BackendBuffer,
-    draw_count_buffer_physical: BackendBuffer,
-
-    // Handles resolved during declare (needed by children)
     draw_call_buffer: BufferHandle,
     draw_count_buffer: BufferHandle,
-
     compute: DrawCallGenComputePass,
 }
 
 impl DrawCallGenPass {
     pub fn new() -> Self {
         Self {
-            draw_call_buffer_physical: BackendBuffer::INVALID,
-            draw_count_buffer_physical: BackendBuffer::INVALID,
             draw_call_buffer: BufferHandle::INVALID,
             draw_count_buffer: BufferHandle::INVALID,
             compute: DrawCallGenComputePass::new(),
@@ -153,48 +145,38 @@ impl RenderPass for DrawCallGenPass {
     }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
-        self.draw_call_buffer_physical = backend.create_buffer(&BufferDesc {
-            size: MAX_INSTANCES * DRAW_INDIRECT_CMD_SIZE,
-            usage: BufferUsageFlags::STORAGE_BUFFER
-                | BufferUsageFlags::INDIRECT_BUFFER
-                | BufferUsageFlags::TRANSFER_DST,
-            memory: MemoryType::GpuOnly,
-        });
-        self.draw_count_buffer_physical = backend.create_buffer(&BufferDesc {
-            size: 16, // 4 bytes + padding
-            usage: BufferUsageFlags::STORAGE_BUFFER
-                | BufferUsageFlags::INDIRECT_BUFFER
-                | BufferUsageFlags::TRANSFER_DST,
-            memory: MemoryType::GpuOnly,
-        });
-        #[cfg(debug_assertions)]
-        {
-            backend.set_buffer_name(self.draw_call_buffer_physical, "DrawCallBuffer");
-            backend.set_buffer_name(self.draw_count_buffer_physical, "DrawCountBuffer");
-        }
         self.compute.init(backend, globals);
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        // Import owned buffers into graph scope; is_output: true propagates them
-        // to the parent scope so GBufferFillPass and other siblings can resolve them.
-        self.draw_call_buffer =
-            builder.import_buffer("DrawCallBuffer", self.draw_call_buffer_physical);
-        self.draw_count_buffer =
-            builder.import_buffer("DrawCountBuffer", self.draw_count_buffer_physical);
+        self.draw_call_buffer = builder.declare_buffer_output(
+            "DrawCallBuffer",
+            BufferDesc {
+                size: MAX_INSTANCES * DRAW_INDIRECT_CMD_SIZE,
+                usage: BufferUsageFlags::STORAGE_BUFFER
+                    | BufferUsageFlags::INDIRECT_BUFFER
+                    | BufferUsageFlags::TRANSFER_DST,
+                memory: MemoryType::GpuOnly,
+            },
+        );
+        self.draw_count_buffer = builder.declare_buffer_output(
+            "DrawCountBuffer",
+            BufferDesc {
+                size: 16,
+                usage: BufferUsageFlags::STORAGE_BUFFER
+                    | BufferUsageFlags::INDIRECT_BUFFER
+                    | BufferUsageFlags::TRANSFER_DST,
+                memory: MemoryType::GpuOnly,
+            },
+        );
 
-        // Child 1: clear draw count — runs first in the flattened pass list
         builder.add_owned_pass(crate::render_graph::ClearBufferPass {
             name: "ClearDrawCount".to_string(),
             buffer: self.draw_count_buffer,
         });
 
-        // Child 2: compute pass — runs after clear
         builder.add_pass(&mut self.compute);
-
-        // No resource intents on the group itself → not pushed as leaf →
-        // only children appear in the flat pass list, in declaration order.
     }
 
-    // No execute() — this is a pure group.
+    // No execute() — pure group.
 }
