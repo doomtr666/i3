@@ -27,11 +27,16 @@ struct PushConstants
 [[vk::push_constant]]
 PushConstants pc;
 
-[[vk::binding(0, 0)]] Texture2D gbufferAlbedo;
-[[vk::binding(1, 0)]] Texture2D gbufferNormal;
-[[vk::binding(2, 0)]] Texture2D gbufferRoughMetal;
-[[vk::binding(3, 0)]] Texture2D gbufferEmissive;
-[[vk::binding(4, 0)]] Texture2D depthBuffer;
+[[vk::binding(0, 0)]]
+Texture2D gbufferAlbedo;
+[[vk::binding(1, 0)]]
+Texture2D gbufferNormal;
+[[vk::binding(2, 0)]]
+Texture2D gbufferRoughMetal;
+[[vk::binding(3, 0)]]
+Texture2D gbufferEmissive;
+[[vk::binding(4, 0)]]
+Texture2D depthBuffer;
 
 [[vk::binding(5, 0)]]
 StructuredBuffer<LightData> lights;
@@ -75,7 +80,7 @@ bool traceShadow(RayDesc ray)
 float3 offsetRay(in float3 p, in float3 n)
 {
     // Smallest epsilon that can be added without losing precision is 1.19209e-07, but we play safe
-    const float epsilon = 1.0f / 65536.0f; // Safe epsilon
+    const float epsilon = 1.0f / 256.0f; // Safe epsilon
 
     float magnitude = length(p);
     float offset = epsilon * magnitude;

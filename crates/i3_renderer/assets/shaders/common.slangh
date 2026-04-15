@@ -20,6 +20,15 @@ struct CommonData
     float4x4 prevViewProjection;
 };
 
+// --- GPU-Driven Command ---
+struct DrawIndirectCommand
+{
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+};
+
 // --- GPU-Driven Structures ---
 struct GpuMeshDescriptor
 {
@@ -78,10 +87,61 @@ Texture2D bindlessTextures[4096];
 #define SAMPLER_LINEAR 0
 #define SAMPLER_NEAREST 1
 #define SAMPLER_ANISO 2
-#define SAMPLER_NEAREST_BORDER 3  // ClampToBorder, border=0.0 (far in reverse-Z) — conservative
+#define SAMPLER_NEAREST_BORDER 3  // ClampToBorder nearest, border=0.0 (far in reverse-Z) — conservative
+#define SAMPLER_LINEAR_BORDER  4  // ClampToBorder linear,  border=0.0 — conservative bilinear for HiZ
 
 [[vk::binding(1, BINDLESS_SET)]]
 SamplerState bindlessSamplers[64];
+
+// --- GPU-Driven Helpers ---
+
+// Standard frustum culling test (Reverse-Z, 6 planes).
+// Returns true if the AABB is at least partially inside the frustum.
+bool frustumTest(float3 minBound, float3 maxBound, float4x4 vp)
+{
+    float3 corners[8] = {
+        float3(minBound.x, minBound.y, minBound.z),
+        float3(maxBound.x, minBound.y, minBound.z),
+        float3(minBound.x, maxBound.y, minBound.z),
+        float3(maxBound.x, maxBound.y, minBound.z),
+        float3(minBound.x, minBound.y, maxBound.z),
+        float3(maxBound.x, minBound.y, maxBound.z),
+        float3(minBound.x, maxBound.y, maxBound.z),
+        float3(maxBound.x, maxBound.y, maxBound.z),
+    };
+    for (int p = 0; p < 6; p++)
+    {
+        int outsideCount = 0;
+        for (int c = 0; c < 8; c++)
+        {
+            float4 clip = mul(vp, float4(corners[c], 1.0));
+            bool outside = false;
+            switch (p)
+            {
+            case 0: outside = clip.x < -clip.w; break; // Left
+            case 1: outside = clip.x >  clip.w; break; // Right
+            case 2: outside = clip.y < -clip.w; break; // Bottom
+            case 3: outside = clip.y >  clip.w; break; // Top
+            case 4: outside = clip.z <  0.0;    break; // Near (Reverse-Z)
+            case 5: outside = clip.z >  clip.w; break; // Far
+            }
+            if (outside) outsideCount++;
+        }
+        if (outsideCount == 8) return false;
+    }
+    return true;
+}
+
+// Visibility bitset helpers — 1 bit per instance index.
+bool visibilityGet(StructuredBuffer<uint> bitset, uint idx)
+{
+    return (bitset[idx / 32] >> (idx % 32)) & 1u != 0u;
+}
+
+void visibilitySet(RWStructuredBuffer<uint> bitset, uint idx)
+{
+    InterlockedOr(bitset[idx / 32], 1u << (idx % 32));
+}
 
 // --- Helper Funcs ---
 float2 encodeOctahedral(float3 n)

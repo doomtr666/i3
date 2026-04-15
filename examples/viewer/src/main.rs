@@ -455,6 +455,15 @@ impl ExampleApp for DeferredGltfApp {
                     {
                         scene_to_load = Some("culling_scene");
                     }
+                    if ui
+                        .selectable_label(
+                            self.current_scene == "EnvironmentTest_scene",
+                            "Environment Test",
+                        )
+                        .clicked()
+                    {
+                        scene_to_load = Some("EnvironmentTest_scene");
+                    }
                 });
 
             ui.separator();
@@ -539,22 +548,35 @@ impl ExampleApp for DeferredGltfApp {
             self.render_graph.debug_draw_pass.clear();
 
             if self.show_culling_debug {
-                for inst in &self.render_graph.cached_instances {
-                    let visible = frustum_cull_cpu(inst.world_aabb_min, inst.world_aabb_max, &vp);
-                    let draw = (visible && self.culling_show_visible)
-                        || (!visible && self.culling_show_culled);
-                    if draw {
-                        let col = if visible {
-                            [0.0_f32, 1.0, 0.2, 0.85] // green
-                        } else {
-                            [1.0_f32, 0.15, 0.15, 0.85] // red
-                        };
-                        self.render_graph.debug_draw_pass.push_aabb(
-                            inst.world_aabb_min,
-                            inst.world_aabb_max,
-                            col,
-                        );
+                for (idx, inst) in self.render_graph.cached_instances.iter().enumerate() {
+                    // Skip if outside the camera frustum (CPU test mirrors the GPU frustum cull).
+                    if !frustum_cull_cpu(inst.world_aabb_min, inst.world_aabb_max, &vp) {
+                        continue;
                     }
+                    // Check the GPU occlusion bitset (1-frame delay — acceptable for debug).
+                    // Bit `idx` is at word `idx/32`, position `idx%32`.
+                    // Default to visible (true) on the first frame when the buffer is empty.
+                    let word = idx / 32;
+                    let bit  = idx % 32;
+                    let gpu_visible = self.render_graph.visibility_bitset_readback
+                        .get(word)
+                        .map(|&w| (w >> bit) & 1 != 0)
+                        .unwrap_or(true);
+
+                    let draw = (gpu_visible  && self.culling_show_visible)
+                            || (!gpu_visible && self.culling_show_culled);
+                    if !draw { continue; }
+
+                    let col = if gpu_visible {
+                        [0.0_f32, 1.0, 0.2, 0.85]    // green  = frustum + occlusion pass
+                    } else {
+                        [1.0_f32, 0.15, 0.15, 0.85]  // red    = occlusion culled by HiZ
+                    };
+                    self.render_graph.debug_draw_pass.push_aabb(
+                        inst.world_aabb_min,
+                        inst.world_aabb_max,
+                        col,
+                    );
                 }
             }
         }

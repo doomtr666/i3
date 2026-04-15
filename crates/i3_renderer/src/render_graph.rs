@@ -141,7 +141,20 @@ pub struct DefaultRenderGraph {
     pub accel_struct_system: crate::passes::accel_struct::AccelStructSystem,
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
-    pub hiz_build_pass: crate::passes::hiz_build::HiZBuildPass,
+    pub prez_cull_pass: crate::passes::cull::PreZCullPass,
+    pub prez_pass:      crate::passes::cull::PreZPass,
+    pub hiz_build_prez:  crate::passes::hiz_build::HiZBuildPass,
+    pub hiz_build_final: crate::passes::hiz_build::HiZBuildPass,
+
+    /// GPU→CPU copy of the VisibilityBitset from the previous frame.
+    /// Index `i` → word `i/32`, bit `i%32`.  Updated in sync() after GPU completes.
+    pub visibility_bitset_readback: Vec<u32>,
+    visibility_bitset_readback_buf: i3_gfx::graph::backend::BackendBuffer,
+    visibility_readback_pass: crate::passes::readback::BufferReadbackPass,
+
+    /// Timeline semaphore value returned by the last render() call.
+    /// Used to non-blockingly poll GPU completion before reading readback buffers.
+    last_render_timeline: u64,
 
     // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
@@ -192,7 +205,6 @@ impl DefaultRenderGraph {
         });
 
         // Nearest sampler with transparent-black border (returns 0.0 for out-of-bounds UVs).
-        // Used by the Hi-Z occlusion test: depth 0.0 = far plane in reverse-Z → conservative.
         let nearest_border_sampler = _backend.create_sampler(&SamplerDesc {
             address_mode_u: AddressMode::ClampToBorder,
             address_mode_v: AddressMode::ClampToBorder,
@@ -203,12 +215,28 @@ impl DefaultRenderGraph {
             ..Default::default()
         });
 
+        // Linear sampler with transparent-black border.
+        // Used by the Hi-Z occlusion test so that UV corners landing exactly on a texel
+        // boundary don't snap hard to an adjacent texel (nearest-neighbor flicker).
+        // Bilinear interpolation of a MAX pyramid is conservative: the blended value is
+        // ≤ the true MAX → we under-cull at boundaries but never falsely cull.
+        let linear_border_sampler = _backend.create_sampler(&SamplerDesc {
+            address_mode_u: AddressMode::ClampToBorder,
+            address_mode_v: AddressMode::ClampToBorder,
+            address_mode_w: AddressMode::ClampToBorder,
+            mag_filter: Filter::Linear,
+            min_filter: Filter::Linear,
+            border_color: Some(BorderColor::FloatTransparentBlack),
+            ..Default::default()
+        });
+
         // 2. Register Samplers in Bindless Set
         let bindless_set = _backend.get_bindless_set_handle();
         _backend.update_bindless_sampler(linear_sampler, 0, bindless_set, 1);
         _backend.update_bindless_sampler(nearest_sampler, 1, bindless_set, 1);
         _backend.update_bindless_sampler(material_sampler, 2, bindless_set, 1);
         _backend.update_bindless_sampler(nearest_border_sampler, 3, bindless_set, 1);
+        _backend.update_bindless_sampler(linear_border_sampler, 4, bindless_set, 1);
 
         let sampler_indices = GlobalSamplerIndices {
             linear: 0,
@@ -288,7 +316,23 @@ impl DefaultRenderGraph {
         let accel_struct_system = crate::passes::accel_struct::AccelStructSystem::new();
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
-        let hiz_build_pass = crate::passes::hiz_build::HiZBuildPass::new();
+        let prez_cull_pass  = crate::passes::cull::PreZCullPass::new();
+        let prez_pass       = crate::passes::cull::PreZPass::new();
+        let hiz_build_prez  = crate::passes::hiz_build::HiZBuildPass::new_prez();
+        let hiz_build_final = crate::passes::hiz_build::HiZBuildPass::new_final();
+
+        // GpuToCpu readback buffer for VisibilityBitset — same size as the GPU bitset.
+        let bitset_byte_size = (crate::constants::MAX_INSTANCES + 31) / 32 * 4;
+        let visibility_bitset_readback_buf = _backend.create_buffer(&BufferDesc {
+            size:   bitset_byte_size,
+            usage:  BufferUsageFlags::TRANSFER_DST,
+            memory: MemoryType::GpuToCpu,
+        });
+        let visibility_readback_pass = crate::passes::readback::BufferReadbackPass::new(
+            "VisibilityBitset",
+            visibility_bitset_readback_buf,
+            bitset_byte_size,
+        );
 
         let mut this = Self {
             graph,
@@ -314,7 +358,14 @@ impl DefaultRenderGraph {
             accel_struct_system,
             blas_update_pass,
             tlas_rebuild_pass,
-            hiz_build_pass,
+            prez_cull_pass,
+            prez_pass,
+            hiz_build_prez,
+            hiz_build_final,
+            visibility_bitset_readback: Vec::new(),
+            visibility_bitset_readback_buf,
+            visibility_readback_pass,
+            last_render_timeline: 0,
             scene_mesh_descriptors: Vec::new(),
             cached_instances: Vec::new(),
             cached_materials: Vec::new(),
@@ -438,9 +489,13 @@ impl DefaultRenderGraph {
         self.graph
             .init_pass_direct(&mut self.blas_update_pass, backend);
         self.graph.init_pass_direct(&mut self.gbuffer_pass, backend);
-        self.graph.init_pass_direct(&mut self.hiz_build_pass, backend);
+        self.graph.init_pass_direct(&mut self.prez_cull_pass,  backend);
+        self.graph.init_pass_direct(&mut self.prez_pass,       backend);
+        self.graph.init_pass_direct(&mut self.hiz_build_prez,  backend);
+        self.graph.init_pass_direct(&mut self.hiz_build_final, backend);
         self.graph
             .init_pass_direct(&mut self.draw_call_gen_pass, backend);
+        self.graph.init_pass_direct(&mut self.visibility_readback_pass, backend);
         self.graph.init_pass_direct(&mut self.sky_pass, backend);
         self.graph
             .init_pass_direct(&mut self.clustering_group, backend);
@@ -740,6 +795,19 @@ impl DefaultRenderGraph {
             .iter_materials()
             .map(|(id, data)| (id.0, data.clone()))
             .collect();
+
+        // Readback VisibilityBitset — non-blocking poll via timeline semaphore.
+        // Skip if no frame has been submitted yet (last_render_timeline == 0) or
+        // if the GPU hasn't finished the previous frame's copy yet.
+        // In that case we keep the data from the frame before (at most 1 frame stale).
+        if self.last_render_timeline > 0
+            && backend.wait_for_timeline(self.last_render_timeline, 0).is_ok()
+        {
+            let n_u32 = ((crate::constants::MAX_INSTANCES + 31) / 32) as usize;
+            self.visibility_bitset_readback.resize(n_u32, 0u32);
+            let bytes = bytemuck::cast_slice_mut(&mut self.visibility_bitset_readback);
+            backend.download_buffer(self.visibility_bitset_readback_buf, bytes, 0);
+        }
     }
 
     /// All-in-one per-frame entry point.
@@ -920,11 +988,17 @@ impl DefaultRenderGraph {
         }
 
         // 7. Execute the cached compiled graph.
-        self.compiled.as_mut().unwrap().execute(
+        let result = self.compiled.as_mut().unwrap().execute(
             backend,
             &frame_data,
             Some(&mut self.temporal_registry),
-        )
+        );
+        // Capture the timeline semaphore value so sync() can non-blockingly poll
+        // GPU completion before reading readback buffers.
+        if let Ok(Some(v)) = &result {
+            self.last_render_timeline = *v;
+        }
+        result
     }
 
     /// Records the full render graph for one frame.
@@ -1012,8 +1086,31 @@ impl DefaultRenderGraph {
             builder.add_pass(&mut self.sync_group);
             builder.add_pass(&mut self.blas_update_pass);
 
-            // 1. Draw Call Generation (imports DrawCallBuffer + DrawCountBuffer, adds ClearDrawCount child)
+            // VisibilityBitset — declared before any pass that reads or writes it.
+            // OcclusionCullPass (DrawCallGenPass) writes frame N via InterlockedOr.
+            // PreZCullPass reads frame N-1 via read_buffer_history.
+            // Size: ceil(MAX_INSTANCES / 32) * 4 bytes = 32 KB for MAX_INSTANCES=262144.
+            builder.declare_buffer_history_output(
+                "VisibilityBitset",
+                BufferDesc {
+                    size: (crate::constants::MAX_INSTANCES + 31) / 32 * 4,
+                    usage: BufferUsageFlags::STORAGE_BUFFER
+                         | BufferUsageFlags::TRANSFER_DST
+                         | BufferUsageFlags::TRANSFER_SRC, // needed by BufferReadbackPass
+                    memory: MemoryType::GpuOnly,
+                },
+            );
+
+            // 1. PreZ: cull (visible_N1 ∩ frustum) → depth-only draw → HiZ pyramid
+            builder.add_pass(&mut self.prez_cull_pass);
+            builder.add_pass(&mut self.prez_pass);
+            builder.add_pass(&mut self.hiz_build_prez);
+
+            // 2. Occlusion cull against HiZPreZ → DrawCallBuffer + VisibilityBitset frame N
             builder.add_pass(&mut self.draw_call_gen_pass);
+
+            // 2b. Copy VisibilityBitset to host-visible readback buffer (read in next frame's sync)
+            builder.add_pass(&mut self.visibility_readback_pass);
 
             // 1c. TLAS Rebuild
             builder.add_pass(&mut self.tlas_rebuild_pass);
@@ -1026,32 +1123,8 @@ impl DefaultRenderGraph {
             // 2. GBuffer (images declared as outputs inside GBufferPass)
             builder.add_pass(&mut self.gbuffer_pass);
 
-            // 2b. Hi-Z Pyramid Generation
-            let (hiz_w, hiz_h, hiz_mips) = {
-                let common = builder.consume::<CommonData>("Common");
-                let w = common.screen_width;
-                let h = common.screen_height;
-                let max_dim = w.max(h);
-                let mips = if max_dim > 0 { (31 - max_dim.leading_zeros()) + 1 } else { 1 };
-                (w, h, mips)
-            };
-
-            builder.declare_image_history_output(
-                "HiZPyramid",
-                ImageDesc {
-                    width: hiz_w,
-                    height: hiz_h,
-                    depth: 1,
-                    format: Format::R32_SFLOAT,
-                    mip_levels: hiz_mips,
-                    array_layers: 1,
-                    usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::STORAGE,
-                    view_type: ImageViewType::Type2D,
-                    swizzle: ComponentMapping::default(),
-                    clear_value: None,
-                },
-            );
-            builder.add_pass(&mut self.hiz_build_pass);
+            // 2b. Hi-Z Pyramid — Final (DepthBuffer → HiZFinal, for screen-space effects)
+            builder.add_pass(&mut self.hiz_build_final);
 
             // 3. Sky (HDR_Target declared as output inside SkyPass)
             builder.add_pass(&mut self.sky_pass);

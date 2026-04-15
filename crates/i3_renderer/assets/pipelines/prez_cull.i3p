@@ -1,0 +1,5 @@
+PipelineConfig(
+    name: "prez_cull",
+    shader: Path("../shaders/prez_cull.slang"),
+    graphics: None,
+)

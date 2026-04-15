@@ -13,3 +13,4 @@ pub mod tonemap;
 pub mod fxaa;
 pub mod hiz_build;
 pub mod accel_struct;
+pub mod readback;

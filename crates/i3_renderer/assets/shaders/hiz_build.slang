@@ -19,13 +19,11 @@ struct PushConstants {
 [numthreads(8, 8, 1)]
 void blit_depth(uint3 tid : SV_DispatchThreadID) {
     if (any(tid.xy >= push.hiz_size)) return;
-    
-    // Nearest neighbor mapping to Mip 0
+
+    // Nearest-neighbor blit from depth buffer to HiZ mip 0.
     float2 uv = (float2(tid.xy) + 0.5) / float2(push.hiz_size);
     uint2 src_coord = uint2(uv * float2(push.src_size));
-    
-    float d = img_source.Load(uint3(src_coord, 0));
-    output_tex[tid.xy] = d;
+    output_tex[tid.xy] = img_source.Load(uint3(src_coord, 0));
 }
 
 [shader("compute")]
@@ -33,6 +31,7 @@ void blit_depth(uint3 tid : SV_DispatchThreadID) {
 void reduce_mip(uint3 tid : SV_DispatchThreadID) {
     uint2 dst_coord = tid.xy;
     uint2 src_size = max(push.hiz_size >> push.src_mip, uint2(1, 1));
+    // POT image: exact power-of-two division at every level — no odd dimensions.
     uint2 dst_size = max(src_size >> 1, uint2(1, 1));
     
     if (any(dst_coord >= dst_size)) return;

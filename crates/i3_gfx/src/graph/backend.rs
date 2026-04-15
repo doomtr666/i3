@@ -422,6 +422,10 @@ pub trait RenderBackend {
         offset: u64,
     ) -> Result<(), String>;
 
+    /// Read raw bytes from a host-visible (GpuToCpu) buffer into `data`.
+    /// The caller is responsible for ensuring the GPU has finished writing to the buffer.
+    fn download_buffer(&mut self, handle: BackendBuffer, data: &mut [u8], offset: u64);
+
     /// Upload raw bytes to an image using a staging buffer.
     fn upload_image(
         &mut self,

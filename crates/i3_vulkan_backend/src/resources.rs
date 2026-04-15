@@ -482,6 +482,36 @@ pub fn upload_buffer(
     Ok(())
 }
 
+/// Read raw bytes from a host-visible (GpuToCpu) buffer.
+/// Panics if the buffer is not host-visible or not found.
+pub fn download_buffer(
+    backend: &mut VulkanBackend,
+    handle: BackendBuffer,
+    data: &mut [u8],
+    offset: u64,
+) {
+    let device = backend.get_device().clone();
+    let buffer_obj = backend
+        .buffers
+        .get_mut(handle.0)
+        .expect("download_buffer: buffer not found");
+
+    if let Some(alloc) = &mut buffer_obj.allocation {
+        let allocator = device.allocator.lock().unwrap();
+        unsafe {
+            let ptr = allocator.map_memory(alloc).expect("download_buffer: map failed");
+            // Invalidate CPU caches so we read up-to-date GPU-written data.
+            let _ = allocator.invalidate_allocation(alloc, offset, data.len() as u64);
+            std::ptr::copy_nonoverlapping(
+                ptr.add(offset as usize) as *const u8,
+                data.as_mut_ptr(),
+                data.len(),
+            );
+            allocator.unmap_memory(alloc);
+        }
+    }
+}
+
 pub fn upload_image(
     backend: &mut VulkanBackend,
     handle: BackendImage,
