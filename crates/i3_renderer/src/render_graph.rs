@@ -141,20 +141,7 @@ pub struct DefaultRenderGraph {
     pub accel_struct_system: crate::passes::accel_struct::AccelStructSystem,
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
-    pub prez_cull_pass: crate::passes::cull::PreZCullPass,
-    pub prez_pass:      crate::passes::cull::PreZPass,
-    pub hiz_build_prez:  crate::passes::hiz_build::HiZBuildPass,
     pub hiz_build_final: crate::passes::hiz_build::HiZBuildPass,
-
-    /// GPU→CPU copy of the VisibilityBitset from the previous frame.
-    /// Index `i` → word `i/32`, bit `i%32`.  Updated in sync() after GPU completes.
-    pub visibility_bitset_readback: Vec<u32>,
-    visibility_bitset_readback_buf: i3_gfx::graph::backend::BackendBuffer,
-    visibility_readback_pass: crate::passes::readback::BufferReadbackPass,
-
-    /// Timeline semaphore value returned by the last render() call.
-    /// Used to non-blockingly poll GPU completion before reading readback buffers.
-    last_render_timeline: u64,
 
     // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
@@ -316,23 +303,7 @@ impl DefaultRenderGraph {
         let accel_struct_system = crate::passes::accel_struct::AccelStructSystem::new();
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
-        let prez_cull_pass  = crate::passes::cull::PreZCullPass::new();
-        let prez_pass       = crate::passes::cull::PreZPass::new();
-        let hiz_build_prez  = crate::passes::hiz_build::HiZBuildPass::new_prez();
         let hiz_build_final = crate::passes::hiz_build::HiZBuildPass::new_final();
-
-        // GpuToCpu readback buffer for VisibilityBitset — same size as the GPU bitset.
-        let bitset_byte_size = (crate::constants::MAX_INSTANCES + 31) / 32 * 4;
-        let visibility_bitset_readback_buf = _backend.create_buffer(&BufferDesc {
-            size:   bitset_byte_size,
-            usage:  BufferUsageFlags::TRANSFER_DST,
-            memory: MemoryType::GpuToCpu,
-        });
-        let visibility_readback_pass = crate::passes::readback::BufferReadbackPass::new(
-            "VisibilityBitset",
-            visibility_bitset_readback_buf,
-            bitset_byte_size,
-        );
 
         let mut this = Self {
             graph,
@@ -358,14 +329,7 @@ impl DefaultRenderGraph {
             accel_struct_system,
             blas_update_pass,
             tlas_rebuild_pass,
-            prez_cull_pass,
-            prez_pass,
-            hiz_build_prez,
             hiz_build_final,
-            visibility_bitset_readback: Vec::new(),
-            visibility_bitset_readback_buf,
-            visibility_readback_pass,
-            last_render_timeline: 0,
             scene_mesh_descriptors: Vec::new(),
             cached_instances: Vec::new(),
             cached_materials: Vec::new(),
@@ -489,13 +453,9 @@ impl DefaultRenderGraph {
         self.graph
             .init_pass_direct(&mut self.blas_update_pass, backend);
         self.graph.init_pass_direct(&mut self.gbuffer_pass, backend);
-        self.graph.init_pass_direct(&mut self.prez_cull_pass,  backend);
-        self.graph.init_pass_direct(&mut self.prez_pass,       backend);
-        self.graph.init_pass_direct(&mut self.hiz_build_prez,  backend);
         self.graph.init_pass_direct(&mut self.hiz_build_final, backend);
         self.graph
             .init_pass_direct(&mut self.draw_call_gen_pass, backend);
-        self.graph.init_pass_direct(&mut self.visibility_readback_pass, backend);
         self.graph.init_pass_direct(&mut self.sky_pass, backend);
         self.graph
             .init_pass_direct(&mut self.clustering_group, backend);
@@ -796,18 +756,6 @@ impl DefaultRenderGraph {
             .map(|(id, data)| (id.0, data.clone()))
             .collect();
 
-        // Readback VisibilityBitset — non-blocking poll via timeline semaphore.
-        // Skip if no frame has been submitted yet (last_render_timeline == 0) or
-        // if the GPU hasn't finished the previous frame's copy yet.
-        // In that case we keep the data from the frame before (at most 1 frame stale).
-        if self.last_render_timeline > 0
-            && backend.wait_for_timeline(self.last_render_timeline, 0).is_ok()
-        {
-            let n_u32 = ((crate::constants::MAX_INSTANCES + 31) / 32) as usize;
-            self.visibility_bitset_readback.resize(n_u32, 0u32);
-            let bytes = bytemuck::cast_slice_mut(&mut self.visibility_bitset_readback);
-            backend.download_buffer(self.visibility_bitset_readback_buf, bytes, 0);
-        }
     }
 
     /// All-in-one per-frame entry point.
@@ -988,17 +936,11 @@ impl DefaultRenderGraph {
         }
 
         // 7. Execute the cached compiled graph.
-        let result = self.compiled.as_mut().unwrap().execute(
+        self.compiled.as_mut().unwrap().execute(
             backend,
             &frame_data,
             Some(&mut self.temporal_registry),
-        );
-        // Capture the timeline semaphore value so sync() can non-blockingly poll
-        // GPU completion before reading readback buffers.
-        if let Ok(Some(v)) = &result {
-            self.last_render_timeline = *v;
-        }
-        result
+        )
     }
 
     /// Records the full render graph for one frame.
@@ -1086,33 +1028,10 @@ impl DefaultRenderGraph {
             builder.add_pass(&mut self.sync_group);
             builder.add_pass(&mut self.blas_update_pass);
 
-            // VisibilityBitset — declared before any pass that reads or writes it.
-            // OcclusionCullPass (DrawCallGenPass) writes frame N via InterlockedOr.
-            // PreZCullPass reads frame N-1 via read_buffer_history.
-            // Size: ceil(MAX_INSTANCES / 32) * 4 bytes = 32 KB for MAX_INSTANCES=262144.
-            builder.declare_buffer_history_output(
-                "VisibilityBitset",
-                BufferDesc {
-                    size: (crate::constants::MAX_INSTANCES + 31) / 32 * 4,
-                    usage: BufferUsageFlags::STORAGE_BUFFER
-                         | BufferUsageFlags::TRANSFER_DST
-                         | BufferUsageFlags::TRANSFER_SRC, // needed by BufferReadbackPass
-                    memory: MemoryType::GpuOnly,
-                },
-            );
-
-            // 1. PreZ: cull (visible_N1 ∩ frustum) → depth-only draw → HiZ pyramid
-            builder.add_pass(&mut self.prez_cull_pass);
-            builder.add_pass(&mut self.prez_pass);
-            builder.add_pass(&mut self.hiz_build_prez);
-
-            // 2. Occlusion cull against HiZPreZ → DrawCallBuffer + VisibilityBitset frame N
+            // 1. Frustum cull → DrawCallBuffer
             builder.add_pass(&mut self.draw_call_gen_pass);
 
-            // 2b. Copy VisibilityBitset to host-visible readback buffer (read in next frame's sync)
-            builder.add_pass(&mut self.visibility_readback_pass);
-
-            // 1c. TLAS Rebuild
+            // 1b. TLAS Rebuild
             builder.add_pass(&mut self.tlas_rebuild_pass);
 
             builder.publish("DebugChannel", channel as u32);

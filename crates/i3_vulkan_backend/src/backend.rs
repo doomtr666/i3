@@ -688,10 +688,6 @@ impl RenderBackend for VulkanBackend {
         crate::resources::upload_buffer(self, handle, data, offset)
     }
 
-    fn download_buffer(&mut self, handle: BackendBuffer, data: &mut [u8], offset: u64) {
-        crate::resources::download_buffer(self, handle, data, offset)
-    }
-
     fn upload_image(
         &mut self,
         handle: BackendImage,

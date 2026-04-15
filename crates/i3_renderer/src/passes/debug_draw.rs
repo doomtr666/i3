@@ -102,6 +102,94 @@ impl DebugDrawPass {
         self.push_line(c[2], c[6], col); self.push_line(c[3], c[7], col);
     }
 
+    /// Draw a decimal integer as 7-segment digits in world space.
+    ///
+    /// Digits are rendered as line segments in the billboard plane defined by
+    /// `cam_right` and `cam_up` (world-space unit vectors extracted from the view matrix).
+    /// The label is centred at `pos`.
+    ///
+    /// `scale` is the height of one digit in world units.
+    /// Useful to display instance indices for RenderDoc thread-level debugging.
+    pub fn push_label_3d(
+        &mut self,
+        pos:       [f32; 3],
+        n:         u32,
+        col:       [f32; 4],
+        scale:     f32,
+        cam_right: [f32; 3], // first row of view matrix
+        cam_up:    [f32; 3], // second row of view matrix
+    ) {
+        // 7-segment encoding: bits 0-6 = segments a,b,c,d,e,f,g
+        //   aaa
+        //  f   b
+        //  f   b
+        //   ggg
+        //  e   c
+        //  e   c
+        //   ddd
+        const SEGS: [u8; 10] = [
+            0b0111111, // 0  a b c d e f
+            0b0000110, // 1  b c
+            0b1011011, // 2  a b d e g
+            0b1001111, // 3  a b c d g
+            0b1100110, // 4  b c f g
+            0b1101101, // 5  a c d f g
+            0b1111101, // 6  a c d e f g
+            0b0000111, // 7  a b c
+            0b1111111, // 8  a b c d e f g
+            0b1101111, // 9  a b c d f g
+        ];
+
+        // Collect decimal digits (most-significant first).
+        let mut digits = [0u8; 10];
+        let mut ndigits = 0usize;
+        let mut x = if n == 0 { 1 } else { n };
+        if n == 0 { digits[0] = 0; ndigits = 1; }
+        else {
+            while x > 0 { digits[ndigits] = (x % 10) as u8; x /= 10; ndigits += 1; }
+            digits[..ndigits].reverse();
+        }
+        let digits = &digits[..ndigits];
+
+        let dw    = scale * 0.6;   // digit width
+        let dh    = scale;         // digit height
+        let gap   = scale * 0.2;   // inter-digit gap
+
+        let total_w = ndigits as f32 * dw + (ndigits - 1) as f32 * gap;
+
+        // pt(r, u): world position offset by r*dw along cam_right and u*dh along cam_up,
+        // relative to the bottom-left corner of the current digit.
+        let add3 = |a: [f32;3], b: [f32;3]| -> [f32;3] {
+            [a[0]+b[0], a[1]+b[1], a[2]+b[2]]
+        };
+        let scale3 = |v: [f32;3], s: f32| -> [f32;3] { [v[0]*s, v[1]*s, v[2]*s] };
+
+        // Centre offset: start of first digit (bottom-left) relative to pos.
+        let base_r = -total_w * 0.5;
+        let base_u = -dh * 0.5;
+
+        for (di, &digit) in digits.iter().enumerate() {
+            let col_r = base_r + di as f32 * (dw + gap);
+
+            let pt = |r: f32, u: f32| -> [f32; 3] {
+                add3(pos, add3(scale3(cam_right, col_r + r * dw), scale3(cam_up, base_u + u * dh)))
+            };
+
+            let tl = pt(0.0, 1.0); let tr = pt(1.0, 1.0);
+            let ml = pt(0.0, 0.5); let mr = pt(1.0, 0.5);
+            let bl = pt(0.0, 0.0); let br = pt(1.0, 0.0);
+
+            let s = SEGS[digit as usize];
+            if s & (1 << 0) != 0 { self.push_line(tl, tr, col); } // a top
+            if s & (1 << 1) != 0 { self.push_line(tr, mr, col); } // b top-right
+            if s & (1 << 2) != 0 { self.push_line(mr, br, col); } // c bot-right
+            if s & (1 << 3) != 0 { self.push_line(bl, br, col); } // d bottom
+            if s & (1 << 4) != 0 { self.push_line(ml, bl, col); } // e bot-left
+            if s & (1 << 5) != 0 { self.push_line(tl, ml, col); } // f top-left
+            if s & (1 << 6) != 0 { self.push_line(ml, mr, col); } // g middle
+        }
+    }
+
     /// Draw the view frustum defined by `inv_vp` in world space (12 edges).
     /// Useful when the culling camera is decoupled from the render camera.
     pub fn push_frustum(&mut self, inv_vp: &nalgebra_glm::Mat4, col: [f32; 4]) {

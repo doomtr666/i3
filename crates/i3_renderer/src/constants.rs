@@ -24,8 +24,3 @@ pub const DRAW_INDIRECT_CMD_SIZE: u64 = 20;
 /// Maximum number of materials in the material buffer.
 pub const MAX_MATERIALS: u64 = 65536;
 
-/// Fixed resolution of the PreZ depth buffer used to build HiZPreZ.
-/// Both dimensions are powers of two → exact halving at every mip level, no edge cases.
-/// The PreZ renders the same frustum as the main pass, so HiZ UV [0,1] == screen UV [0,1].
-pub const HIZ_PREZ_WIDTH:  u32 = 1024;
-pub const HIZ_PREZ_HEIGHT: u32 = 512;

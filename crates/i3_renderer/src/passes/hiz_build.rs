@@ -35,10 +35,6 @@ pub struct HiZBuildPass {
 }
 
 impl HiZBuildPass {
-    pub fn new_prez() -> Self {
-        Self::with_names("DepthPreZ", "HiZPreZ")
-    }
-
     pub fn new_final() -> Self {
         Self::with_names("DepthBuffer", "HiZFinal")
     }

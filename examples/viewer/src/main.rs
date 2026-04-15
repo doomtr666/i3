@@ -64,8 +64,7 @@ struct DeferredGltfApp {
     sample_accum_time: f32,
     sample_max_dt: f32,
     show_culling_debug: bool,
-    culling_show_visible: bool,
-    culling_show_culled: bool,
+    culling_show_ids: bool,
 }
 
 impl DeferredGltfApp {
@@ -473,8 +472,7 @@ impl ExampleApp for DeferredGltfApp {
             ui.label("Culling Debug:");
             ui.checkbox(&mut self.show_culling_debug, "Show bounding boxes");
             if self.show_culling_debug {
-                ui.checkbox(&mut self.culling_show_visible, "  Visible (green)");
-                ui.checkbox(&mut self.culling_show_culled,  "  Culled  (red)");
+                ui.checkbox(&mut self.culling_show_ids, "  Instance IDs");
             }
 
             ui.separator();
@@ -547,36 +545,42 @@ impl ExampleApp for DeferredGltfApp {
             let vp = projection * view;
             self.render_graph.debug_draw_pass.clear();
 
+            // Camera billboard vectors extracted from the view matrix (row 0 = right, row 1 = up).
+            let cam_right = [view[(0,0)], view[(0,1)], view[(0,2)]];
+            let cam_up    = [view[(1,0)], view[(1,1)], view[(1,2)]];
+
             if self.show_culling_debug {
+                let col = [0.0_f32, 1.0, 0.2, 0.85]; // green = frustum-visible
                 for (idx, inst) in self.render_graph.cached_instances.iter().enumerate() {
-                    // Skip if outside the camera frustum (CPU test mirrors the GPU frustum cull).
+                    // Skip if outside the camera frustum.
                     if !frustum_cull_cpu(inst.world_aabb_min, inst.world_aabb_max, &vp) {
                         continue;
                     }
-                    // Check the GPU occlusion bitset (1-frame delay — acceptable for debug).
-                    // Bit `idx` is at word `idx/32`, position `idx%32`.
-                    // Default to visible (true) on the first frame when the buffer is empty.
-                    let word = idx / 32;
-                    let bit  = idx % 32;
-                    let gpu_visible = self.render_graph.visibility_bitset_readback
-                        .get(word)
-                        .map(|&w| (w >> bit) & 1 != 0)
-                        .unwrap_or(true);
 
-                    let draw = (gpu_visible  && self.culling_show_visible)
-                            || (!gpu_visible && self.culling_show_culled);
-                    if !draw { continue; }
-
-                    let col = if gpu_visible {
-                        [0.0_f32, 1.0, 0.2, 0.85]    // green  = frustum + occlusion pass
-                    } else {
-                        [1.0_f32, 0.15, 0.15, 0.85]  // red    = occlusion culled by HiZ
-                    };
                     self.render_graph.debug_draw_pass.push_aabb(
                         inst.world_aabb_min,
                         inst.world_aabb_max,
                         col,
                     );
+
+                    // Optional: draw instance index as 7-segment label (= thread ID in draw_call_gen).
+                    if self.culling_show_ids {
+                        let cx = (inst.world_aabb_min[0] + inst.world_aabb_max[0]) * 0.5;
+                        let cy = (inst.world_aabb_min[1] + inst.world_aabb_max[1]) * 0.5;
+                        let cz = (inst.world_aabb_min[2] + inst.world_aabb_max[2]) * 0.5;
+                        let ext_x = (inst.world_aabb_max[0] - inst.world_aabb_min[0]).abs();
+                        let ext_y = (inst.world_aabb_max[1] - inst.world_aabb_min[1]).abs();
+                        let ext_z = (inst.world_aabb_max[2] - inst.world_aabb_min[2]).abs();
+                        let scale = (ext_x.min(ext_y).min(ext_z) * 0.4).clamp(0.05, 2.0);
+                        self.render_graph.debug_draw_pass.push_label_3d(
+                            [cx, cy, cz],
+                            idx as u32,
+                            col,
+                            scale,
+                            cam_right,
+                            cam_up,
+                        );
+                    }
                 }
             }
         }
@@ -686,8 +690,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         sample_accum_time: 0.0,
         sample_max_dt: 0.0,
         show_culling_debug: false,
-        culling_show_visible: false,
-        culling_show_culled: true,
+        culling_show_ids: false,
     };
 
     // Initial load
