@@ -1,0 +1,17 @@
+BakeManifest(
+    bundle_name: "system",
+    pipelines_dirs: [
+        "pipelines",
+        "../../i3_egui/assets/pipelines",
+    ],
+    ibl: [
+        (
+            source: "../../../assets/hdri/horn-koppe_spring_1k.hdr",
+            options: (
+                extract_sun: true,
+                intensity_scale: 1.0,
+                sun_strength_ratio: Some(15),
+            )
+        ),
+    ],
+)

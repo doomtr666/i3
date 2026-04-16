@@ -111,9 +111,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 
     float depth = depthBuffer.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r;
     if (depth <= 0.0)
-    {
         discard;
-    }
 
     // Read GBuffer
     float3 albedo = gbufferAlbedo.Sample(bindlessSamplers[SAMPLER_LINEAR], uv).rgb;
@@ -142,9 +140,8 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 
     float z_slice = 0.0;
     if (view_z > pc.near_plane)
-    {
         z_slice = log(view_z / pc.near_plane) * float(pc.grid_size.z) / log(pc.far_plane / pc.near_plane);
-    }
+
     uint tile_z = clamp(uint(max(0.0, z_slice)), 0u, pc.grid_size.z - 1);
 
     uint cluster_index = tile_z * pc.grid_size.x * pc.grid_size.y +

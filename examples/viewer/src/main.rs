@@ -59,6 +59,7 @@ struct DeferredGltfApp {
     camera: examples_common::camera_controller::CameraController,
     is_fullscreen: bool,
     current_scene: String,
+    available_scenes: Vec<String>,
     frame_time_history: VecDeque<f32>,
     show_perf_graph: bool,
     sample_accum_time: f32,
@@ -371,7 +372,7 @@ impl ExampleApp for DeferredGltfApp {
         self.ui.begin_frame();
         let egui_ctx = self.ui.context().clone();
 
-        let mut scene_to_load = None;
+        let mut scene_to_load: Option<String> = None;
 
         egui::Window::new("Engine Debug").show(&egui_ctx, |ui| {
             ui.heading("Renderer");
@@ -394,74 +395,10 @@ impl ExampleApp for DeferredGltfApp {
             egui::ComboBox::from_label("Select Scene")
                 .selected_text(&self.current_scene)
                 .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(self.current_scene == "Sponza_scene", "Sponza")
-                        .clicked()
-                    {
-                        scene_to_load = Some("Sponza_scene");
-                    }
-                    if ui
-                        .selectable_label(
-                            self.current_scene == "BistroExterior_scene",
-                            "Bistro Exterior",
-                        )
-                        .clicked()
-                    {
-                        scene_to_load = Some("BistroExterior_scene");
-                    }
-                    if ui
-                        .selectable_label(
-                            self.current_scene == "BistroInterior_scene",
-                            "Bistro Interior",
-                        )
-                        .clicked()
-                    {
-                        scene_to_load = Some("BistroInterior_scene");
-                    }
-                    if ui
-                        .selectable_label(
-                            self.current_scene == "DamagedHelmet_scene",
-                            "Damaged Helmet",
-                        )
-                        .clicked()
-                    {
-                        scene_to_load = Some("DamagedHelmet_scene");
-                    }
-                    if ui
-                        .selectable_label(
-                            self.current_scene == "NormalTangentTest_scene",
-                            "Normal Tangent Test",
-                        )
-                        .clicked()
-                    {
-                        scene_to_load = Some("NormalTangentTest_scene");
-                    }
-                    if ui
-                        .selectable_label(
-                            self.current_scene == "NormalTangentMirrorTest_scene",
-                            "Normal Tangent Mirror",
-                        )
-                        .clicked()
-                    {
-                        scene_to_load = Some("NormalTangentMirrorTest_scene");
-                    }
-                    if ui
-                        .selectable_label(
-                            self.current_scene == "culling_scene",
-                            "Culling Test",
-                        )
-                        .clicked()
-                    {
-                        scene_to_load = Some("culling_scene");
-                    }
-                    if ui
-                        .selectable_label(
-                            self.current_scene == "EnvironmentTest_scene",
-                            "Environment Test",
-                        )
-                        .clicked()
-                    {
-                        scene_to_load = Some("EnvironmentTest_scene");
+                    for scene in &self.available_scenes {
+                        if ui.selectable_label(self.current_scene == *scene, scene).clicked() {
+                            scene_to_load = Some(scene.clone());
+                        }
                     }
                 });
 
@@ -521,7 +458,7 @@ impl ExampleApp for DeferredGltfApp {
         }
 
         if let Some(name) = scene_to_load {
-            self.load_scene(name);
+            self.load_scene(&name);
         }
 
         // Finalize UI and update textures before recording the graph
@@ -672,6 +609,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let scene_name = std::env::var("I3_SCENE").unwrap_or_else(|_| "Sponza_scene".to_string());
 
+    let mut available_scenes = loader_arc.list_assets::<SceneAsset>();
+    available_scenes.sort();
+
     let mut app = DeferredGltfApp {
         backend,
         window,
@@ -685,6 +625,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         camera: examples_common::camera_controller::CameraController::new(),
         is_fullscreen: false,
         current_scene: String::new(),
+        available_scenes,
         frame_time_history: VecDeque::with_capacity(2000),
         show_perf_graph: false,
         sample_accum_time: 0.0,

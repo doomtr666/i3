@@ -12,35 +12,26 @@ fn main() {
 
 fn run() -> Result<()> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let manifest_path = Path::new(&manifest_dir);
-    
-    // Assets are collocated in the crate
-    let input_dir = manifest_path.join("assets/pipelines");
-    
-    // Also include egui assets from crates/i3_egui
-    let workspace_root = manifest_path.parent().unwrap().parent().unwrap();
-    let egui_assets = workspace_root.join("crates/i3_egui/assets/pipelines");
-    
-    // Output bundle to the target directory (debug/release)
-    let out_dir = std::env::var("OUT_DIR").unwrap();
-    let out_path = Path::new(&out_dir);
-    
-    // We want the final artifacts to be in the profile folder (target/debug or target/release)
-    let profile_dir = out_path.parent().unwrap().parent().unwrap().parent().unwrap();
-    let output_dir = profile_dir;
+    let out_dir      = std::env::var("OUT_DIR").unwrap();
 
-    println!("cargo:rerun-if-changed=assets");
-    println!("cargo:rerun-if-changed={}", egui_assets.display());
-    
-    let hdri_path = workspace_root.join("assets/hdri/horn-koppe_spring_1k.hdr");
-    println!("cargo:rerun-if-changed={}", hdri_path.display());
-    
-    BundleBaker::new("system")?
-        .with_output_dir(output_dir)
-        .add_pipelines(input_dir)?
-        .add_pipelines(egui_assets)?
-        .add_hdr_ibl(hdri_path, IblBakeOptions::default())
-        .execute()?;
+    // target/debug or target/release
+    let profile_dir = Path::new(&out_dir)
+        .parent().unwrap()
+        .parent().unwrap()
+        .parent().unwrap();
+
+    // Watch only the bake manifest and pipeline/IBL assets — NOT shaders.
+    // Shaders are runtime-loaded and don't affect Rust compilation. Watching the full assets/
+    // directory would force a crate recompile on every shader edit.
+    println!("cargo:rerun-if-changed=assets/system.bake.ron");
+    println!("cargo:rerun-if-changed=assets/pipelines");
+    println!("cargo:rerun-if-changed=../../i3_egui/assets/pipelines");
+
+    ManifestBaker::from_file(
+        Path::new(&manifest_dir).join("assets/system.bake.ron"),
+    )
+    .with_output_dir(profile_dir)
+    .execute()?;
 
     Ok(())
 }

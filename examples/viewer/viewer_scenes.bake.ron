@@ -1,0 +1,13 @@
+BakeManifest(
+    bundle_name: "viewer_scenes",
+    meshes: [
+        "../../assets/gltf-sample-assets/Models/DamagedHelmet/glTF-Binary/DamagedHelmet.glb",
+        "../../assets/gltf-sample-assets/Models/Sponza/glTF/Sponza.gltf",
+        "../../assets/Bistro_v5_2/BistroExterior.fbx",
+        "../../assets/Bistro_v5_2/BistroInterior.fbx",
+        "../../assets/gltf-sample-assets/Models/NormalTangentTest/glTF/NormalTangentTest.gltf",
+        "../../assets/gltf-sample-assets/Models/NormalTangentMirrorTest/glTF/NormalTangentMirrorTest.gltf",
+        "../../assets/test/culling.glb",
+        "../../assets/gltf-sample-assets/Models/EnvironmentTest/glTF/EnvironmentTest.gltf",
+    ],
+)

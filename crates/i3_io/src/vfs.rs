@@ -15,6 +15,9 @@ pub trait VfsBackend: Send + Sync {
     fn open_by_uuid(&self, _uuid: &uuid::Uuid) -> Option<Result<Box<dyn VfsFile>>> {
         None
     }
+    fn list_by_type(&self, _asset_type: &[u8; 16]) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub struct Vfs {
@@ -46,6 +49,15 @@ impl Vfs {
             }
         }
         Err(crate::error::IoError::NotFound(path.to_path_buf()))
+    }
+
+    pub fn list_by_type(&self, asset_type: &[u8; 16]) -> Vec<String> {
+        let backends = self.backends.read().unwrap();
+        let mut names = Vec::new();
+        for backend in backends.iter() {
+            names.extend(backend.list_by_type(asset_type));
+        }
+        names
     }
 
     pub fn open_by_uuid(&self, uuid: &uuid::Uuid) -> Result<Box<dyn VfsFile>> {
@@ -257,6 +269,14 @@ impl BundleBackend {
 }
 
 impl VfsBackend for BundleBackend {
+    fn list_by_type(&self, asset_type: &[u8; 16]) -> Vec<String> {
+        self.by_name
+            .iter()
+            .filter(|(_, entry)| &entry.asset_type == asset_type)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     fn exists(&self, path: &Path) -> bool {
         let path_str = path.to_string_lossy();
         self.by_name.contains_key(path_str.as_ref())

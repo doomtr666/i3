@@ -98,6 +98,10 @@ impl AssetLoader {
         self.vfs.clone()
     }
 
+    pub fn list_assets<T: Asset>(&self) -> Vec<String> {
+        self.vfs.list_by_type(&T::ASSET_TYPE_ID)
+    }
+
     pub fn load<T: Asset>(&self, path: impl AsRef<std::path::Path>) -> AssetHandle<T> {
         let handle = AssetHandle::new();
         let path = path.as_ref().to_path_buf();

@@ -6,7 +6,8 @@ use rayon::prelude::*;
 use std::f32::consts::PI;
 
 /// Options de bake IBL.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct IblBakeOptions {
     pub extract_sun: bool,
 
