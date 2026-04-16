@@ -3,6 +3,8 @@ use crate::passes::debug_draw::DebugDrawPass;
 use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
 use crate::passes::deferred_resolve::DeferredResolvePass;
 use crate::passes::gbuffer::GBufferPass;
+use crate::passes::gtao::GtaoPass;
+use crate::passes::gtao_temporal::GtaoTemporalPass;
 use crate::passes::sky::SkyPass;
 use crate::prelude::*;
 use i3_egui::prelude::*;
@@ -123,6 +125,9 @@ pub struct DefaultRenderGraph {
     pub material_sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
     pub fxaa_enabled: bool,
+    pub gtao_enabled: bool,
+    pub gtao_pass: GtaoPass,
+    pub gtao_temporal_pass: GtaoTemporalPass,
     pub light_buffer: i3_gfx::graph::backend::BackendBuffer,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
     pub bindless_manager: crate::bindless::BindlessManager,
@@ -147,6 +152,9 @@ pub struct DefaultRenderGraph {
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
     pub cached_instances: Vec<crate::scene::GpuInstanceData>,
     pub cached_materials: Vec<(u32, crate::scene::MaterialData)>,
+
+    // Previous frame view-projection — one-frame lag for temporal reprojection.
+    prev_view_projection: nalgebra_glm::Mat4,
 
     pub ibl_images: Vec<i3_gfx::graph::backend::BackendImage>,
     pub ibl_sun: i3_io::ibl::IblSunData,
@@ -304,6 +312,8 @@ impl DefaultRenderGraph {
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
         let hiz_build_final = crate::passes::hiz_build::HiZBuildPass::new_final();
+        let gtao_pass = GtaoPass::new();
+        let gtao_temporal_pass = GtaoTemporalPass::new();
 
         let mut this = Self {
             graph,
@@ -321,6 +331,9 @@ impl DefaultRenderGraph {
             nearest_sampler,
             debug_channel: DebugChannel::Lit,
             fxaa_enabled: true,
+            gtao_enabled: true,
+            gtao_pass,
+            gtao_temporal_pass,
             light_buffer,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
@@ -333,6 +346,8 @@ impl DefaultRenderGraph {
             scene_mesh_descriptors: Vec::new(),
             cached_instances: Vec::new(),
             cached_materials: Vec::new(),
+
+            prev_view_projection: nalgebra_glm::identity(),
 
             ibl_images: Vec::new(),
             ibl_sun: i3_io::ibl::IblSunData {
@@ -461,6 +476,10 @@ impl DefaultRenderGraph {
             .init_pass_direct(&mut self.clustering_group, backend);
         self.graph
             .init_pass_direct(&mut self.tlas_rebuild_pass, backend);
+        self.graph
+            .init_pass_direct(&mut self.gtao_pass, backend);
+        self.graph
+            .init_pass_direct(&mut self.gtao_temporal_pass, backend);
         self.graph
             .init_pass_direct(&mut self.deferred_resolve_pass, backend);
         self.graph
@@ -822,12 +841,16 @@ impl DefaultRenderGraph {
         // 3. Populate FrameBlackboard for execute() access
         let mut frame_data = i3_gfx::graph::compiler::FrameBlackboard::new();
         frame_data.publish("Common", common);
+        frame_data.publish("PrevViewProjection", self.prev_view_projection);
         frame_data.publish("SunDirection", sun_dir);
         frame_data.publish("SunIntensity", sun_int);
         frame_data.publish("SunColor", sun_col);
         frame_data.publish("TimeDelta", dt);
         frame_data.publish("DebugChannel", self.debug_channel as u32);
         frame_data.publish("BindlessSet", self.bindless_manager.bindless_set);
+
+        // Update prev VP for the next frame (after publishing this frame's prev)
+        self.prev_view_projection = view_projection;
 
         frame_data.publish("IblIndices", self.ibl_indices);
 
@@ -841,8 +864,11 @@ impl DefaultRenderGraph {
             self.last_compiled_debug_channel = self.debug_channel;
             self.graph_dirty = true;
         }
-        // fxaa_enabled is a push-constant toggle — no graph recompilation needed.
+        // fxaa_enabled / gtao_enabled are push-constant toggles — no graph recompilation needed.
         self.post_process_group.fxaa_pass.enabled = self.fxaa_enabled;
+        self.gtao_pass.enabled = self.gtao_enabled;
+        self.gtao_pass.tick();
+        self.gtao_temporal_pass.tick();
 
         // 5. Dirty-check sync passes against cached scene data — no declare() side effects.
         // Sync passes add/remove transient staging buffers when dirty, changing graph topology.
@@ -1056,6 +1082,11 @@ impl DefaultRenderGraph {
                     memory: MemoryType::GpuOnly,
                 },
             );
+
+            // 3b. GTAO + Temporal — always run so AO_Resolved is available for all channels.
+            // When GTAO is disabled the compute shader early-outs writing 1.0 (no occlusion).
+            builder.add_pass(&mut self.gtao_pass);
+            builder.add_pass(&mut self.gtao_temporal_pass);
 
             if channel == DebugChannel::Lit
                 || channel == DebugChannel::LightDensity

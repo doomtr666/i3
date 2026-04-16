@@ -21,7 +21,7 @@ struct PushConstants
     uint ibl_irr_index;
     uint ibl_pref_index;
     float ibl_intensity;
-    uint pad1;
+    float ao_strength; // 0.0 = no AO, 1.0 = full AO
 };
 
 [[vk::push_constant]]
@@ -50,6 +50,9 @@ StructuredBuffer<ExposureData> exposure_buffer;
 
 [[vk::binding(9, 0)]]
 RaytracingAccelerationStructure tlas;
+
+[[vk::binding(10, 0)]]
+Texture2D<float> aoTexture;
 
 struct VertexOutput
 {
@@ -177,7 +180,8 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         spec_ambient = prefiltered * (F0 * brdf.x + brdf.y);
     }
 
-    float3 color = emissive + (diffuse_ambient + spec_ambient) * pc.ibl_intensity;
+    float ao = lerp(1.0f, aoTexture.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r, pc.ao_strength);
+    float3 color = emissive + (diffuse_ambient + spec_ambient) * pc.ibl_intensity * ao;
 #else
     float3 color = emissive + 0.005 * albedo;
 #endif

@@ -18,7 +18,7 @@ pub struct DeferredResolvePushConstants {
     pub ibl_irr_index: u32,
     pub ibl_pref_index: u32,
     pub ibl_intensity: f32,
-    pub _pad: u32,
+    pub ao_strength: f32,
 }
 
 pub struct DeferredResolvePass {
@@ -36,6 +36,7 @@ pub struct DeferredResolvePass {
     cluster_grid: BufferHandle,
     cluster_light_indices: BufferHandle,
     exposure_buffer: BufferHandle,
+    ao_raw: ImageHandle,
 
     // Persistence
     pipeline: Option<BackendPipeline>,
@@ -55,6 +56,7 @@ impl DeferredResolvePass {
             cluster_grid: BufferHandle::INVALID,
             cluster_light_indices: BufferHandle::INVALID,
             exposure_buffer: BufferHandle::INVALID,
+            ao_raw: ImageHandle::INVALID,
             tlas_handle: AccelerationStructureHandle::INVALID,
             pipeline: None,
         }
@@ -98,6 +100,10 @@ impl RenderPass for DeferredResolvePass {
         self.cluster_grid = builder.resolve_buffer("ClusterGrid");
         self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
         self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
+
+        // Resolve AO_Resolved (temporal accumulated AO — always present after GtaoTemporalPass)
+        self.ao_raw = builder.resolve_image("AO_Resolved");
+        builder.read_image(self.ao_raw, ResourceUsage::SHADER_READ);
 
         // Resolve TLAS from symbol table (published by TlasRebuildPass::declare()).
         self.tlas_handle = builder
@@ -151,6 +157,7 @@ impl RenderPass for DeferredResolvePass {
             if self.tlas_handle != AccelerationStructureHandle::INVALID {
                 d.bind(9).acceleration_structure(self.tlas_handle);
             }
+            d.bind(10).sampled_image(self.ao_raw, DescriptorImageLayout::ShaderReadOnlyOptimal);
         });
     }
 
@@ -180,7 +187,7 @@ impl RenderPass for DeferredResolvePass {
             ibl_irr_index: ibl.irr_index,
             ibl_pref_index: ibl.pref_index,
             ibl_intensity: ibl.intensity_scale,
-            _pad: 0,
+            ao_strength: 1.0,
         };
         ctx.bind_pipeline_raw(pipeline);
         ctx.bind_descriptor_set(2, bindless_set);

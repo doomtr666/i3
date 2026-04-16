@@ -18,6 +18,7 @@ PushConstants pc;
 [[vk::binding(2, 0)]] Texture2D gbufferRoughMetal;
 [[vk::binding(3, 0)]] Texture2D gbufferEmissive;
 [[vk::binding(4, 0)]] Texture2D gbufferDepth;
+[[vk::binding(5, 0)]] Texture2D<float> aoResolved;
 
 struct VertexOutput
 {
@@ -41,7 +42,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float2 uv = input.uv;
     float3 color = float3(0.0, 0.0, 0.0);
 
-    // Channel enum: 0=Albedo, 1=Normal, 2=Roughness, 3=Metallic, 4=Emissive, 5=Depth
+    // Channel enum: 0=Albedo, 1=Normal, 2=Roughness, 3=Metallic, 4=Emissive, 5=Depth, 6=AO
     switch (pc.channel)
     {
     case 0: // Albedo
@@ -79,6 +80,12 @@ float4 fragmentMain(VertexOutput input) : SV_Target
             // Most people expect far = black, near = white
             float v = 1.0 - d;
             color = float3(v, v, v);
+        }
+        break;
+    case 6: // AO_Resolved (temporal accumulated ambient occlusion)
+        {
+            float ao = aoResolved.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r;
+            color = float3(ao, ao, ao);
         }
         break;
     default:

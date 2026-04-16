@@ -404,6 +404,16 @@ impl ExampleApp for DeferredGltfApp {
 
             ui.separator();
             ui.checkbox(&mut self.render_graph.fxaa_enabled, "FXAA");
+            ui.checkbox(&mut self.render_graph.gtao_enabled, "GTAO");
+            if self.render_graph.gtao_enabled {
+                let gtao = &mut self.render_graph.gtao_pass;
+                ui.add(egui::Slider::new(&mut gtao.radius, 0.1_f32..=2.0).text("AO Radius"));
+                ui.add(egui::Slider::new(&mut gtao.falloff, 0.5_f32..=4.0).text("AO Falloff"));
+                ui.add(egui::Slider::new(&mut gtao.slice_count, 1_u32..=4).text("AO Slices"));
+                ui.add(egui::Slider::new(&mut gtao.step_count, 2_u32..=8).text("AO Steps"));
+                let alpha = &mut self.render_graph.gtao_temporal_pass.alpha;
+                ui.add(egui::Slider::new(alpha, 0.01_f32..=1.0).text("AO Temporal Alpha").logarithmic(true));
+            }
 
             ui.separator();
             ui.label("Culling Debug:");
@@ -448,6 +458,11 @@ impl ExampleApp for DeferredGltfApp {
                 &mut self.render_graph.debug_channel,
                 DebugChannel::Depth,
                 "Depth",
+            );
+            ui.radio_value(
+                &mut self.render_graph.debug_channel,
+                DebugChannel::AO,
+                "AO (accumulated)",
             );
         });
 

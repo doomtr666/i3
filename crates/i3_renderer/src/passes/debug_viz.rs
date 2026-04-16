@@ -10,6 +10,7 @@ pub enum DebugChannel {
     Metallic = 3,
     Emissive = 4,
     Depth = 5,
+    AO = 6,
     Lit = 10,
     LightDensity = 11,
     ClusterGrid = 12,
@@ -41,6 +42,7 @@ pub struct DebugVizPass {
     gbuffer_roughmetal: ImageHandle,
     gbuffer_emissive: ImageHandle,
     gbuffer_depth: ImageHandle,
+    ao_resolved: ImageHandle,
 
     // Persistence
     pipeline: Option<BackendPipeline>,
@@ -55,6 +57,7 @@ impl DebugVizPass {
             gbuffer_roughmetal: ImageHandle::INVALID,
             gbuffer_emissive: ImageHandle::INVALID,
             gbuffer_depth: ImageHandle::INVALID,
+            ao_resolved: ImageHandle::INVALID,
             channel: DebugChannel::Lit,
             backbuffer_name: "Backbuffer".to_string(),
             pipeline: None,
@@ -89,6 +92,7 @@ impl RenderPass for DebugVizPass {
         self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
         self.gbuffer_emissive = builder.resolve_image("GBuffer_Emissive");
         self.gbuffer_depth = builder.resolve_image("DepthBuffer");
+        self.ao_resolved = builder.resolve_image("AO_Resolved");
         self.backbuffer = builder.resolve_image(&self.backbuffer_name);
 
         // Read GBuffer targets
@@ -97,6 +101,7 @@ impl RenderPass for DebugVizPass {
         builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_emissive, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_depth, ResourceUsage::SHADER_READ);
+        builder.read_image(self.ao_resolved, ResourceUsage::SHADER_READ);
 
         // Write to backbuffer, then transition to PresentSrc
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
@@ -122,6 +127,10 @@ impl RenderPass for DebugVizPass {
             );
             d.sampled_image(
                 self.gbuffer_depth,
+                DescriptorImageLayout::ShaderReadOnlyOptimal,
+            );
+            d.sampled_image(
+                self.ao_resolved,
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
             );
         });
