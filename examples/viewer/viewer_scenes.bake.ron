@@ -8,6 +8,7 @@ BakeManifest(
         "../../assets/gltf-sample-assets/Models/NormalTangentTest/glTF/NormalTangentTest.gltf",
         "../../assets/gltf-sample-assets/Models/NormalTangentMirrorTest/glTF/NormalTangentMirrorTest.gltf",
         "../../assets/test/culling.glb",
+        "../../assets/test/ssr.glb",
         "../../assets/gltf-sample-assets/Models/EnvironmentTest/glTF/EnvironmentTest.gltf",
     ],
 )

@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "ssr_temporal",
+    shader: Path("../shaders/ssr_temporal.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "computeMain",
+    )),
+)

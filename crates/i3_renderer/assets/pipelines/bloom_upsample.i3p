@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "bloom_upsample",
+    shader: Path("../shaders/bloom_upsample.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "upsampleMain",
+    )),
+)

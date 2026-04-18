@@ -11,6 +11,8 @@ pub enum DebugChannel {
     Emissive = 4,
     Depth = 5,
     AO = 6,
+    SsrResolved = 7,
+    BloomBuffer = 8,
     Lit = 10,
     LightDensity = 11,
     ClusterGrid = 12,
@@ -42,7 +44,9 @@ pub struct DebugVizPass {
     gbuffer_roughmetal: ImageHandle,
     gbuffer_emissive: ImageHandle,
     gbuffer_depth: ImageHandle,
-    ao_resolved: ImageHandle,
+    ao_resolved:  ImageHandle,
+    ssr_resolved: ImageHandle,
+    bloom_buf:    ImageHandle,
 
     // Persistence
     pipeline: Option<BackendPipeline>,
@@ -57,7 +61,9 @@ impl DebugVizPass {
             gbuffer_roughmetal: ImageHandle::INVALID,
             gbuffer_emissive: ImageHandle::INVALID,
             gbuffer_depth: ImageHandle::INVALID,
-            ao_resolved: ImageHandle::INVALID,
+            ao_resolved:  ImageHandle::INVALID,
+            ssr_resolved: ImageHandle::INVALID,
+            bloom_buf:    ImageHandle::INVALID,
             channel: DebugChannel::Lit,
             backbuffer_name: "Backbuffer".to_string(),
             pipeline: None,
@@ -93,46 +99,54 @@ impl RenderPass for DebugVizPass {
         self.gbuffer_emissive = builder.resolve_image("GBuffer_Emissive");
         self.gbuffer_depth = builder.resolve_image("DepthBuffer");
         self.ao_resolved = builder.resolve_image("AO_Resolved");
-        self.backbuffer = builder.resolve_image(&self.backbuffer_name);
+        self.backbuffer  = builder.resolve_image(&self.backbuffer_name);
+
+        // SSR_Resolved is only declared when the lighting path ran (SsrResolved channel).
+        if self.channel == DebugChannel::SsrResolved {
+            self.ssr_resolved = builder.resolve_image("SSR_Resolved");
+            builder.read_image(self.ssr_resolved, ResourceUsage::SHADER_READ);
+        }
+        // Bloom_Buffer only exists when BloomPass is enabled.
+        if self.channel == DebugChannel::BloomBuffer {
+            self.bloom_buf = builder.resolve_image("Bloom_Buffer");
+            builder.read_image(self.bloom_buf, ResourceUsage::SHADER_READ);
+        }
 
         // Read GBuffer targets
-        builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
-        builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);
-        builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
-        builder.read_image(self.gbuffer_emissive, ResourceUsage::SHADER_READ);
-        builder.read_image(self.gbuffer_depth, ResourceUsage::SHADER_READ);
-        builder.read_image(self.ao_resolved, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_albedo,    ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_normal,    ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_roughmetal,ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_emissive,  ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_depth,     ResourceUsage::SHADER_READ);
+        builder.read_image(self.ao_resolved,       ResourceUsage::SHADER_READ);
 
         // Write to backbuffer, then transition to PresentSrc
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
         builder.present_image(self.backbuffer);
 
+        // Bindings 6 and 7 must always be written even if the shader won't read them.
+        // Use ao_resolved as a harmless dummy when the channel is something else.
+        let ssr_handle = if self.channel == DebugChannel::SsrResolved {
+            self.ssr_resolved
+        } else {
+            self.ao_resolved
+        };
+        let bloom_handle = if self.channel == DebugChannel::BloomBuffer {
+            self.bloom_buf
+        } else {
+            self.ao_resolved
+        };
+
         // Bind GBuffer textures via push descriptors
         builder.descriptor_set(0, |d| {
-            d.sampled_image(
-                self.gbuffer_albedo,
-                DescriptorImageLayout::ShaderReadOnlyOptimal,
-            );
-            d.sampled_image(
-                self.gbuffer_normal,
-                DescriptorImageLayout::ShaderReadOnlyOptimal,
-            );
-            d.sampled_image(
-                self.gbuffer_roughmetal,
-                DescriptorImageLayout::ShaderReadOnlyOptimal,
-            );
-            d.sampled_image(
-                self.gbuffer_emissive,
-                DescriptorImageLayout::ShaderReadOnlyOptimal,
-            );
-            d.sampled_image(
-                self.gbuffer_depth,
-                DescriptorImageLayout::ShaderReadOnlyOptimal,
-            );
-            d.sampled_image(
-                self.ao_resolved,
-                DescriptorImageLayout::ShaderReadOnlyOptimal,
-            );
+            d.sampled_image(self.gbuffer_albedo,     DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.sampled_image(self.gbuffer_normal,     DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.sampled_image(self.gbuffer_roughmetal, DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.sampled_image(self.gbuffer_emissive,   DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.sampled_image(self.gbuffer_depth,      DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.sampled_image(self.ao_resolved,        DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.sampled_image(ssr_handle,              DescriptorImageLayout::ShaderReadOnlyOptimal);
+            d.sampled_image(bloom_handle,            DescriptorImageLayout::ShaderReadOnlyOptimal);
         });
     }
 

@@ -18,7 +18,9 @@ PushConstants pc;
 [[vk::binding(2, 0)]] Texture2D gbufferRoughMetal;
 [[vk::binding(3, 0)]] Texture2D gbufferEmissive;
 [[vk::binding(4, 0)]] Texture2D gbufferDepth;
-[[vk::binding(5, 0)]] Texture2D<float> aoResolved;
+[[vk::binding(5, 0)]] Texture2D<float>  aoResolved;
+[[vk::binding(6, 0)]] Texture2D<float4> ssrResolved;
+[[vk::binding(7, 0)]] Texture2D<float4> bloomBuffer;
 
 struct VertexOutput
 {
@@ -87,6 +89,12 @@ float4 fragmentMain(VertexOutput input) : SV_Target
             float ao = aoResolved.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r;
             color = float3(ao, ao, ao);
         }
+        break;
+    case 7: // SSR_Resolved — RGB = reflected colour, A = confidence
+        color = ssrResolved.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb;
+        break;
+    case 8: // Bloom_Buffer mip 0 — RGB = accumulated bloom (tone-compressed for display)
+        color = bloomBuffer.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb / (1.0f + bloomBuffer.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb);
         break;
     default:
         color = float3(1.0, 0.0, 1.0); // Magenta = unsupported channel

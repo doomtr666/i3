@@ -416,6 +416,33 @@ impl ExampleApp for DeferredGltfApp {
             }
 
             ui.separator();
+            {
+                let ssr = &mut self.render_graph.ssr_main_pass;
+                ui.checkbox(&mut ssr.enabled, "SSR");
+                if ssr.enabled {
+                    ui.add(egui::Slider::new(&mut ssr.max_steps,        8_u32..=128).text("SSR Steps"));
+                    ui.add(egui::Slider::new(&mut ssr.thickness,        0.01_f32..=1.0).text("SSR Thickness"));
+                    ui.add(egui::Slider::new(&mut ssr.max_distance,     1.0_f32..=200.0).text("SSR Max Dist"));
+                    ui.add(egui::Slider::new(&mut ssr.roughness_cutoff, 0.1_f32..=1.0).text("SSR Rough Cutoff"));
+                    let alpha = &mut self.render_graph.ssr_temporal_pass.alpha;
+                    ui.add(egui::Slider::new(alpha, 0.0_f32..=0.99).text("SSR Temporal Alpha"));
+                    let intensity = &mut self.render_graph.ssr_composite_pass.intensity;
+                    ui.add(egui::Slider::new(intensity, 0.0_f32..=2.0).text("SSR Intensity"));
+                }
+            }
+
+            ui.separator();
+            {
+                let bloom = &mut self.render_graph.bloom_pass;
+                ui.checkbox(&mut bloom.enabled, "Bloom");
+                if bloom.enabled {
+                    ui.add(egui::Slider::new(&mut bloom.threshold, 0.5_f32..=4.0).text("Bloom Threshold"));
+                    ui.add(egui::Slider::new(&mut bloom.knee,      0.0_f32..=1.0).text("Bloom Knee"));
+                    ui.add(egui::Slider::new(&mut bloom.intensity, 0.0_f32..=1.0).logarithmic(true).text("Bloom Intensity"));
+                }
+            }
+
+            ui.separator();
             ui.label("Culling Debug:");
             ui.checkbox(&mut self.show_culling_debug, "Show bounding boxes");
             if self.show_culling_debug {
@@ -463,6 +490,16 @@ impl ExampleApp for DeferredGltfApp {
                 &mut self.render_graph.debug_channel,
                 DebugChannel::AO,
                 "AO (accumulated)",
+            );
+            ui.radio_value(
+                &mut self.render_graph.debug_channel,
+                DebugChannel::SsrResolved,
+                "SSR (resolved)",
+            );
+            ui.radio_value(
+                &mut self.render_graph.debug_channel,
+                DebugChannel::BloomBuffer,
+                "Bloom buffer",
             );
         });
 
