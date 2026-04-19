@@ -15,6 +15,5 @@ pub mod hiz_build;
 pub mod accel_struct;
 pub mod gtao;
 pub mod gtao_temporal;
-pub mod hdr_mips;
-pub mod ssr;
+pub mod sssr;
 pub mod bloom;

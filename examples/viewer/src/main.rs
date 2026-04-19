@@ -417,16 +417,16 @@ impl ExampleApp for DeferredGltfApp {
 
             ui.separator();
             {
-                let ssr = &mut self.render_graph.ssr_main_pass;
+                let ssr = &mut self.render_graph.sssr_sample_pass;
                 ui.checkbox(&mut ssr.enabled, "SSR");
                 if ssr.enabled {
                     ui.add(egui::Slider::new(&mut ssr.max_steps,        8_u32..=128).text("SSR Steps"));
                     ui.add(egui::Slider::new(&mut ssr.thickness,        0.01_f32..=1.0).text("SSR Thickness"));
                     ui.add(egui::Slider::new(&mut ssr.max_distance,     1.0_f32..=200.0).text("SSR Max Dist"));
                     ui.add(egui::Slider::new(&mut ssr.roughness_cutoff, 0.1_f32..=1.0).text("SSR Rough Cutoff"));
-                    let alpha = &mut self.render_graph.ssr_temporal_pass.alpha;
+                    let alpha = &mut self.render_graph.sssr_temporal_pass.alpha;
                     ui.add(egui::Slider::new(alpha, 0.0_f32..=0.99).text("SSR Temporal Alpha"));
-                    let intensity = &mut self.render_graph.ssr_composite_pass.intensity;
+                    let intensity = &mut self.render_graph.sssr_composite_pass.intensity;
                     ui.add(egui::Slider::new(intensity, 0.0_f32..=2.0).text("SSR Intensity"));
                 }
             }
@@ -450,57 +450,39 @@ impl ExampleApp for DeferredGltfApp {
             }
 
             ui.separator();
-            ui.label("Debug Channel:");
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::Lit,
-                "Lit (Final)",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::Albedo,
-                "Albedo",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::Normal,
-                "Normals",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::Roughness,
-                "Roughness",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::Metallic,
-                "Metallic",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::Emissive,
-                "Emissive",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::Depth,
-                "Depth",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::AO,
-                "AO (accumulated)",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::SsrResolved,
-                "SSR (resolved)",
-            );
-            ui.radio_value(
-                &mut self.render_graph.debug_channel,
-                DebugChannel::BloomBuffer,
-                "Bloom buffer",
-            );
+            ui.horizontal(|ui| {
+                ui.label("Debug Channel:");
+                let selected_label = match self.render_graph.debug_channel {
+                    DebugChannel::Lit          => "Lit (Final)",
+                    DebugChannel::Albedo       => "Albedo",
+                    DebugChannel::Normal       => "Normals",
+                    DebugChannel::Roughness    => "Roughness",
+                    DebugChannel::Metallic     => "Metallic",
+                    DebugChannel::Emissive     => "Emissive",
+                    DebugChannel::Depth        => "Depth",
+                    DebugChannel::AO           => "AO (accumulated)",
+                    DebugChannel::SsrResolved  => "SSR (resolved)",
+                    DebugChannel::BloomBuffer  => "Bloom buffer",
+                    DebugChannel::LightDensity => "Light density",
+                    DebugChannel::ClusterGrid  => "Cluster grid",
+                };
+                egui::ComboBox::from_id_salt("debug_channel")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Lit,          "Lit (Final)");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Albedo,       "Albedo");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Normal,       "Normals");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Roughness,    "Roughness");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Metallic,     "Metallic");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Emissive,     "Emissive");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Depth,        "Depth");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::AO,           "AO (accumulated)");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::SsrResolved,  "SSR (resolved)");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::BloomBuffer,  "Bloom buffer");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::LightDensity, "Light density");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::ClusterGrid,  "Cluster grid");
+                    });
+            });
         });
 
         if self.show_perf_graph {

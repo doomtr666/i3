@@ -1,8 +1,0 @@
-PipelineConfig(
-    name: "ssr_composite",
-    shader: Path("../shaders/ssr_composite.slang"),
-    graphics: None,
-    compute: Some(ComputeConfig(
-        entry_point: "compositeMain",
-    )),
-)

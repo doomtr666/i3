@@ -1,6 +1,6 @@
 PipelineConfig(
-    name: "ssr_main",
-    shader: Path("../shaders/ssr_main.slang"),
+    name: "sssr_composite",
+    shader: Path("../shaders/sssr_composite.slang"),
     graphics: None,
     compute: Some(ComputeConfig(
         entry_point: "computeMain",

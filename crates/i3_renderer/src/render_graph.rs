@@ -147,11 +147,10 @@ pub struct DefaultRenderGraph {
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
     pub hiz_build_final: crate::passes::hiz_build::HiZBuildPass,
-    pub hdr_mips_pass:     crate::passes::hdr_mips::HdrMipsPass,
-    pub ssr_main_pass:     crate::passes::ssr::SsrMainPass,
-    pub ssr_temporal_pass: crate::passes::ssr::SsrTemporalPass,
-    pub ssr_composite_pass: crate::passes::ssr::SsrCompositePass,
-    pub bloom_pass:         crate::passes::bloom::BloomPass,
+    pub sssr_sample_pass:    crate::passes::sssr::SssrSamplePass,
+    pub sssr_temporal_pass:  crate::passes::sssr::SssrTemporalPass,
+    pub sssr_composite_pass: crate::passes::sssr::SssrCompositePass,
+    pub bloom_pass:          crate::passes::bloom::BloomPass,
 
     // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
@@ -317,11 +316,10 @@ impl DefaultRenderGraph {
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
         let hiz_build_final = crate::passes::hiz_build::HiZBuildPass::new_final();
-        let hdr_mips_pass      = crate::passes::hdr_mips::HdrMipsPass::new();
-        let ssr_main_pass      = crate::passes::ssr::SsrMainPass::new();
-        let ssr_temporal_pass  = crate::passes::ssr::SsrTemporalPass::new();
-        let ssr_composite_pass = crate::passes::ssr::SsrCompositePass::new();
-        let bloom_pass         = crate::passes::bloom::BloomPass::new();
+        let sssr_sample_pass    = crate::passes::sssr::SssrSamplePass::new();
+        let sssr_temporal_pass  = crate::passes::sssr::SssrTemporalPass::new();
+        let sssr_composite_pass = crate::passes::sssr::SssrCompositePass::new();
+        let bloom_pass          = crate::passes::bloom::BloomPass::new();
         let gtao_pass = GtaoPass::new();
         let gtao_temporal_pass = GtaoTemporalPass::new();
 
@@ -353,10 +351,9 @@ impl DefaultRenderGraph {
             blas_update_pass,
             tlas_rebuild_pass,
             hiz_build_final,
-            hdr_mips_pass,
-            ssr_main_pass,
-            ssr_temporal_pass,
-            ssr_composite_pass,
+            sssr_sample_pass,
+            sssr_temporal_pass,
+            sssr_composite_pass,
             bloom_pass,
             scene_mesh_descriptors: Vec::new(),
             cached_instances: Vec::new(),
@@ -484,7 +481,6 @@ impl DefaultRenderGraph {
             .init_pass_direct(&mut self.blas_update_pass, backend);
         self.graph.init_pass_direct(&mut self.gbuffer_pass, backend);
         self.graph.init_pass_direct(&mut self.hiz_build_final, backend);
-        self.graph.init_pass_direct(&mut self.hdr_mips_pass, backend);
         self.graph
             .init_pass_direct(&mut self.draw_call_gen_pass, backend);
         self.graph.init_pass_direct(&mut self.sky_pass, backend);
@@ -497,11 +493,11 @@ impl DefaultRenderGraph {
         self.graph
             .init_pass_direct(&mut self.gtao_temporal_pass, backend);
         self.graph
-            .init_pass_direct(&mut self.ssr_main_pass, backend);
+            .init_pass_direct(&mut self.sssr_sample_pass, backend);
         self.graph
-            .init_pass_direct(&mut self.ssr_temporal_pass, backend);
+            .init_pass_direct(&mut self.sssr_temporal_pass, backend);
         self.graph
-            .init_pass_direct(&mut self.ssr_composite_pass, backend);
+            .init_pass_direct(&mut self.sssr_composite_pass, backend);
         self.graph
             .init_pass_direct(&mut self.bloom_pass, backend);
         self.graph
@@ -893,8 +889,8 @@ impl DefaultRenderGraph {
         self.gtao_pass.enabled = self.gtao_enabled;
         self.gtao_pass.tick();
         self.gtao_temporal_pass.tick();
-        self.ssr_main_pass.tick();
-        self.ssr_temporal_pass.tick();
+        self.sssr_sample_pass.tick();
+        self.sssr_temporal_pass.tick();
 
         // 5. Dirty-check sync passes against cached scene data — no declare() side effects.
         // Sync passes add/remove transient staging buffers when dirty, changing graph topology.
@@ -1157,13 +1153,10 @@ impl DefaultRenderGraph {
 
     fn record_lighting(&mut self, builder: &mut PassBuilder) -> ImageHandle {
         builder.add_pass(&mut self.deferred_resolve_pass);
-        // Generate HDR_Target mip chain — must run before SSR reads the mips.
-        builder.add_pass(&mut self.hdr_mips_pass);
-        // SSR reads HiZFinal + HDR_Target (with mips) — must run after both.
-        builder.add_pass(&mut self.ssr_main_pass);
-        builder.add_pass(&mut self.ssr_temporal_pass);
+        builder.add_pass(&mut self.sssr_sample_pass);
+        builder.add_pass(&mut self.sssr_temporal_pass);
         // Composite SSR_Resolved onto HDR_Target (in-place, mip 0).
-        builder.add_pass(&mut self.ssr_composite_pass);
+        builder.add_pass(&mut self.sssr_composite_pass);
         // Bloom — bright-pass filter → downsample → upsample → additive composite.
         builder.add_pass(&mut self.bloom_pass);
         builder.resolve_image("HDR_Target")

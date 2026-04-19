@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "sssr_sample",
+    shader: Path("../shaders/sssr_sample.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "computeMain",
+    )),
+)

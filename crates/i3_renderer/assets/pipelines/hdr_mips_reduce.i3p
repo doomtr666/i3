@@ -1,8 +1,0 @@
-PipelineConfig(
-    name: "hdr_mips_reduce",
-    shader: Path("../shaders/hdr_mips_reduce.slang"),
-    graphics: None,
-    compute: Some(ComputeConfig(
-        entry_point: "reduce_mip",
-    )),
-)
