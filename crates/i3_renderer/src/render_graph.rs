@@ -165,6 +165,10 @@ pub struct DefaultRenderGraph {
     pub ibl_indices: IblIndices,
     /// 1×1 white texture always at bindless index 0 — re-registered after each clear.
     white_image: i3_gfx::graph::backend::BackendImage,
+    /// 128×128 RG8 blue-noise texture — always registered right after IBL textures.
+    blue_noise_image: i3_gfx::graph::backend::BackendImage,
+    /// Bindless index of the blue-noise texture (stable across frames).
+    pub blue_noise_index: u32,
     pub sampler_indices: GlobalSamplerIndices,
 }
 
@@ -293,6 +297,30 @@ impl DefaultRenderGraph {
             .unwrap();
         bindless_manager.register_physical_texture(_backend, white_image);
 
+        // 128×128 RG8 blue-noise texture — registered at index 1 (right after white).
+        // Generated using a 16×16 ordered-dither (Bayer) base tiled 8×8 with per-tile
+        // random offsets to break periodicity. Each 16×16 tile contains all 256 values
+        // exactly once, guaranteeing perfect stratification per tile and avoiding
+        // low-frequency spatial clusters. Two independent channels (R uses columns,
+        // G uses rows) give uncorrelated u1/u2 samples for GGX importance sampling.
+        let blue_noise_data = generate_blue_noise_128x128();
+        let blue_noise_image = _backend.create_image(&ImageDesc {
+            width: 128,
+            height: 128,
+            depth: 1,
+            format: Format::R8G8_UNORM,
+            usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
+            mip_levels: 1,
+            array_layers: 1,
+            view_type: ImageViewType::Type2D,
+            swizzle: Default::default(),
+            clear_value: None,
+        });
+        _backend
+            .upload_image(blue_noise_image, &blue_noise_data, 0, 0, 128, 128, 0, 0)
+            .unwrap();
+        let blue_noise_index = bindless_manager.register_physical_texture(_backend, blue_noise_image);
+
         // NOTE: white_image stored in struct so it can be re-registered after bindless clear.
         // Fallback 1x1 black env texture — always bound to sky descriptor set 1
         // so the slot is never garbage when no IBL is loaded.
@@ -316,11 +344,13 @@ impl DefaultRenderGraph {
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
         let hiz_build_final = crate::passes::hiz_build::HiZBuildPass::new_final();
-        let sssr_sample_pass    = crate::passes::sssr::SssrSamplePass::new();
+        let mut sssr_sample_pass = crate::passes::sssr::SssrSamplePass::new();
+        sssr_sample_pass.blue_noise_index = blue_noise_index;
         let sssr_temporal_pass  = crate::passes::sssr::SssrTemporalPass::new();
         let sssr_composite_pass = crate::passes::sssr::SssrCompositePass::new();
         let bloom_pass          = crate::passes::bloom::BloomPass::new();
-        let gtao_pass = GtaoPass::new();
+        let mut gtao_pass = GtaoPass::new();
+        gtao_pass.blue_noise_index = blue_noise_index;
         let gtao_temporal_pass = GtaoTemporalPass::new();
 
         let mut this = Self {
@@ -370,6 +400,8 @@ impl DefaultRenderGraph {
             },
             ibl_indices: IblIndices::default(),
             white_image,
+            blue_noise_image,
+            blue_noise_index,
             compiled: None,
             last_screen_size: (0, 0),
             last_compiled_debug_channel: DebugChannel::Lit,
@@ -426,6 +458,12 @@ impl DefaultRenderGraph {
                 intensity_scale: scale,
             };
         }
+
+        // Blue-noise texture — always re-registered after IBL so its index stays stable.
+        self.blue_noise_index =
+            self.bindless_manager.register_physical_texture(backend, self.blue_noise_image);
+        self.sssr_sample_pass.blue_noise_index = self.blue_noise_index;
+        self.gtao_pass.blue_noise_index        = self.blue_noise_index;
     }
 
     /// Initializes the render graph: handles cooperative asset loading and pipeline binding.
@@ -1166,4 +1204,59 @@ impl DefaultRenderGraph {
         // Tonemap always writes to LDR_Target; FXAA always runs (passthrough when disabled).
         builder.add_pass(&mut self.post_process_group);
     }
+}
+
+// ─── Blue-noise generation ─────────────────────────────────────────────────────
+//
+// Generates a 64×64 RG8 blue-noise texture without external dependencies.
+//
+// Algorithm: 16×16 ordered-dither (Bayer) base tiled 4×4 with per-tile random
+// offset to break the 16-pixel periodicity.  Each 16×16 block is a permutation
+// of [0, 255] — perfect per-block stratification.  R and G channels use
+// spatially shifted Bayer patterns to be independent.
+//
+// Not true void-and-cluster blue noise, but sufficient for GGX importance
+// sampling: no low-frequency clusters, every 16×16 neighbourhood samples the
+// full [0, 255] range, and the channels are decorrelated.
+fn generate_blue_noise_128x128() -> Vec<u8> {
+    // PCG hash for per-tile offset scrambling.
+    let pcg = |v: u32| -> u32 {
+        let s = v.wrapping_mul(747796405).wrapping_add(2891336453);
+        let w = ((s >> ((s >> 28).wrapping_add(4))) ^ s).wrapping_mul(277803737);
+        (w >> 22) ^ w
+    };
+
+    // Recursive Bayer matrix value for an (x, y) coordinate in an n×n grid.
+    // Returns a value in 0..(n²−1).  Requires n to be a power of two.
+    fn bayer(x: usize, y: usize, n: usize) -> u8 {
+        if n == 1 { return 0; }
+        let h = n / 2;
+        let offsets = [[0u8, 2], [3, 1]]; // standard 2×2 Bayer sub-block
+        let b2 = offsets[y / h][x / h];
+        bayer(x % h, y % h, h) * 4 + b2
+    }
+
+    // 128×128 grid with 16×16 tiles → 8×8 = 64 tiles.
+    const S: usize = 128;
+    const T: usize = 16; // tile size
+    const TILES: usize = S / T; // 8 tiles per axis
+
+    let mut data = vec![0u8; S * S * 2];
+    for y in 0..S {
+        for x in 0..S {
+            let tile = ((y / T) * TILES + (x / T)) as u32; // 0..63
+
+            // R channel: Bayer(x%16, y%16, 16) + per-tile random offset.
+            let base_r = bayer(x % T, y % T, T) as u32;
+            let off_r  = pcg(tile * 2)     >> 24; // 0..255
+            data[(y * S + x) * 2]     = ((base_r + off_r) % 256) as u8;
+
+            // G channel: spatially shifted by ½ tile for channel independence,
+            //            different per-tile offset.
+            let base_g = bayer((x + T / 2) % T, (y + T / 2) % T, T) as u32;
+            let off_g  = pcg(tile * 2 + 1) >> 24;
+            data[(y * S + x) * 2 + 1] = ((base_g + off_g) % 256) as u8;
+        }
+    }
+    data
 }

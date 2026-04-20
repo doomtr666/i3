@@ -21,74 +21,75 @@
 //   matches the IBL term computed by deferred_resolve.
 
 #include "common.slangh"
+#include "blue_noise.slangh"
 
-struct SssrSamplePc {
-    float4x4 inv_projection;    // view-space position reconstruction
-    float4x4 projection;        // viewToClip
-    float4x4 view;              // world normal → view normal
+struct SssrSamplePc
+{
+    float4x4 inv_projection;  // view-space position reconstruction
+    float4x4 projection;      // viewToClip
+    float4x4 view;            // world normal → view normal
     float2   screen_size;
     float    max_distance;
-    float    thickness;         // max view-space depth gap for hit acceptance
+    float    thickness;       // max view-space depth gap for hit acceptance
     float    roughness_cutoff;
     uint     max_steps;
     uint     frame_index;
     uint     enabled;
-    uint     _pad;
+    uint     blue_noise_index; // bindless index of the 64×64 RG8 blue-noise texture
 };
-[[vk::push_constant]] SssrSamplePc pc;
+[[vk::push_constant]]
+SssrSamplePc pc;
 
-[[vk::binding(0, 0)]] Texture2D<float>    depthBuffer;
-[[vk::binding(1, 0)]] Texture2D<float2>   gbufferNormal;
-[[vk::binding(2, 0)]] Texture2D<float2>   gbufferRoughMetal;
-[[vk::binding(3, 0)]] Texture2D<float4>   hdrTarget;
-[[vk::binding(4, 0)]] RWTexture2D<float4> ssrOutput;
+[[vk::binding(0, 0)]]
+Texture2D<float> depthBuffer;
+[[vk::binding(1, 0)]]
+Texture2D<float2> gbufferNormal;
+[[vk::binding(2, 0)]]
+Texture2D<float2> gbufferRoughMetal;
+[[vk::binding(3, 0)]]
+Texture2D<float4> hdrTarget;
+[[vk::binding(4, 0)]]
+RWTexture2D<float4> ssrOutput;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-float3 viewSpacePos(uint2 px, float depth) {
-    float2 uv  = (float2(px) + 0.5f) / pc.screen_size;
+float3 viewSpacePos(uint2 px, float depth)
+{
+    float2 uv = (float2(px) + 0.5f) / pc.screen_size;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float4 vh  = mul(pc.inv_projection, float4(ndc, depth, 1.0f));
+    float4 vh = mul(pc.inv_projection, float4(ndc, depth, 1.0f));
     return vh.xyz / vh.w;
 }
 
-float4 viewToClip(float3 P) {
+float4 viewToClip(float3 P)
+{
     return mul(pc.projection, float4(P, 1.0f));
 }
 
 // Y-flip: uv.y = 0.5 - ndc.y * 0.5  (negative-viewport, §5 engine_conventions.md).
-float4 clipToScreenFull(float4 clip) {
+float4 clipToScreenFull(float4 clip)
+{
     float2 ndc = clip.xy / clip.w;
     return float4(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f, clip.z, clip.w);
 }
 
-float linearZ(float ndc_d) {
+float linearZ(float ndc_d)
+{
     float4 v = mul(pc.inv_projection, float4(0.0f, 0.0f, ndc_d, 1.0f));
     return v.z / v.w;
 }
 
-// PCG hash — no linear isocontours, fully independent samples.
-// IGN was replaced because its linear isocontours (bands of ~15 px) caused
-// all pixels on a band to sample the same azimuthal angle → hatching.
-uint pcgHash(uint v) {
-    uint s = v * 747796405u + 2891336453u;
-    uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
-    return (w >> 22u) ^ w;
-}
-float toF01(uint h) { return float(h) * (1.0f / 4294967296.0f); }
-
-// Three independent noise values per pixel per frame.
-// Golden-ratio offsets shift each dimension across frames (low-discrepancy).
-void pixelNoise(uint2 px, uint frame, out float u1, out float u2, out float jitter) {
-    uint seed = pcgHash(px.x ^ pcgHash(px.y ^ pcgHash(frame)));
-    u1      = frac(toF01(seed)               + float(frame) * 0.618033988f);
-    seed    = pcgHash(seed);
-    u2      = frac(toF01(seed)               + float(frame) * 0.381966011f);
-    seed    = pcgHash(seed);
-    jitter  = frac(toF01(seed)               + float(frame) * 0.149161f);
+// pixelNoise — thin wrapper over blue_noise.slangh for this pass.
+void pixelNoise(uint2 px, uint frame, out float u1, out float u2, out float jitter)
+{
+    float2 bn = blueNoiseBase(px, pc.blue_noise_index);
+    u1     = bnTemporal(bn.r, frame, 0.618033988f);  // φ    — azimuthal angle
+    u2     = bnTemporal(bn.g, frame, 0.381966011f);  // 1/φ² — polar angle
+    jitter = bnJitter(px, frame);                    // march step offset
 }
 
-float rayDepth(float cz_s, float cw_s, float cz_e, float cw_e, float t) {
+float rayDepth(float cz_s, float cw_s, float cz_e, float cw_e, float t)
+{
     return lerp(cz_s, cz_e, t) / lerp(cw_s, cw_e, t);
 }
 
@@ -100,18 +101,20 @@ float rayDepth(float cz_s, float cw_s, float cz_e, float cw_e, float t) {
 //
 // For α→0 the formula degenerates; clamp to 1e-3 → deterministic mirror.
 
-float3 sampleGGX_H(float u1, float u2, float alpha) {
-    float a2   = alpha * alpha;
-    float phi  = 2.0f * PI * u1;
+float3 sampleGGX_H(float u1, float u2, float alpha)
+{
+    float a2 = alpha * alpha;
+    float phi = 2.0f * PI * u1;
     float denom = max(1.0f + (a2 - 1.0f) * u2, 1e-6f);
-    float cos2  = (1.0f - u2) / denom;
-    float cosT  = sqrt(max(cos2, 0.0f));
-    float sinT  = sqrt(max(1.0f - cos2, 0.0f));
+    float cos2 = (1.0f - u2) / denom;
+    float cosT = sqrt(max(cos2, 0.0f));
+    float sinT = sqrt(max(1.0f - cos2, 0.0f));
     return float3(sinT * cos(phi), sinT * sin(phi), cosT);
 }
 
 // Build an orthonormal TBN with Z = N (view-space).
-void buildTBN(float3 N, out float3 T, out float3 B) {
+void buildTBN(float3 N, out float3 T, out float3 B)
+{
     float3 up = abs(N.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
     T = normalize(cross(up, N));
     B = cross(N, T);
@@ -120,21 +123,35 @@ void buildTBN(float3 N, out float3 T, out float3 B) {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 [numthreads(8, 8, 1)]
-void computeMain(uint3 id: SV_DispatchThreadID) {
+void computeMain(uint3 id: SV_DispatchThreadID)
+{
     uint2 px = id.xy;
-    if (any(px >= uint2(pc.screen_size))) return;
+    if (any(px >= uint2(pc.screen_size)))
+        return;
 
-    if (pc.enabled == 0u) { ssrOutput[int2(px)] = 0; return; }
+    if (pc.enabled == 0u)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     float depth = depthBuffer.Load(int3(px, 0)).r;
-    if (depth <= 0.0f) { ssrOutput[int2(px)] = 0; return; }
+    if (depth <= 0.0f)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     float roughness = gbufferRoughMetal.Load(int3(px, 0)).r;
-    if (roughness > pc.roughness_cutoff) { ssrOutput[int2(px)] = 0; return; }
+    if (roughness > pc.roughness_cutoff)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     // ── Geometry ──────────────────────────────────────────────────────────────
 
-    float3 P       = viewSpacePos(px, depth);
+    float3 P = viewSpacePos(px, depth);
     float3 N_world = decodeOctahedral(gbufferNormal.Load(int3(px, 0)).rg);
     float3x3 viewRot = float3x3(pc.view[0].xyz, pc.view[1].xyz, pc.view[2].xyz);
     float3 N = normalize(mul(viewRot, N_world));
@@ -159,30 +176,48 @@ void computeMain(uint3 id: SV_DispatchThreadID) {
     float3 H = normalize(T * H_local.x + B * H_local.y + N * H_local.z);
 
     // Guard: if H is below the surface, flip to mirror side.
-    if (dot(H, N) < 0.0f) H = reflect(H, N);
+    if (dot(H, N) < 0.0f)
+        H = reflect(H, N);
 
     float3 R = reflect(-V, H);
 
     // Reject rays going into the surface (possible for very rough materials).
-    if (dot(R, N) <= 0.0f) { ssrOutput[int2(px)] = 0; return; }
+    if (dot(R, N) <= 0.0f)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     // ── Ray endpoints ─────────────────────────────────────────────────────────
 
     float3 P_start = P + N * 0.05f;
-    float3 P_end   = P + R * pc.max_distance;
+    float3 P_end = P + R * pc.max_distance;
 
     float4 clip_s = viewToClip(P_start);
     float4 clip_e = viewToClip(P_end);
 
-    if (clip_s.w <= 0.0f) { ssrOutput[int2(px)] = 0; return; }
+    if (clip_s.w <= 0.0f)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     // Frustum clip: if the endpoint is behind the camera, clip to near plane.
-    if (clip_e.w <= 0.0f) {
+    if (clip_e.w <= 0.0f)
+    {
         float t_near = clip_s.w / (clip_s.w - clip_e.w) * 0.99f;
-        if (t_near < 0.02f) { ssrOutput[int2(px)] = 0; return; }
-        P_end  = lerp(P_start, P_end, t_near);
+        if (t_near < 0.02f)
+        {
+            ssrOutput[int2(px)] = 0;
+            return;
+        }
+        P_end = lerp(P_start, P_end, t_near);
         clip_e = viewToClip(P_end);
-        if (clip_e.w <= 0.0f) { ssrOutput[int2(px)] = 0; return; }
+        if (clip_e.w <= 0.0f)
+        {
+            ssrOutput[int2(px)] = 0;
+            return;
+        }
     }
 
     float4 ss_s = clipToScreenFull(clip_s);
@@ -195,11 +230,19 @@ void computeMain(uint3 id: SV_DispatchThreadID) {
     float cz_e = ss_e.z, cw_e = ss_e.w;
 
     float start_ndc = cz_s / cw_s;
-    if (start_ndc < 0.0f || start_ndc > 1.0f) { ssrOutput[int2(px)] = 0; return; }
+    if (start_ndc < 0.0f || start_ndc > 1.0f)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     float ray_px = max(abs(uv_delta.x) * pc.screen_size.x,
                        abs(uv_delta.y) * pc.screen_size.y);
-    if (ray_px < 1.0f) { ssrOutput[int2(px)] = 0; return; }
+    if (ray_px < 1.0f)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     // ── Phase 1: linear march ─────────────────────────────────────────────────
     //
@@ -208,30 +251,39 @@ void computeMain(uint3 id: SV_DispatchThreadID) {
     // repeating the same pattern every frame.
 
     float dt = 1.0f / float(pc.max_steps);
-    float t  = marchNoise * dt;
+    float t = marchNoise * dt;
     float t_prev = 0.0f;
-    bool  bracketed = false;
+    bool bracketed = false;
 
     [loop]
-    for (uint step = 0u; step < pc.max_steps; ++step) {
+    for (uint step = 0u; step < pc.max_steps; ++step)
+    {
         float2 uv = uv_start + uv_delta * t;
-        if (any(uv < 0.0f) || any(uv > 1.0f) || t >= 1.0f) break;
+        if (any(uv < 0.0f) || any(uv > 1.0f) || t >= 1.0f)
+            break;
 
         float ray_d = rayDepth(cz_s, cw_s, cz_e, cw_e, t);
         float buf_d = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], uv, 0.0f).r;
 
         // Reverse-Z: ray_d > buf_d → ray is closer to camera (in front).
-        if (ray_d > buf_d) {
+        if (ray_d > buf_d)
+        {
             t_prev = t;
-            t     += dt;
-        } else {
+            t += dt;
+        }
+        else
+        {
             // Ray crossed behind the surface — bracket found.
             bracketed = true;
             break;
         }
     }
 
-    if (!bracketed) { ssrOutput[int2(px)] = 0; return; }
+    if (!bracketed)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
 
     // ── Phase 2: binary search within [t_prev, t] ────────────────────────────
 
@@ -239,23 +291,61 @@ void computeMain(uint3 id: SV_DispatchThreadID) {
     float t_hi = t;
 
     [loop]
-    for (uint b = 0u; b < 8u; ++b) {
-        float  t_mid  = (t_lo + t_hi) * 0.5f;
-        float  rd_mid = rayDepth(cz_s, cw_s, cz_e, cw_e, t_mid);
+    for (uint b = 0u; b < 8u; ++b)
+    {
+        float t_mid = (t_lo + t_hi) * 0.5f;
+        float rd_mid = rayDepth(cz_s, cw_s, cz_e, cw_e, t_mid);
         float2 uv_mid = uv_start + uv_delta * t_mid;
-        float  bd_mid = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], uv_mid, 0.0f).r;
-        if (rd_mid > bd_mid) t_lo = t_mid;
-        else                  t_hi = t_mid;
+        float bd_mid = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], uv_mid, 0.0f).r;
+        if (rd_mid > bd_mid)
+            t_lo = t_mid;
+        else
+            t_hi = t_mid;
     }
 
     float2 hit_uv = uv_start + uv_delta * t_hi;
-    float  hit_rd = rayDepth(cz_s, cw_s, cz_e, cw_e, t_hi);
-    float  hit_bd = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], hit_uv, 0.0f).r;
+    float hit_rd = rayDepth(cz_s, cw_s, cz_e, cw_e, t_hi);
+    float hit_bd = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], hit_uv, 0.0f).r;
 
-    // Reject: depth gap too large (false intersection) or too close to origin
-    // (residual self-intersection from the starting surface).
-    if (abs(linearZ(hit_rd) - linearZ(hit_bd)) >= pc.thickness) { ssrOutput[int2(px)] = 0; return; }
-    if (t_hi < 4.0f / ray_px)                                    { ssrOutput[int2(px)] = 0; return; }
+    // Reject: depth gap too large → thin-surface false intersection.
+    if (abs(linearZ(hit_rd) - linearZ(hit_bd)) >= pc.thickness)
+    {
+        ssrOutput[int2(px)] = 0;
+        return;
+    }
+
+    // ── Hit validation (AMD FidelityFX SSSR approach) ────────────────────────────
+
+    // Guard 1: reject hits that didn't meaningfully advance the ray.
+    // A manhattan distance < 2px in both axes means we landed on (or next to) the
+    // source pixel — classic self-intersection on flat surfaces like floors.
+    // The view-space normal bias (P + N*0.05) does not change clip-space Z for
+    // horizontal surfaces, so the depth test alone cannot prevent this.
+    {
+        float2 src_uv      = (float2(px) + 0.5f) / pc.screen_size;
+        float2 manhattan   = abs(hit_uv - src_uv);
+        if (all(manhattan < 2.0f / pc.screen_size))
+        {
+            ssrOutput[int2(px)] = 0;
+            return;
+        }
+    }
+
+    // Guard 2: back-face rejection.
+    // The reflected ray must hit the *front* of a surface. If dot(hit_N, R) > 0
+    // the ray hits the back side → reject. This also catches any remaining
+    // self-intersection where R aligns with the surface normal (e.g. grazing floor
+    // with slightly curved normal map).
+    {
+        float2 hit_norm_enc = gbufferNormal.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], hit_uv, 0.0f).rg;
+        float3 hit_N_world  = decodeOctahedral(hit_norm_enc);
+        float3 hit_N        = normalize(mul(viewRot, hit_N_world));
+        if (dot(hit_N, R) > 0.0f)
+        {
+            ssrOutput[int2(px)] = 0;
+            return;
+        }
+    }
 
     // ── Sample reflected colour ───────────────────────────────────────────────
 
@@ -264,9 +354,8 @@ void computeMain(uint3 id: SV_DispatchThreadID) {
 
     // ── Confidence ────────────────────────────────────────────────────────────
 
-    float2 edge_fade = smoothstep(0.0f, 0.05f, hit_uv)
-                     * smoothstep(1.0f, 0.95f, hit_uv);
-    float  conf = saturate(edge_fade.x * edge_fade.y * (1.0f - t_hi * t_hi));
+    float2 edge_fade = smoothstep(0.0f, 0.05f, hit_uv) * smoothstep(1.0f, 0.95f, hit_uv);
+    float conf = saturate(edge_fade.x * edge_fade.y * (1.0f - t_hi * t_hi));
 
     ssrOutput[int2(px)] = float4(color, conf);
 }

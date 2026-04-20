@@ -170,18 +170,12 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     }
     float3 diffuse_ambient = kD * albedo * irradiance;
 
-    float3 spec_ambient = float3(0.0);
-    if (pc.ibl_pref_index != 0xFFFFFFFF && pc.ibl_lut_index != 0xFFFFFFFF)
-    {
-        float3 R = reflect(-V, normal);
-        float mip_level = roughness * 5.0; // MAX_PREFILTER_MIP = 5
-        float3 prefiltered = bindlessTextures[pc.ibl_pref_index].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(R), mip_level).rgb;
-        float2 brdf = bindlessTextures[pc.ibl_lut_index].Sample(bindlessSamplers[SAMPLER_LINEAR], float2(NdotV, roughness)).rg;
-        spec_ambient = prefiltered * (F0 * brdf.x + brdf.y);
-    }
+    // Specular IBL is omitted here — sssr_composite owns all specular indirect.
+    // It writes lerp(ibl_spec, ssr_spec, conf) for every surface pixel, falling back
+    // to pure IBL when SSR has no hit (conf=0). Adding spec_ambient here would double-count.
 
     float ao = lerp(1.0f, aoTexture.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r, pc.ao_strength);
-    float3 color = emissive + (diffuse_ambient + spec_ambient) * pc.ibl_intensity * ao;
+    float3 color = emissive + diffuse_ambient * pc.ibl_intensity * ao;
 #else
     float3 color = emissive + 0.005 * albedo;
 #endif
@@ -239,12 +233,12 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         color += computeBRDF(L, V, normal, albedo, metallic, roughness, radiance);
     }
 
-    if (pc.debug_mode == 2)
+    if (pc.debug_mode == 12) // DebugChannel::ClusterGrid
     {
         float3 debug_color = float3(((tile_x % 2) ^ (tile_y % 2) ^ (tile_z % 2)) != 0 ? 0.2 : 0.05);
         color = debug_color;
     }
-    else if (pc.debug_mode == 1)
+    else if (pc.debug_mode == 11) // DebugChannel::LightDensity
     {
         float density = float(grid_item.count) / 64.0;
         color = float3(density, 0.0, 1.0 - density);

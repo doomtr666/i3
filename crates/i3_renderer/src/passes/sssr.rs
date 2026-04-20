@@ -14,17 +14,17 @@ use std::sync::Arc;
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct SssrSamplePc {
-    pub inv_projection:   [[f32; 4]; 4],
-    pub projection:       [[f32; 4]; 4],
-    pub view:             [[f32; 4]; 4],
-    pub screen_size:      [f32; 2],
-    pub max_distance:     f32,
-    pub thickness:        f32,
-    pub roughness_cutoff: f32,
-    pub max_steps:        u32,
-    pub frame_index:      u32,
-    pub enabled:          u32,
-    pub _pad:             u32,
+    pub inv_projection:    [[f32; 4]; 4],
+    pub projection:        [[f32; 4]; 4],
+    pub view:              [[f32; 4]; 4],
+    pub screen_size:       [f32; 2],
+    pub max_distance:      f32,
+    pub thickness:         f32,
+    pub roughness_cutoff:  f32,
+    pub max_steps:         u32,
+    pub frame_index:       u32,
+    pub enabled:           u32,
+    pub blue_noise_index:  u32, // bindless index of the 64×64 RG8 blue-noise texture
 }
 
 #[repr(C)]
@@ -57,11 +57,13 @@ struct SssrCompositePc {
 /// Declares `SSR_Raw` as a transient output (RGBA16F, full resolution).
 /// RGB = hit colour, A = confidence.
 pub struct SssrSamplePass {
-    pub enabled:          bool,
-    pub max_steps:        u32,
-    pub thickness:        f32,
-    pub max_distance:     f32,
-    pub roughness_cutoff: f32,
+    pub enabled:           bool,
+    pub max_steps:         u32,
+    pub thickness:         f32,
+    pub max_distance:      f32,
+    pub roughness_cutoff:  f32,
+    /// Bindless index of the 64×64 RG8 blue-noise texture (set by the render graph).
+    pub blue_noise_index:  u32,
 
     pipeline:    Option<BackendPipeline>,
     frame_index: u32,
@@ -76,13 +78,14 @@ pub struct SssrSamplePass {
 impl SssrSamplePass {
     pub fn new() -> Self {
         Self {
-            enabled:          true,
-            max_steps:        32,
-            thickness:        0.15,
-            max_distance:     30.0,
-            roughness_cutoff: 0.75,
-            pipeline:         None,
-            frame_index:      0,
+            enabled:           true,
+            max_steps:         32,
+            thickness:         0.15,
+            max_distance:      30.0,
+            roughness_cutoff:  0.75,
+            blue_noise_index:  0,
+            pipeline:          None,
+            frame_index:       0,
             depth_buffer:       ImageHandle::INVALID,
             gbuffer_normal:     ImageHandle::INVALID,
             gbuffer_roughmetal: ImageHandle::INVALID,
@@ -162,7 +165,7 @@ impl RenderPass for SssrSamplePass {
             max_steps:        self.max_steps,
             frame_index:      self.frame_index,
             enabled:          self.enabled as u32,
-            _pad:             0,
+            blue_noise_index: self.blue_noise_index,
         };
 
         ctx.bind_pipeline_raw(pipeline);
@@ -317,6 +320,7 @@ pub struct SssrCompositePass {
     gbuffer_albedo:     ImageHandle,
     gbuffer_roughmetal: ImageHandle,
     ssr_resolved:       ImageHandle,
+    ao_resolved:        ImageHandle,
     hdr_target:         ImageHandle,
 }
 
@@ -330,6 +334,7 @@ impl SssrCompositePass {
             gbuffer_albedo:     ImageHandle::INVALID,
             gbuffer_roughmetal: ImageHandle::INVALID,
             ssr_resolved:       ImageHandle::INVALID,
+            ao_resolved:        ImageHandle::INVALID,
             hdr_target:         ImageHandle::INVALID,
         }
     }
@@ -356,6 +361,7 @@ impl RenderPass for SssrCompositePass {
         self.gbuffer_albedo     = builder.resolve_image("GBuffer_Albedo");
         self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
         self.ssr_resolved       = builder.resolve_image("SSR_Resolved");
+        self.ao_resolved        = builder.resolve_image("AO_Resolved");
         self.hdr_target         = builder.resolve_image("HDR_Target");
 
         builder.read_image(self.depth_buffer,       ResourceUsage::SHADER_READ);
@@ -363,6 +369,7 @@ impl RenderPass for SssrCompositePass {
         builder.read_image(self.gbuffer_albedo,     ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
         builder.read_image(self.ssr_resolved,       ResourceUsage::SHADER_READ);
+        builder.read_image(self.ao_resolved,        ResourceUsage::SHADER_READ);
         builder.read_image(self.hdr_target,         ResourceUsage::SHADER_READ);
         builder.write_image(self.hdr_target,        ResourceUsage::SHADER_WRITE);
     }
@@ -401,7 +408,8 @@ impl RenderPass for SssrCompositePass {
                 DescriptorWrite::sampled_image(2, 0, self.gbuffer_albedo,     DescriptorImageLayout::ShaderReadOnlyOptimal),
                 DescriptorWrite::sampled_image(3, 0, self.gbuffer_roughmetal, DescriptorImageLayout::ShaderReadOnlyOptimal),
                 DescriptorWrite::sampled_image(4, 0, self.ssr_resolved,       DescriptorImageLayout::ShaderReadOnlyOptimal),
-                DescriptorWrite::storage_image(5, 0, self.hdr_target,         DescriptorImageLayout::General),
+                DescriptorWrite::sampled_image(5, 0, self.ao_resolved,        DescriptorImageLayout::ShaderReadOnlyOptimal),
+                DescriptorWrite::storage_image(6, 0, self.hdr_target,         DescriptorImageLayout::General),
             ],
         );
         ctx.bind_descriptor_set(0, ds);

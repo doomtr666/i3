@@ -56,10 +56,6 @@ impl RenderPass for SkyPass {
     fn declare(&mut self, builder: &mut PassBuilder) {
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
         let (w, h) = (common.screen_width, common.screen_height);
-        let mip_levels = {
-            let max_dim = w.max(h);
-            if max_dim > 0 { (31 - max_dim.leading_zeros()) + 1 } else { 1 }
-        };
         self.hdr_target = builder.declare_image_output(
             "HDR_Target",
             ImageDesc {
@@ -67,9 +63,9 @@ impl RenderPass for SkyPass {
                 height:       h,
                 depth:        1,
                 format:       Format::R16G16B16A16_SFLOAT,
-                mip_levels,
+                mip_levels:   1,
                 array_layers: 1,
-                // STORAGE required for HdrMipsPass compute writes on mips 1..N.
+                // STORAGE required for SSSR composite and bloom composite (RWTexture2D writes).
                 usage:        ImageUsageFlags::SAMPLED
                     | ImageUsageFlags::COLOR_ATTACHMENT
                     | ImageUsageFlags::STORAGE,

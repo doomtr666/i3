@@ -14,15 +14,17 @@ use std::sync::Arc;
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GtaoPushConstants {
-    inv_projection: [[f32; 4]; 4],
-    view:           [[f32; 4]; 4],
-    screen_size:    [f32; 2],
-    radius:         f32,
-    falloff:        f32,
-    slice_count:    u32,
-    step_count:     u32,
-    frame_index:    u32,
-    enabled:        u32,
+    inv_projection:   [[f32; 4]; 4],
+    view:             [[f32; 4]; 4],
+    screen_size:      [f32; 2],
+    radius:           f32,
+    falloff:          f32,
+    slice_count:      u32,
+    step_count:       u32,
+    frame_index:      u32,
+    enabled:          u32,
+    blue_noise_index: u32,
+    _pad:             u32,
 }
 
 // ─── GtaoPass ─────────────────────────────────────────────────────────────────
@@ -36,11 +38,12 @@ struct GtaoPushConstants {
 /// (no occlusion) via the shader's early-out branch — the resource is still
 /// declared so that `DeferredResolvePass` can always find `AO_Raw`.
 pub struct GtaoPass {
-    pub enabled:     bool,
-    pub radius:      f32,
-    pub falloff:     f32,
-    pub slice_count: u32,
-    pub step_count:  u32,
+    pub enabled:          bool,
+    pub radius:           f32,
+    pub falloff:          f32,
+    pub slice_count:      u32,
+    pub step_count:       u32,
+    pub blue_noise_index: u32,
 
     pipeline:    Option<BackendPipeline>,
     frame_index: u32,
@@ -54,13 +57,14 @@ pub struct GtaoPass {
 impl GtaoPass {
     pub fn new() -> Self {
         Self {
-            enabled:     true,
-            radius:      0.5,
-            falloff:     2.0,
-            slice_count: 2,
-            step_count:  5,
-            pipeline:    None,
-            frame_index: 0,
+            enabled:          true,
+            radius:           0.5,
+            falloff:          2.0,
+            slice_count:      2,
+            step_count:       5,
+            blue_noise_index: 0,
+            pipeline:         None,
+            frame_index:      0,
             depth_buffer:   ImageHandle::INVALID,
             gbuffer_normal: ImageHandle::INVALID,
             ao_raw:         ImageHandle::INVALID,
@@ -139,8 +143,10 @@ impl RenderPass for GtaoPass {
             falloff:        self.falloff,
             slice_count:    self.slice_count,
             step_count:     self.step_count,
-            frame_index:    self.frame_index,
-            enabled:        self.enabled as u32,
+            frame_index:      self.frame_index,
+            enabled:          self.enabled as u32,
+            blue_noise_index: self.blue_noise_index,
+            _pad:             0,
         };
         ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
 

@@ -1,0 +1,69 @@
+// blue_noise.slangh — shared blue-noise + golden-ratio sampling helpers.
+//
+// Usage:
+//   #include "blue_noise.slangh"
+//
+// Every pass that does stochastic sampling should carry a `blue_noise_index`
+// field in its push constants (bindless index of the 128×128 RG8 texture).
+//
+// Typical pattern:
+//   float2 bn = blueNoiseBase(px, pc.blue_noise_index);
+//   float  u1 = bnTemporal(bn.r, frame, 0.618033988f);   // azimuth / angle
+//   float  u2 = bnTemporal(bn.g, frame, 0.381966011f);   // elevation
+//   float  jt = bnJitter(px, frame);                     // march / step jitter
+
+#ifndef BLUE_NOISE_SLANGH
+#define BLUE_NOISE_SLANGH
+
+// ── Spatial base ─────────────────────────────────────────────────────────────
+//
+// Reads the R and G channels of the 128×128 blue-noise texture.
+// The texture is tiled over the screen via % 128.
+// Returned values are in [0, 1) with optimal spatial distribution:
+// no low-frequency clusters, every 16×16 neighbourhood covers the full range.
+//
+// R and G are independent (different spatial offsets during generation).
+
+float2 blueNoiseBase(uint2 px, uint bn_index)
+{
+    uint2 coord = px % 128u;
+    return bindlessTextures[bn_index].Load(int3(int2(coord), 0)).rg;
+}
+
+// ── Temporal advance ──────────────────────────────────────────────────────────
+//
+// Combines a constant per-pixel blue-noise base with a frame-varying
+// irrational step (golden-ratio family).  The resulting sequence fills [0,1)
+// optimally over time: each new frame lands in the largest gap left by all
+// previous frames.
+//
+// Recommended steps:
+//   0.618033988  φ          — first dimension  (azimuth / u1)
+//   0.381966011  1/φ²       — second dimension (elevation / u2)
+//   0.149161     arbitrary  — third dimension  (step jitter, if needed)
+
+float bnTemporal(float base, uint frame, float step)
+{
+    return frac(base + float(frame) * step);
+}
+
+// ── Independent per-frame jitter ─────────────────────────────────────────────
+//
+// Returns a fully random float in [0, 1) per pixel per frame, independent
+// from the low-discrepancy direction samples.  Useful for march step jitter
+// where temporal coherence is not required.
+
+uint _bnPcg(uint v)
+{
+    uint s = v * 747796405u + 2891336453u;
+    uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+float bnJitter(uint2 px, uint frame)
+{
+    uint seed = _bnPcg(px.x + 7919u * px.y ^ _bnPcg(frame));
+    return float(seed) * (1.0f / 4294967296.0f);
+}
+
+#endif // BLUE_NOISE_SLANGH

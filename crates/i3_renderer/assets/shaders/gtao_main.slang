@@ -10,6 +10,7 @@
 // AO = average(AO_slice) over all slices
 
 #include "common.slangh"
+#include "blue_noise.slangh"
 
 static const float HALF_PI = 1.5707963267948966f;
 
@@ -17,12 +18,14 @@ struct GtaoPushConstants {
     float4x4 invProjection;
     float4x4 view;
     float2   screenSize;
-    float    radius;      // world-space sampling radius (metres)
-    float    falloff;     // distance falloff power (e.g. 2.0)
-    uint     sliceCount;  // azimuthal directions (2 = perf, 3 = quality)
-    uint     stepCount;   // steps per direction (4–6)
-    uint     frameIndex;  // for golden-ratio temporal rotation
-    uint     enabled;     // 0 = write 1.0 (disabled), 1 = run GTAO
+    float    radius;           // world-space sampling radius (metres)
+    float    falloff;          // distance falloff power (e.g. 2.0)
+    uint     sliceCount;       // azimuthal directions (2 = perf, 3 = quality)
+    uint     stepCount;        // steps per direction (4–6)
+    uint     frameIndex;       // for golden-ratio temporal rotation
+    uint     enabled;          // 0 = write 1.0 (disabled), 1 = run GTAO
+    uint     blue_noise_index; // bindless index of the 128×128 RG8 blue-noise texture
+    uint     _pad;
 };
 
 [[vk::push_constant]]
@@ -99,8 +102,11 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID) {
     // View direction (toward camera from P)
     float3 V = normalize(-P);
 
-    // Temporal angle rotation via golden ratio
-    float angle_offset = frac(float(pc.frameIndex) * 0.6180339887f) * PI;
+    // Angle offset: blue-noise base (per-pixel, spatially decorrelated) advanced
+    // by golden ratio each frame.  Replaces the previous per-frame-only offset
+    // that gave the same direction to every pixel in the same frame.
+    float bn_r       = blueNoiseBase(px, pc.blue_noise_index).r;
+    float angle_offset = bnTemporal(bn_r, pc.frameIndex, 0.6180339887f) * PI;
 
     float ao = 0.0f;
 
