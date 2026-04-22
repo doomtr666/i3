@@ -4,10 +4,10 @@
 //   #include "blue_noise.slangh"
 //
 // Every pass that does stochastic sampling should carry a `blue_noise_index`
-// field in its push constants (bindless index of the 128×128 RG8 texture).
+// field in its push constants (bindless index of the 1024×1024 RGBA16_UNORM texture).
 //
 // Typical pattern:
-//   float2 bn = blueNoiseBase(px, pc.blue_noise_index);
+//   float4 bn = blueNoiseBase(px, pc.blue_noise_index);
 //   float  u1 = bnTemporal(bn.r, frame, 0.618033988f);   // azimuth / angle
 //   float  u2 = bnTemporal(bn.g, frame, 0.381966011f);   // elevation
 //   float  jt = bnJitter(px, frame);                     // march / step jitter
@@ -17,17 +17,17 @@
 
 // ── Spatial base ─────────────────────────────────────────────────────────────
 //
-// Reads the R and G channels of the 128×128 blue-noise texture.
-// The texture is tiled over the screen via % 128.
-// Returned values are in [0, 1) with optimal spatial distribution:
-// no low-frequency clusters, every 16×16 neighbourhood covers the full range.
-//
-// R and G are independent (different spatial offsets during generation).
+// Reads all 4 channels of the 1024×1024 RGBA16_UNORM blue-noise texture.
+// Tiled over the screen via % 1024.
+// All channels are independent (different seeds during generation).
+// RGBA16_UNORM → hardware returns float4 in [0, 1) automatically.
 
-float2 blueNoiseBase(uint2 px, uint bn_index)
+float4 blueNoiseBase(uint2 px, uint bn_index)
 {
-    uint2 coord = px % 128u;
-    return bindlessTextures[bn_index].Load(int3(int2(coord), 0)).rg;
+    uint w, h;
+    bindlessTextures[bn_index].GetDimensions(w, h);
+    uint2 coord = px % uint2(w, h);
+    return bindlessTextures[bn_index].Load(int3(int2(coord), 0)).rgba;
 }
 
 // ── Temporal advance ──────────────────────────────────────────────────────────
@@ -64,6 +64,19 @@ float bnJitter(uint2 px, uint frame)
 {
     uint seed = _bnPcg(px.x + 7919u * px.y ^ _bnPcg(frame));
     return float(seed) * (1.0f / 4294967296.0f);
+}
+
+uint3 pcg3(uint3 v)
+{
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return v;
 }
 
 #endif // BLUE_NOISE_SLANGH

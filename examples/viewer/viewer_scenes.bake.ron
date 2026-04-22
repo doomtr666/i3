@@ -7,8 +7,9 @@ BakeManifest(
         "../../assets/Bistro_v5_2/BistroInterior.fbx",
         "../../assets/gltf-sample-assets/Models/NormalTangentTest/glTF/NormalTangentTest.gltf",
         "../../assets/gltf-sample-assets/Models/NormalTangentMirrorTest/glTF/NormalTangentMirrorTest.gltf",
+        "../../assets/gltf-sample-assets/Models/EnvironmentTest/glTF/EnvironmentTest.gltf",
         "../../assets/test/culling.glb",
         "../../assets/test/ssr.glb",
-        "../../assets/gltf-sample-assets/Models/EnvironmentTest/glTF/EnvironmentTest.gltf",
+        "../../assets/test/gtao.glb",
     ],
 )

@@ -4,6 +4,7 @@ pub mod asset;
 pub mod error;
 pub mod material;
 pub mod mesh;
+pub mod noise_asset;
 pub mod pipeline_asset;
 pub mod scene_asset;
 pub mod texture;

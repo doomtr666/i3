@@ -404,15 +404,29 @@ impl ExampleApp for DeferredGltfApp {
 
             ui.separator();
             ui.checkbox(&mut self.render_graph.fxaa_enabled, "FXAA");
-            ui.checkbox(&mut self.render_graph.gtao_enabled, "GTAO");
-            if self.render_graph.gtao_enabled {
-                let gtao = &mut self.render_graph.gtao_pass;
-                ui.add(egui::Slider::new(&mut gtao.radius, 0.1_f32..=2.0).text("AO Radius"));
-                ui.add(egui::Slider::new(&mut gtao.falloff, 0.5_f32..=4.0).text("AO Falloff"));
-                ui.add(egui::Slider::new(&mut gtao.slice_count, 1_u32..=4).text("AO Slices"));
-                ui.add(egui::Slider::new(&mut gtao.step_count, 2_u32..=8).text("AO Steps"));
-                let alpha = &mut self.render_graph.gtao_temporal_pass.alpha;
-                ui.add(egui::Slider::new(alpha, 0.01_f32..=1.0).text("AO Temporal Alpha").logarithmic(true));
+            ui.horizontal(|ui| {
+                use i3_renderer::render_graph::AoMode;
+                ui.label("AO:");
+                ui.radio_value(&mut self.render_graph.ao_mode, AoMode::None, "None");
+                ui.radio_value(&mut self.render_graph.ao_mode, AoMode::Gtao, "GTAO");
+                ui.radio_value(&mut self.render_graph.ao_mode, AoMode::Rtao, "RTAO");
+            });
+            match self.render_graph.ao_mode {
+                i3_renderer::render_graph::AoMode::Gtao => {
+                    let gtao = &mut self.render_graph.gtao_group.gtao_pass;
+                    ui.add(egui::Slider::new(&mut gtao.radius,      0.1_f32..=2.0).text("AO Radius"));
+                    ui.add(egui::Slider::new(&mut gtao.falloff,     0.5_f32..=4.0).text("AO Falloff"));
+                    ui.add(egui::Slider::new(&mut gtao.slice_count, 1_u32..=4)    .text("AO Slices"));
+                    ui.add(egui::Slider::new(&mut gtao.step_count,  2_u32..=8)    .text("AO Steps"));
+                    let alpha = &mut self.render_graph.gtao_group.gtao_temporal_pass.alpha;
+                    ui.add(egui::Slider::new(alpha, 0.01_f32..=1.0).text("AO Temporal Alpha").logarithmic(true));
+                }
+                i3_renderer::render_graph::AoMode::Rtao => {
+                    let rtao = &mut self.render_graph.rtao_group.rtao_pass;
+                    ui.add(egui::Slider::new(&mut rtao.radius, 0.1_f32..=5.0).text("RTAO Radius"));
+                    ui.label(format!("Samples: {}", rtao.sample_count));
+                }
+                i3_renderer::render_graph::AoMode::None => {}
             }
 
             ui.separator();

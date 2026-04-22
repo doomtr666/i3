@@ -8,6 +8,7 @@ pub use error::{BakerError, Result};
 
 pub use importers::HdrIblImporter;
 pub use importers::ibl_bake::IblBakeOptions;
+pub use importers::{NoiseImporter, NoiseManifestEntry, NoiseAlgorithm};
 pub use manifest::ManifestBaker;
 
 pub mod prelude {

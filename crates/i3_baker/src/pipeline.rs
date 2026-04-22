@@ -206,7 +206,22 @@ fn meta_is_valid(meta: &CacheMeta, source: &Path, deps: &[PathBuf], config_key: 
     }
     let src_mtime = match mtime_secs(source) {
         Some(t) => t,
-        None    => return false,
+        // Virtual source (no file on disk) — valid when config_key already matched above
+        // and meta.source_mtime == 0 (written as 0 by make_meta for non-existent sources).
+        None => {
+            if meta.source_mtime != 0 { return false; }
+            // skip mtime check — fall through to dep and config checks only
+            return deps.is_empty() || {
+                if deps.len() != meta.deps.len() { return false; }
+                for (dep_str, stored_mtime) in &meta.deps {
+                    match mtime_secs(Path::new(dep_str)) {
+                        Some(t) if t == *stored_mtime => {}
+                        _ => return false,
+                    }
+                }
+                true
+            };
+        }
     };
     if src_mtime != meta.source_mtime {
         return false;
@@ -435,6 +450,10 @@ impl BundleBaker {
         // Cargo change-tracking
         println!("cargo:rerun-if-changed={}", catalog_path.display());
         for asset in &self.assets {
+            // Virtual/procedural importers have no source file — skip file watch and warning.
+            if asset.importer.source_extensions().is_empty() {
+                continue;
+            }
             println!("cargo:rerun-if-changed={}", asset.source_path.display());
             if !asset.source_path.exists() {
                 println!("cargo:warning=Asset source NOT FOUND: {:?}", asset.source_path);

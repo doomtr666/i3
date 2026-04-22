@@ -4,6 +4,7 @@
 //! then delegates to `BundleBaker` with per-asset caching enabled.
 
 use crate::importers::ibl_bake::IblBakeOptions;
+use crate::importers::noise_importer::NoiseManifestEntry;
 use crate::pipeline::BundleBaker;
 use crate::Result;
 use serde::Deserialize;
@@ -35,6 +36,10 @@ pub struct BakeManifest {
     /// 3D scene/mesh files to bake via AssimpImporter (glTF, glb, fbx, obj, …).
     #[serde(default)]
     pub meshes: Vec<PathBuf>,
+
+    /// Procedural noise textures to bake (no source file required).
+    #[serde(default)]
+    pub noise: Vec<NoiseManifestEntry>,
 }
 
 /// One IBL entry in the manifest.
@@ -160,6 +165,18 @@ impl ManifestBaker {
             baker = baker.add_asset_keyed(
                 abs,
                 crate::importers::HdrIblImporter { options: entry.options },
+                config_key,
+            );
+        }
+
+        // Noise assets — procedural, no source file on disk.
+        // Use add_asset_keyed with a virtual path so caching is stable.
+        for entry in manifest.noise {
+            let virtual_path = format!("noise__{}", entry.name);
+            let config_key = postcard::to_allocvec(&entry).unwrap_or_default();
+            baker = baker.add_asset_keyed(
+                std::path::PathBuf::from(&virtual_path),
+                crate::importers::NoiseImporter { entry },
                 config_key,
             );
         }

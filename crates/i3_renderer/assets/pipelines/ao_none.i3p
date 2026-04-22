@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "ao_none",
+    shader: Path("../shaders/ao_none.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "computeMain",
+    )),
+)

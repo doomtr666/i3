@@ -17,3 +17,4 @@ pub mod gtao;
 pub mod gtao_temporal;
 pub mod sssr;
 pub mod bloom;
+pub mod rtao;

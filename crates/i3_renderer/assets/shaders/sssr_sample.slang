@@ -21,21 +21,21 @@
 //   matches the IBL term computed by deferred_resolve.
 
 #include "common.slangh"
-#include "blue_noise.slangh"
+#include "noise.slangh"
 
 struct SssrSamplePc
 {
-    float4x4 inv_projection;  // view-space position reconstruction
-    float4x4 projection;      // viewToClip
-    float4x4 view;            // world normal → view normal
-    float2   screen_size;
-    float    max_distance;
-    float    thickness;       // max view-space depth gap for hit acceptance
-    float    roughness_cutoff;
-    uint     max_steps;
-    uint     frame_index;
-    uint     enabled;
-    uint     blue_noise_index; // bindless index of the 64×64 RG8 blue-noise texture
+    float4x4 inv_projection; // view-space position reconstruction
+    float4x4 projection;     // viewToClip
+    float4x4 view;           // world normal → view normal
+    float2 screen_size;
+    float max_distance;
+    float thickness; // max view-space depth gap for hit acceptance
+    float roughness_cutoff;
+    uint max_steps;
+    uint frame_index;
+    uint enabled;
+    uint blue_noise_index; // bindless index of the 64×64 RG8 blue-noise texture
 };
 [[vk::push_constant]]
 SssrSamplePc pc;
@@ -82,10 +82,10 @@ float linearZ(float ndc_d)
 // pixelNoise — thin wrapper over blue_noise.slangh for this pass.
 void pixelNoise(uint2 px, uint frame, out float u1, out float u2, out float jitter)
 {
-    float2 bn = blueNoiseBase(px, pc.blue_noise_index);
-    u1     = bnTemporal(bn.r, frame, 0.618033988f);  // φ    — azimuthal angle
-    u2     = bnTemporal(bn.g, frame, 0.381966011f);  // 1/φ² — polar angle
-    jitter = bnJitter(px, frame);                    // march step offset
+    float4 bn = blueNoiseBase(px, pc.blue_noise_index);
+    u1 = bnTemporal(bn.r, frame, 0.618033988f); // φ    — azimuthal angle
+    u2 = bnTemporal(bn.g, frame, 0.381966011f); // 1/φ² — polar angle
+    jitter = bnJitter(px, frame);               // march step offset
 }
 
 float rayDepth(float cz_s, float cw_s, float cz_e, float cw_e, float t)
@@ -322,8 +322,8 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     // The view-space normal bias (P + N*0.05) does not change clip-space Z for
     // horizontal surfaces, so the depth test alone cannot prevent this.
     {
-        float2 src_uv      = (float2(px) + 0.5f) / pc.screen_size;
-        float2 manhattan   = abs(hit_uv - src_uv);
+        float2 src_uv = (float2(px) + 0.5f) / pc.screen_size;
+        float2 manhattan = abs(hit_uv - src_uv);
         if (all(manhattan < 2.0f / pc.screen_size))
         {
             ssrOutput[int2(px)] = 0;
@@ -338,8 +338,8 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     // with slightly curved normal map).
     {
         float2 hit_norm_enc = gbufferNormal.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], hit_uv, 0.0f).rg;
-        float3 hit_N_world  = decodeOctahedral(hit_norm_enc);
-        float3 hit_N        = normalize(mul(viewRot, hit_N_world));
+        float3 hit_N_world = decodeOctahedral(hit_norm_enc);
+        float3 hit_N = normalize(mul(viewRot, hit_N_world));
         if (dot(hit_N, R) > 0.0f)
         {
             ssrOutput[int2(px)] = 0;

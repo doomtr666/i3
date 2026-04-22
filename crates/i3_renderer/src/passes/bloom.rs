@@ -72,7 +72,7 @@ impl BloomPass {
             enabled:   true,
             threshold: 1.0,
             knee:      0.5,
-            intensity: 0.1,
+            intensity: 0.030,
 
             prefilter_pipeline:  None,
             downsample_pipeline: None,

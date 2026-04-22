@@ -1,15 +1,22 @@
+use crate::groups::gtao_group::GtaoGroup;
+use crate::groups::rtao_group::RtaoGroup;
 use crate::passes::cull::DrawCallGenPass;
 use crate::passes::debug_draw::DebugDrawPass;
 use crate::passes::debug_viz::{DebugChannel, DebugVizPass};
 use crate::passes::deferred_resolve::DeferredResolvePass;
 use crate::passes::gbuffer::GBufferPass;
-use crate::passes::gtao::GtaoPass;
-use crate::passes::gtao_temporal::GtaoTemporalPass;
 use crate::passes::sky::SkyPass;
 use crate::prelude::*;
 use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
 use std::sync::Arc;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AoMode {
+    None,
+    Gtao,
+    Rtao,
+}
 
 /// Indices of global samplers in the bindless sampler array.
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +87,69 @@ impl RenderPass for ClearBufferPass {
     }
 }
 
+/// Trivial pass that declares AO_Resolved and writes 1.0 (AO disabled).
+struct AoNonePass {
+    ao_resolved: ImageHandle,
+    pipeline:    Option<i3_gfx::graph::backend::BackendPipeline>,
+}
+
+impl AoNonePass {
+    fn new() -> Self {
+        Self { ao_resolved: ImageHandle::INVALID, pipeline: None }
+    }
+}
+
+impl RenderPass for AoNonePass {
+    fn name(&self) -> &str { "AoNonePass" }
+
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
+        let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
+        if let Ok(asset) = loader
+            .load::<i3_io::pipeline_asset::PipelineAsset>("ao_none")
+            .wait_loaded()
+        {
+            self.pipeline = Some(
+                backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
+            );
+        }
+    }
+
+    fn declare(&mut self, builder: &mut PassBuilder) {
+        let depth = builder.resolve_image("DepthBuffer");
+        let desc  = builder.get_image_desc(depth);
+        let img_desc = ImageDesc {
+            width:        desc.width,
+            height:       desc.height,
+            depth:        1,
+            format:       Format::R32_SFLOAT,
+            mip_levels:   1,
+            array_layers: 1,
+            usage:        ImageUsageFlags::STORAGE | ImageUsageFlags::SAMPLED,
+            view_type:    ImageViewType::Type2D,
+            swizzle:      ComponentMapping::default(),
+            clear_value:  None,
+        };
+        self.ao_resolved = builder.declare_image_history_output("AO_Resolved", img_desc);
+        builder.write_image(self.ao_resolved, ResourceUsage::SHADER_WRITE);
+    }
+
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
+        let Some(pipeline) = self.pipeline else { return; };
+        let common = frame.consume::<crate::render_graph::CommonData>("Common");
+        let (w, h) = (common.screen_width, common.screen_height);
+        ctx.bind_pipeline_raw(pipeline);
+        let ds = ctx.create_descriptor_set(
+            pipeline, 0,
+            &[i3_gfx::graph::backend::DescriptorWrite::storage_image(
+                0, 0, self.ao_resolved,
+                i3_gfx::graph::backend::DescriptorImageLayout::General,
+            )],
+        );
+        ctx.bind_descriptor_set(0, ds);
+        ctx.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+    }
+}
+
 /// Helper pass to present the backbuffer.
 struct PresentPass {
     pub backbuffer: ImageHandle,
@@ -125,9 +195,11 @@ pub struct DefaultRenderGraph {
     pub material_sampler: SamplerHandle,
     pub debug_channel: DebugChannel,
     pub fxaa_enabled: bool,
-    pub gtao_enabled: bool,
-    pub gtao_pass: GtaoPass,
-    pub gtao_temporal_pass: GtaoTemporalPass,
+    pub ao_mode: AoMode,
+    pub gtao_group: GtaoGroup,
+    pub rtao_group: RtaoGroup,
+    ao_none_pass: AoNonePass,
+    prev_ao_mode: AoMode,
     pub light_buffer: i3_gfx::graph::backend::BackendBuffer,
     pub temporal_registry: i3_gfx::graph::temporal::TemporalRegistry,
     pub bindless_manager: crate::bindless::BindlessManager,
@@ -147,10 +219,10 @@ pub struct DefaultRenderGraph {
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
     pub hiz_build_final: crate::passes::hiz_build::HiZBuildPass,
-    pub sssr_sample_pass:    crate::passes::sssr::SssrSamplePass,
-    pub sssr_temporal_pass:  crate::passes::sssr::SssrTemporalPass,
+    pub sssr_sample_pass: crate::passes::sssr::SssrSamplePass,
+    pub sssr_temporal_pass: crate::passes::sssr::SssrTemporalPass,
     pub sssr_composite_pass: crate::passes::sssr::SssrCompositePass,
-    pub bloom_pass:          crate::passes::bloom::BloomPass,
+    pub bloom_pass: crate::passes::bloom::BloomPass,
 
     // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
@@ -165,7 +237,7 @@ pub struct DefaultRenderGraph {
     pub ibl_indices: IblIndices,
     /// 1×1 white texture always at bindless index 0 — re-registered after each clear.
     white_image: i3_gfx::graph::backend::BackendImage,
-    /// 128×128 RG8 blue-noise texture — always registered right after IBL textures.
+    /// 1024×1024 RGBA16_UNORM blue-noise texture — always registered right after white.
     blue_noise_image: i3_gfx::graph::backend::BackendImage,
     /// Bindless index of the blue-noise texture (stable across frames).
     pub blue_noise_index: u32,
@@ -277,7 +349,12 @@ impl DefaultRenderGraph {
         bindless_manager.bindless_set = DescriptorSetHandle(_backend.get_bindless_set_handle());
 
         // Update the global sampler in the bindless set
-        _backend.update_bindless_sampler(material_sampler, sampler_indices.aniso, bindless_manager.bindless_set.0, 1);
+        _backend.update_bindless_sampler(
+            material_sampler,
+            sampler_indices.aniso,
+            bindless_manager.bindless_set.0,
+            1,
+        );
 
         // Register a default 1x1 white texture at index 0
         let white_image = _backend.create_image(&ImageDesc {
@@ -297,18 +374,12 @@ impl DefaultRenderGraph {
             .unwrap();
         bindless_manager.register_physical_texture(_backend, white_image);
 
-        // 128×128 RG8 blue-noise texture — registered at index 1 (right after white).
-        // Generated using a 16×16 ordered-dither (Bayer) base tiled 8×8 with per-tile
-        // random offsets to break periodicity. Each 16×16 tile contains all 256 values
-        // exactly once, guaranteeing perfect stratification per tile and avoiding
-        // low-frequency spatial clusters. Two independent channels (R uses columns,
-        // G uses rows) give uncorrelated u1/u2 samples for GGX importance sampling.
-        let blue_noise_data = generate_blue_noise_128x128();
+        // Placeholder 1×1 RGBA16_UNORM — replaced with the baked 1024×1024 NoiseAsset in init().
         let blue_noise_image = _backend.create_image(&ImageDesc {
-            width: 128,
-            height: 128,
+            width: 1,
+            height: 1,
             depth: 1,
-            format: Format::R8G8_UNORM,
+            format: Format::R16G16B16A16_UNORM,
             usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
             mip_levels: 1,
             array_layers: 1,
@@ -317,9 +388,10 @@ impl DefaultRenderGraph {
             clear_value: None,
         });
         _backend
-            .upload_image(blue_noise_image, &blue_noise_data, 0, 0, 128, 128, 0, 0)
+            .upload_image(blue_noise_image, &[0u8; 8], 0, 0, 1, 1, 0, 0)
             .unwrap();
-        let blue_noise_index = bindless_manager.register_physical_texture(_backend, blue_noise_image);
+        let blue_noise_index =
+            bindless_manager.register_physical_texture(_backend, blue_noise_image);
 
         // NOTE: white_image stored in struct so it can be re-registered after bindless clear.
         // Fallback 1x1 black env texture — always bound to sky descriptor set 1
@@ -346,12 +418,11 @@ impl DefaultRenderGraph {
         let hiz_build_final = crate::passes::hiz_build::HiZBuildPass::new_final();
         let mut sssr_sample_pass = crate::passes::sssr::SssrSamplePass::new();
         sssr_sample_pass.blue_noise_index = blue_noise_index;
-        let sssr_temporal_pass  = crate::passes::sssr::SssrTemporalPass::new();
+        let sssr_temporal_pass = crate::passes::sssr::SssrTemporalPass::new();
         let sssr_composite_pass = crate::passes::sssr::SssrCompositePass::new();
-        let bloom_pass          = crate::passes::bloom::BloomPass::new();
-        let mut gtao_pass = GtaoPass::new();
-        gtao_pass.blue_noise_index = blue_noise_index;
-        let gtao_temporal_pass = GtaoTemporalPass::new();
+        let bloom_pass = crate::passes::bloom::BloomPass::new();
+        let mut gtao_group = GtaoGroup::new();
+        gtao_group.gtao_pass.blue_noise_index = blue_noise_index;
 
         let mut this = Self {
             graph,
@@ -369,9 +440,11 @@ impl DefaultRenderGraph {
             nearest_sampler,
             debug_channel: DebugChannel::Lit,
             fxaa_enabled: true,
-            gtao_enabled: true,
-            gtao_pass,
-            gtao_temporal_pass,
+            ao_mode: AoMode::Gtao,
+            gtao_group,
+            rtao_group: RtaoGroup::new(),
+            ao_none_pass: AoNonePass::new(),
+            prev_ao_mode: AoMode::Gtao,
             light_buffer,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
@@ -410,7 +483,10 @@ impl DefaultRenderGraph {
         };
 
         // 4. Initialization: Run pass-specific initialization logic
-        this.graph.publish("BindlessSet", DescriptorSetHandle(_backend.get_bindless_set_handle()));
+        this.graph.publish(
+            "BindlessSet",
+            DescriptorSetHandle(_backend.get_bindless_set_handle()),
+        );
 
         this
     }
@@ -439,14 +515,23 @@ impl DefaultRenderGraph {
     /// Must be called immediately after `bindless_manager.clear()` to guarantee stable indices.
     fn restore_permanent_bindless(&mut self, backend: &mut dyn RenderBackend) {
         // Index 0 — white fallback (must always be first)
-        self.bindless_manager.register_physical_texture(backend, self.white_image);
+        self.bindless_manager
+            .register_physical_texture(backend, self.white_image);
 
         // Indices 1-4 — IBL textures (lut, irr, pref, env) if loaded
         if self.ibl_images.len() == 4 {
-            let lut_index  = self.bindless_manager.register_physical_texture(backend, self.ibl_images[0]);
-            let irr_index  = self.bindless_manager.register_physical_texture(backend, self.ibl_images[1]);
-            let pref_index = self.bindless_manager.register_physical_texture(backend, self.ibl_images[2]);
-            let env_index  = self.bindless_manager.register_physical_texture(backend, self.ibl_images[3]);
+            let lut_index = self
+                .bindless_manager
+                .register_physical_texture(backend, self.ibl_images[0]);
+            let irr_index = self
+                .bindless_manager
+                .register_physical_texture(backend, self.ibl_images[1]);
+            let pref_index = self
+                .bindless_manager
+                .register_physical_texture(backend, self.ibl_images[2]);
+            let env_index = self
+                .bindless_manager
+                .register_physical_texture(backend, self.ibl_images[3]);
             // Preserve the existing intensity_scale (HDR→physical calibration factor, default 1.0).
             // Do NOT use ibl_sun.intensity here — that's sun radiance, not ambient scale.
             let scale = self.ibl_indices.intensity_scale;
@@ -460,10 +545,11 @@ impl DefaultRenderGraph {
         }
 
         // Blue-noise texture — always re-registered after IBL so its index stays stable.
-        self.blue_noise_index =
-            self.bindless_manager.register_physical_texture(backend, self.blue_noise_image);
+        self.blue_noise_index = self
+            .bindless_manager
+            .register_physical_texture(backend, self.blue_noise_image);
         self.sssr_sample_pass.blue_noise_index = self.blue_noise_index;
-        self.gtao_pass.blue_noise_index        = self.blue_noise_index;
+        self.gtao_group.gtao_pass.blue_noise_index = self.blue_noise_index;
     }
 
     /// Initializes the render graph: handles cooperative asset loading and pipeline binding.
@@ -518,7 +604,8 @@ impl DefaultRenderGraph {
         self.graph
             .init_pass_direct(&mut self.blas_update_pass, backend);
         self.graph.init_pass_direct(&mut self.gbuffer_pass, backend);
-        self.graph.init_pass_direct(&mut self.hiz_build_final, backend);
+        self.graph
+            .init_pass_direct(&mut self.hiz_build_final, backend);
         self.graph
             .init_pass_direct(&mut self.draw_call_gen_pass, backend);
         self.graph.init_pass_direct(&mut self.sky_pass, backend);
@@ -526,18 +613,16 @@ impl DefaultRenderGraph {
             .init_pass_direct(&mut self.clustering_group, backend);
         self.graph
             .init_pass_direct(&mut self.tlas_rebuild_pass, backend);
-        self.graph
-            .init_pass_direct(&mut self.gtao_pass, backend);
-        self.graph
-            .init_pass_direct(&mut self.gtao_temporal_pass, backend);
+        self.graph.init_pass_direct(&mut self.ao_none_pass, backend);
+        self.graph.init_pass_direct(&mut self.gtao_group, backend);
+        self.graph.init_pass_direct(&mut self.rtao_group, backend);
         self.graph
             .init_pass_direct(&mut self.sssr_sample_pass, backend);
         self.graph
             .init_pass_direct(&mut self.sssr_temporal_pass, backend);
         self.graph
             .init_pass_direct(&mut self.sssr_composite_pass, backend);
-        self.graph
-            .init_pass_direct(&mut self.bloom_pass, backend);
+        self.graph.init_pass_direct(&mut self.bloom_pass, backend);
         self.graph
             .init_pass_direct(&mut self.deferred_resolve_pass, backend);
         self.graph
@@ -690,6 +775,43 @@ impl DefaultRenderGraph {
             );
         }
         self.ibl_images = ibl_images;
+
+        // Load baked 1024×1024 RGBA16_UNORM blue-noise texture from the system bundle.
+        if let Ok(noise) = loader
+            .load::<i3_io::noise_asset::NoiseAsset>("white_noise")
+            .wait_loaded()
+        {
+            let n = noise.header.width;
+            let img = backend.create_image(&ImageDesc {
+                width: n,
+                height: n,
+                depth: 1,
+                format: Format::R16G16B16A16_UNORM,
+                usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
+                mip_levels: 1,
+                array_layers: 1,
+                view_type: ImageViewType::Type2D,
+                swizzle: Default::default(),
+                clear_value: None,
+            });
+            backend
+                .upload_image(img, &noise.data, 0, 0, n, n, 0, 0)
+                .unwrap();
+            self.blue_noise_image = img;
+            self.blue_noise_index = self
+                .bindless_manager
+                .register_physical_texture(backend, img);
+            self.sssr_sample_pass.blue_noise_index = self.blue_noise_index;
+            self.gtao_group.gtao_pass.blue_noise_index = self.blue_noise_index;
+            tracing::info!(
+                "Blue noise loaded: {}×{} RGBA16_UNORM, bindless index {}",
+                n,
+                n,
+                self.blue_noise_index
+            );
+        } else {
+            tracing::warn!("Blue noise asset 'blue_noise' not found — using placeholder");
+        }
     }
 
     /// Forces a full redeclare + recompile on the next render() call.
@@ -717,7 +839,12 @@ struct GpuLightData {
 }
 
 impl DefaultRenderGraph {
-    pub fn sync(&mut self, backend: &mut dyn RenderBackend, window: WindowHandle, scene: &dyn SceneProvider) {
+    pub fn sync(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        window: WindowHandle,
+        scene: &dyn SceneProvider,
+    ) {
         let capacity = backend.swapchain_image_count(window);
         self.temporal_registry.advance_frame(capacity);
 
@@ -832,7 +959,6 @@ impl DefaultRenderGraph {
             .iter_materials()
             .map(|(id, data)| (id.0, data.clone()))
             .collect();
-
     }
 
     /// All-in-one per-frame entry point.
@@ -907,6 +1033,8 @@ impl DefaultRenderGraph {
         frame_data.publish("DebugChannel", self.debug_channel as u32);
         frame_data.publish("BindlessSet", self.bindless_manager.bindless_set);
 
+        // Camera-moved detection (before updating prev, so comparison is valid).
+        let camera_moved = view_projection != self.prev_view_projection;
         // Update prev VP for the next frame (after publishing this frame's prev)
         self.prev_view_projection = view_projection;
 
@@ -922,11 +1050,23 @@ impl DefaultRenderGraph {
             self.last_compiled_debug_channel = self.debug_channel;
             self.graph_dirty = true;
         }
-        // fxaa_enabled / gtao_enabled are push-constant toggles — no graph recompilation needed.
         self.post_process_group.fxaa_pass.enabled = self.fxaa_enabled;
-        self.gtao_pass.enabled = self.gtao_enabled;
-        self.gtao_pass.tick();
-        self.gtao_temporal_pass.tick();
+
+        // AO mode switch → recompile graph (different group added to the graph).
+        if self.ao_mode != self.prev_ao_mode {
+            self.graph_dirty = true;
+            self.rtao_group.rtao_pass.reset_accumulation();
+            self.prev_ao_mode = self.ao_mode;
+        }
+
+        self.rtao_group.rtao_pass.blue_noise_index = self.blue_noise_index;
+        self.gtao_group.tick();
+        self.rtao_group.tick();
+
+        // Reset RTAO accumulation on camera move.
+        if camera_moved {
+            self.rtao_group.rtao_pass.reset_accumulation();
+        }
         self.sssr_sample_pass.tick();
         self.sssr_temporal_pass.tick();
 
@@ -992,15 +1132,23 @@ impl DefaultRenderGraph {
                 "Recompiling render graph"
             );
             let mut graph = FrameGraph::new();
-            
+
             // Publish global persistent resources to the graph blackboard
             graph.publish("BindlessSet", self.bindless_manager.bindless_set);
-            
-            if let Some(loader) = self.graph.try_consume::<std::sync::Arc<i3_io::asset::AssetLoader>>("AssetLoader").cloned() {
+
+            if let Some(loader) = self
+                .graph
+                .try_consume::<std::sync::Arc<i3_io::asset::AssetLoader>>("AssetLoader")
+                .cloned()
+            {
                 graph.publish("AssetLoader", loader);
             }
-            
-            if let Some(ui) = self.graph.try_consume::<std::sync::Arc<i3_egui::UiSystem>>("UiSystem").cloned() {
+
+            if let Some(ui) = self
+                .graph
+                .try_consume::<std::sync::Arc<i3_egui::UiSystem>>("UiSystem")
+                .cloned()
+            {
                 graph.publish("UiSystem", ui);
             }
 
@@ -1109,7 +1257,6 @@ impl DefaultRenderGraph {
             // LightBuffer is owned here; mesh/instance/material/draw buffers are imported by their passes
             builder.import_buffer("LightBuffer", light_buffer_physical);
 
-
             // 0. Sync CPU scene delta to GPU (imports MeshDescriptorBuffer, InstanceBuffer, MaterialBuffer)
             builder.add_pass(&mut self.sync_group);
             builder.add_pass(&mut self.blas_update_pass);
@@ -1143,10 +1290,12 @@ impl DefaultRenderGraph {
                 },
             );
 
-            // 3b. GTAO + Temporal — always run so AO_Resolved is available for all channels.
-            // When GTAO is disabled the compute shader early-outs writing 1.0 (no occlusion).
-            builder.add_pass(&mut self.gtao_pass);
-            builder.add_pass(&mut self.gtao_temporal_pass);
+            // 3b. AO — exactly one group active; each group owns AO_Resolved.
+            match self.ao_mode {
+                AoMode::None => builder.add_pass(&mut self.ao_none_pass),
+                AoMode::Gtao => builder.add_pass(&mut self.gtao_group),
+                AoMode::Rtao => builder.add_pass(&mut self.rtao_group),
+            }
 
             // Always sync the channel onto the pass before declare() runs.
             self.debug_viz_pass.channel = channel;
@@ -1204,59 +1353,4 @@ impl DefaultRenderGraph {
         // Tonemap always writes to LDR_Target; FXAA always runs (passthrough when disabled).
         builder.add_pass(&mut self.post_process_group);
     }
-}
-
-// ─── Blue-noise generation ─────────────────────────────────────────────────────
-//
-// Generates a 64×64 RG8 blue-noise texture without external dependencies.
-//
-// Algorithm: 16×16 ordered-dither (Bayer) base tiled 4×4 with per-tile random
-// offset to break the 16-pixel periodicity.  Each 16×16 block is a permutation
-// of [0, 255] — perfect per-block stratification.  R and G channels use
-// spatially shifted Bayer patterns to be independent.
-//
-// Not true void-and-cluster blue noise, but sufficient for GGX importance
-// sampling: no low-frequency clusters, every 16×16 neighbourhood samples the
-// full [0, 255] range, and the channels are decorrelated.
-fn generate_blue_noise_128x128() -> Vec<u8> {
-    // PCG hash for per-tile offset scrambling.
-    let pcg = |v: u32| -> u32 {
-        let s = v.wrapping_mul(747796405).wrapping_add(2891336453);
-        let w = ((s >> ((s >> 28).wrapping_add(4))) ^ s).wrapping_mul(277803737);
-        (w >> 22) ^ w
-    };
-
-    // Recursive Bayer matrix value for an (x, y) coordinate in an n×n grid.
-    // Returns a value in 0..(n²−1).  Requires n to be a power of two.
-    fn bayer(x: usize, y: usize, n: usize) -> u8 {
-        if n == 1 { return 0; }
-        let h = n / 2;
-        let offsets = [[0u8, 2], [3, 1]]; // standard 2×2 Bayer sub-block
-        let b2 = offsets[y / h][x / h];
-        bayer(x % h, y % h, h) * 4 + b2
-    }
-
-    // 128×128 grid with 16×16 tiles → 8×8 = 64 tiles.
-    const S: usize = 128;
-    const T: usize = 16; // tile size
-    const TILES: usize = S / T; // 8 tiles per axis
-
-    let mut data = vec![0u8; S * S * 2];
-    for y in 0..S {
-        for x in 0..S {
-            let tile = ((y / T) * TILES + (x / T)) as u32; // 0..63
-
-            // R channel: Bayer(x%16, y%16, 16) + per-tile random offset.
-            let base_r = bayer(x % T, y % T, T) as u32;
-            let off_r  = pcg(tile * 2)     >> 24; // 0..255
-            data[(y * S + x) * 2]     = ((base_r + off_r) % 256) as u8;
-
-            // G channel: spatially shifted by ½ tile for channel independence,
-            //            different per-tile offset.
-            let base_g = bayer((x + T / 2) % T, (y + T / 2) % T, T) as u32;
-            let off_g  = pcg(tile * 2 + 1) >> 24;
-            data[(y * S + x) * 2 + 1] = ((base_g + off_g) % 256) as u8;
-        }
-    }
-    data
 }

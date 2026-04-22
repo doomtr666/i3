@@ -14,4 +14,8 @@ BakeManifest(
             )
         ),
     ],
+    noise: [
+        (name: "blue_noise",  size: 1024, seed: 42, algorithm: BlueNoise(sigma: 0.5)),
+        (name: "white_noise", size: 1024, seed: 0,  algorithm: WhiteNoise),
+    ],
 )

@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "rtao_main",
+    shader: Path("../shaders/rtao_main.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "computeMain",
+    )),
+)

@@ -128,9 +128,10 @@ pub enum Format {
     BC5_SNORM           = 32,
     BC7_UNORM           = 33,
     BC7_SRGB            = 34,
-    R16G16_SFLOAT       = 35,
-    R11G11B10_UFLOAT    = 36,
-    BC6H_UF16           = 37,
+    R16G16_SFLOAT           = 35,
+    R11G11B10_UFLOAT        = 36,
+    BC6H_UF16               = 37,
+    R16G16B16A16_UNORM      = 38,
 }
 
 impl Format {

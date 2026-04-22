@@ -80,21 +80,6 @@ bool traceShadow(RayDesc ray)
     return (q.CommittedStatus() != COMMITTED_NOTHING);
 }
 
-float3 offsetRay(in float3 p, in float3 n)
-{
-    // Smallest epsilon that can be added without losing precision is 1.19209e-07, but we play safe
-    const float epsilon = 1.0f / 256.0f; // Safe epsilon
-
-    float magnitude = length(p);
-    float offset = epsilon * magnitude;
-    // multiply the direction vector by the smallest offset
-    float3 offsetVector = n * offset;
-    // add the offset vector to the starting point
-    float3 offsetPoint = p + offsetVector;
-
-    return offsetPoint;
-}
-
 #endif
 
 [shader("vertex")]
@@ -198,9 +183,9 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 #ifdef USE_RT
             // visibility test
             RayDesc rd;
-            rd.Origin = offsetRay(world_pos, normal);
+            rd.Origin = world_pos;
             rd.Direction = L;
-            rd.TMin = 0;
+            rd.TMin = 0.001f;
             rd.TMax = 1e6;
             if (!traceShadow(rd))
 #endif
@@ -213,9 +198,9 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 #ifdef USE_RT
             // visibility test
             RayDesc rd;
-            rd.Origin = offsetRay(world_pos, normal);
+            rd.Origin = world_pos;
             rd.Direction = L;
-            rd.TMin = 0;
+            rd.TMin = 0.001f;
             rd.TMax = distance;
 
             if (!traceShadow(rd))

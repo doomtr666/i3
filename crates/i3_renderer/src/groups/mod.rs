@@ -123,3 +123,5 @@ impl RenderPass for PostProcessGroup {
 }
 
 pub mod sync;
+pub mod gtao_group;
+pub mod rtao_group;

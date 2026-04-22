@@ -1,0 +1,138 @@
+// Ray-Traced Ambient Occlusion — ground-truth reference pass
+//
+// One visibility ray per pixel per frame.
+// Accumulation: V_new = (V_old * N + sample) / (N + 1)
+// sampleCount == 0 → first frame / camera moved → reset accumulation.
+//
+
+#include "common.slangh"
+#include "noise.slangh"
+
+struct RtaoPushConstants
+{
+    float4x4 invViewProj;
+    float2 screenSize;
+    float radius;
+    uint sampleCount; // 0 = reset (camera moved / first frame)
+    uint frameIndex;
+    uint blueNoiseIndex;
+    uint _pad0;
+    uint _pad1;
+};
+
+[[vk::push_constant]]
+RtaoPushConstants pc;
+
+[[vk::binding(0, 0)]]
+Texture2D<float> depthBuffer;
+[[vk::binding(1, 0)]]
+Texture2D<float2> gbufferNormal;
+[[vk::binding(2, 0)]]
+Texture2D<float> rtaoAccumIn; // previous frame accumulation
+[[vk::binding(3, 0)]]
+RWTexture2D<float> rtaoAccumOut; // current frame accumulation
+[[vk::binding(4, 0)]]
+RWTexture2D<float> aoOutput; // resolved AO for this frame
+[[vk::binding(5, 0)]]
+RaytracingAccelerationStructure tlas;
+
+float3 worldSpacePos(uint2 px, float depth)
+{
+    float2 uv = (float2(px) + 0.5f) / pc.screenSize;
+    // Vulkan viewport: Y-down in screen space, Y-up in NDC/view space → flip Y
+    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float4 clip = float4(ndc, depth, 1.0f);
+    float4 vh = mul(pc.invViewProj, clip);
+    return vh.xyz / vh.w;
+}
+
+void buildBasis(float3 N, out float3 T, out float3 B)
+{
+    // Frisvad
+    float s = N.z >= 0.0f ? 1.0f : -1.0f;
+    float a = -1.0f / (s + N.z);
+    float b = N.x * N.y * a;
+    T = float3(1.0f + s * N.x * N.x * a, s * b, -s * N.x);
+    B = float3(b, s + N.y * N.y * a, -N.y);
+}
+
+bool traceShadow(RayDesc ray)
+{
+    // Use optimized ray query for shadow testing - terminates at first hit
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
+
+    // Process intersections (simplified for shadow rays)
+    while (q.Proceed())
+    {
+        // For non-opaque triangles, force them to be opaque (simplified alpha handling)
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+            q.CommitNonOpaqueTriangleHit(); // Accept intersection as solid
+    }
+
+    // Return true if any intersection was found (surface is in shadow)
+    return (q.CommittedStatus() != COMMITTED_NOTHING);
+}
+
+[numthreads(8, 8, 1)]
+void computeMain(uint3 dispatchId: SV_DispatchThreadID)
+{
+    uint2 px = dispatchId.xy;
+    if (any(px >= uint2(pc.screenSize)))
+        return;
+
+    // get world position
+    float depth = depthBuffer[px].r;
+    // Reverse-Z: depth==0 is sky/far plane — no geometry to occlude.
+    if (depth <= 0.0f)
+    {
+        aoOutput[int2(px)] = 1.0f;
+        rtaoAccumOut[int2(px)] = 1.0f;
+        return;
+    }
+    float3 P = worldSpacePos(px, depth);
+
+    // decode world space normal
+    float3 N = decodeOctahedral(gbufferNormal[px].rg);
+
+    // noise sample depends on position + frameIndex
+    uint3 h = pcg3(uint3(px, pc.frameIndex));
+    float u1 = float(h.x) * (1.0f / 4294967296.0f);
+    float u2 = float(h.y) * (1.0f / 4294967296.0f);
+    float2 noise = float2(u1, u2);
+
+    // generate cosine weighted direction (tangent space)
+    float3 tangent_dir = float3(
+        cos(2 * PI * noise.x) * sqrt(noise.y),
+        sin(2 * PI * noise.x) * sqrt(noise.y),
+        sqrt(1.0 - noise.y));
+
+    // transform ray direction to world space
+    float3 T, B;
+    buildBasis(N, T, B);
+    float3 ray_dir = tangent_dir.x * T + tangent_dir.y * B + tangent_dir.z * N;
+
+    // visibility test
+    RayDesc ray;
+    ray.Origin = P;
+    ray.Direction = normalize(ray_dir);
+    ray.TMin = 0.001f;
+    ray.TMax = pc.radius;
+
+    float visibility = traceShadow(ray) ? 0.0 : 1.0;
+
+    // Progressive accumulation
+    float accumulated;
+    if (pc.sampleCount == 0)
+    {
+        accumulated = visibility;
+    }
+    else
+    {
+        float prev = rtaoAccumIn[int2(px)];
+        accumulated = (prev * float(pc.sampleCount) + visibility) / float(pc.sampleCount + 1);
+    }
+
+    rtaoAccumOut[int2(px)] = accumulated;
+    aoOutput[int2(px)] = accumulated;
+}

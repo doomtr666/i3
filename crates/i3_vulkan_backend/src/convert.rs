@@ -63,6 +63,7 @@ pub fn convert_format(format: Format) -> vk::Format {
         Format::BC7_UNORM => vk::Format::BC7_UNORM_BLOCK,
         Format::BC7_SRGB => vk::Format::BC7_SRGB_BLOCK,
         Format::BC6H_UF16 => vk::Format::BC6H_UFLOAT_BLOCK,
+        Format::R16G16B16A16_UNORM => vk::Format::R16G16B16A16_UNORM,
     }
 }
 
@@ -410,6 +411,7 @@ pub fn convert_vk_format(format: vk::Format) -> Format {
         vk::Format::BC7_UNORM_BLOCK => Format::BC7_UNORM,
         vk::Format::BC7_SRGB_BLOCK => Format::BC7_SRGB,
         vk::Format::BC6H_UFLOAT_BLOCK => Format::BC6H_UF16,
+        vk::Format::R16G16B16A16_UNORM => Format::R16G16B16A16_UNORM,
         _ => Format::Undefined,
     }
 }
@@ -457,6 +459,7 @@ pub fn convert_u32_format(id: u32) -> vk::Format {
         35 => vk::Format::R16G16_SFLOAT,
         36 => vk::Format::B10G11R11_UFLOAT_PACK32,
         37 => vk::Format::BC6H_UFLOAT_BLOCK,
+        38 => vk::Format::R16G16B16A16_UNORM,
         _  => vk::Format::UNDEFINED,
     }
 }
