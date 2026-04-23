@@ -6,21 +6,7 @@
 
 struct PushConstants
 {
-    float4x4 inv_view_proj;
-    float4x4 inv_projection;
-    float3 camera_pos;
-    float near_plane;
-
     uint3 grid_size;
-    float far_plane;
-
-    float2 screen_dimensions;
-    uint debug_mode;
-
-    uint ibl_lut_index;
-    uint ibl_irr_index;
-    uint ibl_pref_index;
-    float ibl_intensity;
     float ao_strength; // 0.0 = no AO, 1.0 = full AO
 };
 
@@ -116,10 +102,10 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float y = (1.0 - uv.y) * 2.0 - 1.0;
     float4 clip_pos = float4(x, y, depth, 1.0);
 
-    float4 world_pos_h = mul(pc.inv_view_proj, clip_pos);
+    float4 world_pos_h = mul(g_common.invViewProjection, clip_pos);
     float3 world_pos = world_pos_h.xyz / world_pos_h.w;
 
-    float4 view_pos_h = mul(pc.inv_projection, clip_pos);
+    float4 view_pos_h = mul(g_common.invProjection, clip_pos);
     float view_z = -(view_pos_h.z / view_pos_h.w);
 
     // Calculate cluster index
@@ -127,8 +113,8 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     uint tile_y = clamp(uint(uv.y * float(pc.grid_size.y)), 0u, pc.grid_size.y - 1);
 
     float z_slice = 0.0;
-    if (view_z > pc.near_plane)
-        z_slice = log(view_z / pc.near_plane) * float(pc.grid_size.z) / log(pc.far_plane / pc.near_plane);
+    if (view_z > g_common.GetNearPlane())
+        z_slice = log(view_z / g_common.GetNearPlane()) * float(pc.grid_size.z) / log(g_common.GetFarPlane() / g_common.GetNearPlane());
 
     uint tile_z = clamp(uint(max(0.0, z_slice)), 0u, pc.grid_size.z - 1);
 
@@ -139,7 +125,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     // Fetch lights
     ClusterGridData grid_item = cluster_grid[cluster_index];
 
-    float3 V = normalize(pc.camera_pos - world_pos);
+    float3 V = normalize(g_common.GetCameraPos() - world_pos);
 #ifdef USE_IBL
     // IBL ambient
     float3 F0 = lerp(float3(0.04), albedo, metallic);
@@ -149,18 +135,14 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float3 kD = (1.0 - kS) * (1.0 - metallic);
 
     float3 irradiance = float3(0.0);
-    if (pc.ibl_irr_index != 0xFFFFFFFF)
+    if (g_common.GetIblIrrIndex() != 0)
     {
-        irradiance = bindlessTextures[pc.ibl_irr_index].Sample(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(normal)).rgb;
+        irradiance = bindlessTextures[g_common.GetIblIrrIndex()].Sample(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(normal)).rgb;
     }
     float3 diffuse_ambient = kD * albedo * irradiance;
 
-    // Specular IBL is omitted here — sssr_composite owns all specular indirect.
-    // It writes lerp(ibl_spec, ssr_spec, conf) for every surface pixel, falling back
-    // to pure IBL when SSR has no hit (conf=0). Adding spec_ambient here would double-count.
-
     float ao = lerp(1.0f, aoTexture.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r, pc.ao_strength);
-    float3 color = emissive + diffuse_ambient * pc.ibl_intensity * ao;
+    float3 color = emissive + diffuse_ambient * g_common.GetIblIntensity() * ao;
 #else
     float3 color = emissive + 0.005 * albedo;
 #endif
@@ -218,16 +200,17 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         color += computeBRDF(L, V, normal, albedo, metallic, roughness, radiance);
     }
 
-    if (pc.debug_mode == 12) // DebugChannel::ClusterGrid
+    if (g_common.GetDebugChannel() == 12) // DebugChannel::ClusterGrid
     {
         float3 debug_color = float3(((tile_x % 2) ^ (tile_y % 2) ^ (tile_z % 2)) != 0 ? 0.2 : 0.05);
         color = debug_color;
     }
-    else if (pc.debug_mode == 11) // DebugChannel::LightDensity
+    else if (g_common.GetDebugChannel() == 11) // DebugChannel::LightDensity
     {
         float density = float(grid_item.count) / 64.0;
         color = float3(density, 0.0, 1.0 - density);
     }
+
 
     float prev_ex = exposure_buffer[0].new_exposure;
     if (prev_ex == 0.0)

@@ -94,7 +94,10 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         color = ssrResolved.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb;
         break;
     case 8: // Bloom_Buffer mip 0 — RGB = accumulated bloom (tone-compressed for display)
-        color = bloomBuffer.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb / (1.0f + bloomBuffer.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb);
+        color = bloomBuffer.Sample(bindlessSamplers[SAMPLER_LINEAR], uv).rgb / (1.0f + bloomBuffer.Sample(bindlessSamplers[SAMPLER_LINEAR], uv).rgb);
+        break;
+    case 9: // SSR_Raw — stochastic reflections before temporal denoising
+        color = ssrResolved.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb;
         break;
     default:
         color = float3(1.0, 0.0, 1.0); // Magenta = unsupported channel

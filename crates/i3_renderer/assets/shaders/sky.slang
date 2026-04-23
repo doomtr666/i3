@@ -1,20 +1,5 @@
 // assets/system/shaders/sky.slang
 #include "common.slangh"
-
-struct PushConstants
-{
-    float4x4 inv_view_proj;
-    float3 camera_pos;
-    float pad0;
-    float3 sun_direction;
-    float sun_intensity;
-    float3 sun_color;
-    uint ibl_env_index; // bindless index, 0xFFFFFFFF = no IBL → procedural sky
-};
-
-[[vk::push_constant]]
-PushConstants pc;
-
 struct VertexOutput
 {
     float4 position : SV_Position;
@@ -29,11 +14,11 @@ VertexOutput vertexMain(uint vertexId: SV_VertexID)
     // Depth = 0.0 to render behind everything (reverse-Z: far = 0)
     float4 pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
 
-    float4 world_pos_h = mul(pc.inv_view_proj, pos);
+    float4 world_pos_h = mul(g_common.invViewProjection, pos);
     float3 world_pos = world_pos_h.xyz / world_pos_h.w;
 
     output.position = pos;
-    output.view_dir = normalize(world_pos - pc.camera_pos);
+    output.view_dir = normalize(world_pos - g_common.GetCameraPos());
 
     return output;
 }
@@ -62,20 +47,21 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float3 dir = normalize(input.view_dir);
     float3 color;
 
-    if (pc.ibl_env_index != 0xFFFFFFFF)
+    if (g_common.GetIblEnvIndex() != 0)
     {
         // IBL sky — sample equirect from bindless array
-        color = bindlessTextures[pc.ibl_env_index].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(dir), 0).rgb;
+        color = bindlessTextures[g_common.GetIblEnvIndex()].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(dir), 0).rgb;
         // Add sun disk on top
-        // float cos_theta = dot(dir, -pc.sun_direction);
+        // float cos_theta = dot(dir, -g_common.GetSunDir());
         // float sun_disk = smoothstep(0.998, 0.999, cos_theta) * 50.0;
-        // color += sun_disk * pc.sun_color * pc.sun_intensity;
+        // color += sun_disk * g_common.GetSunColor() * g_common.GetSunIntensity();
     }
     else
     {
         // Procedural sky fallback
-        color = get_sky_color(dir, -pc.sun_direction, pc.sun_color * pc.sun_intensity);
+        color = get_sky_color(dir, -g_common.GetSunDir(), g_common.GetSunColor() * g_common.GetSunIntensity());
     }
 
     return float4(color, 1.0);
 }
+

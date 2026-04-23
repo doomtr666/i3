@@ -2,8 +2,9 @@
 
 // --- Shared Constants ---
 #define PI 3.14159265359
+#define HALF_PI 1.57079632679
 
-// --- Common Data (Binding 0, Set 0) ---
+// --- Common Data (Binding 0, Set 1) ---
 struct CommonData
 {
     float4x4 view;
@@ -11,14 +12,106 @@ struct CommonData
     float4x4 viewProjection;
     float4x4 invProjection;
     float4x4 invViewProjection;
-    float nearPlane;
-    float farPlane;
-    uint screenWidth;
-    uint screenHeight;
-    float3 cameraPos;
-    uint lightCount;
     float4x4 prevViewProjection;
+
+    float4 cameraPos; // .xyz=pos, .w=near_plane
+    float4 sunDir;    // .xyz=dir, .w=sun_intensity
+    float4 sunColor;  // .xyz=color, .w=far_plane
+
+    uint4 screenSize;   // .x=w, .y=h, .z=light_count, .w=frame_index
+    uint4 iblIndices;   // .x=lut, .y=irr, .z=pref, .w=env
+    uint4 extraIndices; // .x=blue_noise, .y=debug_channel, .z=unused, .w=unused
+
+    float4 timeParams; // .x=dt, .y=ibl_intensity, .z=unused, .w=unused
+
+    // --- Accessors for cleaner shader code ---
+    float3 GetCameraPos()
+    {
+        return cameraPos.xyz;
+    }
+    float GetNearPlane()
+    {
+        return cameraPos.w;
+    }
+    float GetFarPlane()
+    {
+        return sunColor.w;
+    }
+
+    float3 GetSunDir()
+    {
+        return sunDir.xyz;
+    }
+    float GetSunIntensity()
+    {
+        return sunDir.w;
+    }
+    float3 GetSunColor()
+    {
+        return sunColor.xyz;
+    }
+
+    uint GetScreenWidth()
+    {
+        return screenSize.x;
+    }
+    uint GetScreenHeight()
+    {
+        return screenSize.y;
+    }
+
+    float2 GetScreenSize()
+    {
+        return float2(screenSize.x, screenSize.y);
+    }
+
+    uint GetLightCount()
+    {
+        return screenSize.z;
+    }
+    uint GetFrameIndex()
+    {
+        return screenSize.w;
+    }
+
+    uint GetIblLutIndex()
+    {
+        return iblIndices.x;
+    }
+    uint GetIblIrrIndex()
+    {
+        return iblIndices.y;
+    }
+    uint GetIblPrefIndex()
+    {
+        return iblIndices.z;
+    }
+    uint GetIblEnvIndex()
+    {
+        return iblIndices.w;
+    }
+
+    uint GetBlueNoiseIndex()
+    {
+        return extraIndices.x;
+    }
+    uint GetDebugChannel()
+    {
+        return extraIndices.y;
+    }
+
+    float GetDeltaTime()
+    {
+        return timeParams.x;
+    }
+    float GetIblIntensity()
+    {
+        return timeParams.y;
+    }
 };
+
+[[vk::binding(0, 1)]]
+ConstantBuffer<CommonData> g_common;
 
 // --- GPU-Driven Command ---
 struct DrawIndirectCommand
@@ -87,8 +180,8 @@ Texture2D bindlessTextures[4096];
 #define SAMPLER_LINEAR 0
 #define SAMPLER_NEAREST 1
 #define SAMPLER_ANISO 2
-#define SAMPLER_NEAREST_BORDER 3  // ClampToBorder nearest, border=0.0 (far in reverse-Z) — conservative
-#define SAMPLER_LINEAR_BORDER  4  // ClampToBorder linear,  border=0.0 — conservative bilinear for HiZ
+#define SAMPLER_NEAREST_BORDER 3 // ClampToBorder nearest, border=0.0 (far in reverse-Z) — conservative
+#define SAMPLER_LINEAR_BORDER 4  // ClampToBorder linear,  border=0.0 — conservative bilinear for HiZ
 
 [[vk::binding(1, BINDLESS_SET)]]
 SamplerState bindlessSamplers[64];
@@ -118,16 +211,30 @@ bool frustumTest(float3 minBound, float3 maxBound, float4x4 vp)
             bool outside = false;
             switch (p)
             {
-            case 0: outside = clip.x < -clip.w; break; // Left
-            case 1: outside = clip.x >  clip.w; break; // Right
-            case 2: outside = clip.y < -clip.w; break; // Bottom
-            case 3: outside = clip.y >  clip.w; break; // Top
-            case 4: outside = clip.z <  0.0;    break; // Near (Reverse-Z)
-            case 5: outside = clip.z >  clip.w; break; // Far
+            case 0:
+                outside = clip.x < -clip.w;
+                break; // Left
+            case 1:
+                outside = clip.x > clip.w;
+                break; // Right
+            case 2:
+                outside = clip.y < -clip.w;
+                break; // Bottom
+            case 3:
+                outside = clip.y > clip.w;
+                break; // Top
+            case 4:
+                outside = clip.z < 0.0;
+                break; // Near (Reverse-Z)
+            case 5:
+                outside = clip.z > clip.w;
+                break; // Far
             }
-            if (outside) outsideCount++;
+            if (outside)
+                outsideCount++;
         }
-        if (outsideCount == 8) return false;
+        if (outsideCount == 8)
+            return false;
     }
     return true;
 }
@@ -135,7 +242,7 @@ bool frustumTest(float3 minBound, float3 maxBound, float4x4 vp)
 // Visibility bitset helpers — 1 bit per instance index.
 bool visibilityGet(StructuredBuffer<uint> bitset, uint idx)
 {
-    return (bitset[idx / 32] >> (idx % 32)) & 1u != 0u;
+    return ((bitset[idx / 32] >> (idx % 32)) & 1u) != 0u;
 }
 
 void visibilitySet(RWStructuredBuffer<uint> bitset, uint idx)
@@ -143,7 +250,6 @@ void visibilitySet(RWStructuredBuffer<uint> bitset, uint idx)
     InterlockedOr(bitset[idx / 32], 1u << (idx % 32));
 }
 
-// --- Helper Funcs ---
 float2 encodeOctahedral(float3 n)
 {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
@@ -167,7 +273,6 @@ float3 decodeOctahedral(float2 e)
     return normalize(n);
 }
 
-// --- IBL Helpers ---
 float2 dirToEquirect(float3 d)
 {
     float u = atan2(d.z, d.x) / (2.0 * PI) + 0.5;
@@ -192,4 +297,15 @@ float2 encodeHemiOcta(float3 n)
     uv = uv * 0.5 + 0.5;
     float v = n.y >= 0.0 ? uv.y * 0.5 : 0.5 + uv.y * 0.5;
     return float2(uv.x, v);
+}
+
+// https://backend.orbit.dtu.dk/ws/files/126824972/onb_frisvad_jgt2012_v2.pdf
+void buildBasis(float3 N, out float3 T, out float3 B)
+{
+    // Frisvad
+    float s = N.z >= 0.0f ? 1.0f : -1.0f;
+    float a = -1.0f / (s + N.z);
+    float b = N.x * N.y * a;
+    T = float3(1.0f + s * N.x * N.x * a, s * b, -s * N.x);
+    B = float3(b, s + N.y * N.y * a, -N.y);
 }

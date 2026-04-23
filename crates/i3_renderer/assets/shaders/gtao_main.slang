@@ -1,32 +1,21 @@
 // Ground-Truth Ambient Occlusion — Main compute pass
-// Based on: "Practical Real-Time Strategies for Accurate Indirect Occlusion" (Jimenez 2016)
-//
-// Algorithm: horizon-based integral.
-// For each pixel, in S azimuthal directions:
-//   1. March T steps in +dir and -dir in screen-space
-//   2. Track the maximum horizon angle h1 (+) and h2 (-) in view-space
-//   3. Compute gamma = projected normal angle in the slice plane
-//   4. Integrate visibility over the two horizon arcs
-// AO = average(AO_slice) over all slices
-//
+// Robust implementation with absolute view-vector angles and strict 3D distance attenuation.
 
 #include "common.slangh"
-#include "noise.slangh"
-
-static const float HALF_PI = 1.5707963267948966f;
+#include "sampling.slangh"
 
 struct GtaoPushConstants
 {
     float4x4 invProjection;
     float4x4 view;
     float2 screenSize;
-    float radius;          // world-space sampling radius (metres)
-    float falloff;         // distance falloff power (e.g. 2.0)
-    uint sliceCount;       // azimuthal directions (2 = perf, 3 = quality)
-    uint stepCount;        // steps per direction (4–6)
-    uint frameIndex;       // for golden-ratio temporal rotation
+    float radius;          // World-space sampling radius (metres)
+    float falloff;         // Distance falloff power (e.g. 2.0)
+    uint sliceCount;       // Azimuthal directions (2 = perf, 3 = quality)
+    uint stepCount;        // Steps per direction (4–6)
+    uint frameIndex;       // For golden-ratio temporal rotation
     uint enabled;          // 0 = write 1.0 (disabled), 1 = run GTAO
-    uint blue_noise_index; // bindless index of the 128×128 RG8 blue-noise texture
+    uint blue_noise_index; // Bindless index of the 128×128 RG8 blue-noise texture
     uint _pad;
 };
 
@@ -54,28 +43,9 @@ float3 viewSpacePos(uint2 px, float depth)
 
 float3 sampleViewPos(float2 screenPos)
 {
-    // round() is critical: uint2(float) truncates toward zero (floor for positives).
-    // floor(px + 1.06) = px+1  but  floor(px - 1.06) = px-2, not px-1.
-    // That asymmetry makes +dir and -dir sample different distances from center.
-    // round() restores symmetry: both land on the nearest pixel. (cf. XeGTAO)
+    // round() restores symmetry so +dir and -dir sample at identical pixel offsets
     int2 ipx = int2(round(clamp(screenPos, float2(0.0f), float2(pc.screenSize) - 1.0f)));
     return viewSpacePos(uint2(ipx), depthBuffer[ipx].r);
-}
-
-// ─── Elevation angle ──────────────────────────────────────────────────────────
-// Elevation of P→S above the plane perpendicular to V.
-// Using length(d - dot(d,V)*V) as the horizontal distance (component perp to V)
-// is exact for any screen position — unlike length(d.xy) which approximates V≈(0,0,1).
-
-float elevationAngle(float3 P, float3 S, float3 V)
-{
-    float3 d = S - P;
-    float dv = dot(d, V);
-    float dh2 = max(dot(d, d) - dv * dv, 0.0f); // |d|² - (d·V)²
-    float dh = sqrt(dh2);
-    if (dh < 1e-5f)
-        return dv > 0.0f ? HALF_PI : -HALF_PI;
-    return atan2(dv, dh);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -94,121 +64,122 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
     }
 
     float depth = depthBuffer[int2(px)].r;
-    if (depth <= 0.0f)
-    { // reverse-Z: 0 = sky / far plane
+    if (depth <= 0.0f) // reverse-Z: 0 = sky / far plane
+    {
         aoOutput[int2(px)] = 1.0f;
         return;
     }
 
-    // View-space position at this pixel
+    // 1. Setup base vectors
     float3 P = viewSpacePos(px, depth);
+    float3 V = normalize(-P); // Vector pointing to the camera
 
-    // View-space normal — decode world-space octahedral, rotate into view
+    // Decode and transform normal to view space
     float2 nEnc = gbufferNormal[int2(px)].rg;
     float3 N_world = decodeOctahedral(nEnc);
     float3x3 viewRot = float3x3(pc.view[0].xyz, pc.view[1].xyz, pc.view[2].xyz);
     float3 N = normalize(mul(viewRot, N_world));
 
-    // Screen-space radius of the sampling kernel (in pixels)
-    // invProjection[0][0] = tan(fovX/2); projecting world radius to pixels:
-    //   ss_radius = world_radius / (tan(fovX/2) * depth) * (screen_width/2)
+    // Screen-space radius clamping
     float inv_tan_fov = abs(pc.invProjection[0][0]);
     float ss_radius = clamp(
         pc.radius * inv_tan_fov * (pc.screenSize.x * 0.5f) / max(-P.z, 0.01f),
         2.0f, 256.0f);
     float step_size = ss_radius / float(pc.stepCount + 1);
 
-    // View direction (toward camera from P)
-    float3 V = normalize(-P);
-
-    // get noise sample depends on position + frameIndex
+    // Dither setup
     uint3 h = pcg3(uint3(px, pc.frameIndex));
     float angle_base = float(h.x) * (1.0f / 4294967296.0f);
     float step_noise = float(h.y) * (1.0f / 4294967296.0f);
 
-    // World size of one pixel at P's depth — used for per-step z discontinuity threshold.
-    float pixel_world = max(-P.z, 0.01f) * 2.0f * inv_tan_fov / pc.screenSize.x;
-
     float ao = 0.0f;
+    float radius2 = pc.radius * pc.radius;        // Squared radius for fast 3D distance checks
+    float thickness_threshold = pc.radius * 0.5f; // Heuristic to reject foreground objects
 
+    // 2. Integration loop
     for (uint slice = 0; slice < pc.sliceCount; slice++)
     {
         float slice_angle = (float(slice) / float(pc.sliceCount)) * PI + angle_base;
         float2 dir_ss = float2(cos(slice_angle), sin(slice_angle));
 
-        // Approximate view-space 3D slice direction (in XY plane of view space)
+        // 3D direction of the slice plane in view space
         float3 dir_view = normalize(float3(
-            dir_ss.x * abs(pc.invProjection[0][0]),
-            -dir_ss.y * abs(pc.invProjection[1][1]), // screen Y-down → view Y-flip
+            dir_ss.x * inv_tan_fov,
+            -dir_ss.y * abs(pc.invProjection[1][1]),
             0.0f));
 
-        // Project N onto the slice plane: remove component along plane normal
-        float3 plane_n = normalize(cross(dir_view, V));
+        // Project normal onto the slice plane
+        float3 plane_n = cross(V, dir_view);
         float3 N_proj = N - dot(N, plane_n) * plane_n;
         float n_len = length(N_proj);
 
-        // Normalized version (safe — fallback to dir_view if degenerate)
-        float3 N_proj_n = (n_len > 1e-4f) ? N_proj / n_len : dir_view;
+        // Calculate absolute angle of the projected normal relative to V
+        float sign_n = sign(dot(N_proj, dir_view));
+        float cos_n = clamp(dot(N_proj, V) / max(n_len, 1e-4f), -1.0f, 1.0f);
+        float n_gamma = sign_n * acos(cos_n);
 
-        // ── Approximated integral (Jimenez 2016 simplified) ───────────────────
-        //
-        // Angle convention: elevation from XY-horizontal plane.
-        //   gamma = 0   → N_proj along dir_view (sideways)
-        //   gamma = π/2 → N_proj along V (facing camera)
-        //
-        // The "no occlusion" level for both arcs is (gamma - π/2).
-        // Falloff lerps toward this level (not toward 0) to avoid directional bias.
+        // Track max cosines (starts at -1.0, which means 180 degrees away from V)
+        float cos_h1 = -1.0f;
+        float cos_h2 = -1.0f;
 
-        // asin(dot(N_proj_n, V)) gives elevation of N from the plane perp to V — always in
-        // [-π/2, π/2].  atan2(dot(N,V), dot(N,dir_view)) would return ±π for faces whose
-        // normal points in -dir_view, breaking the formula for those surfaces.
-        float gamma = asin(clamp(dot(N_proj_n, V), -1.0f, 1.0f));
-
-        // Initialize horizons to the base of the visible hemisphere.
-        // cos(h - gamma) = cos(-π/2) = 0 → no AO contribution with no occluders.
-        float h1 = gamma - HALF_PI;
-        float h2 = gamma - HALF_PI;
-        float h_neutral = gamma - HALF_PI;
-
+        // Raymarching
         for (uint step = 1; step <= pc.stepCount; step++)
         {
             float dist_ss = (float(step - 1u) + step_noise) * step_size;
-            float t = saturate(dist_ss / ss_radius);
-            float w = 1.0f - pow(t, pc.falloff);
-            if (w < 1e-3f)
-                break;
 
-            // z discontinuity threshold: scales with step world-distance.
-            // tan(72°) ≈ 3 → allows surfaces up to 72° without suppression.
-            // True edges (perpendicular geometry) have z_diff >> world_step → z_w ≈ 0.
-            float z_threshold = max(dist_ss * pixel_world * 3.0f, 0.001f);
+            // --- Positive Direction (S1) ---
+            float3 S1 = sampleViewPos(float2(px) + dir_ss * dist_ss);
+            float3 d1 = S1 - P;
+            float dist2_1 = dot(d1, d1);
 
-            float3 S_pos = sampleViewPos(float2(px) + dir_ss * dist_ss);
-            float h = elevationAngle(P, S_pos, V);
-            float z_w = saturate(1.0f - max(0.0f, S_pos.z - P.z) / z_threshold);
-            h1 = max(h1, lerp(h_neutral, h, w * z_w));
+            // CORRECTION 1 : Atténuation basée sur la distance 3D réelle au lieu des pixels
+            float w1 = saturate(1.0f - dist2_1 / radius2);
+            w1 = pow(w1, pc.falloff);
 
-            float3 S_neg = sampleViewPos(float2(px) - dir_ss * dist_ss);
-            h = elevationAngle(P, S_neg, V);
-            z_w = saturate(1.0f - max(0.0f, S_neg.z - P.z) / z_threshold);
-            h2 = max(h2, lerp(h_neutral, h, w * z_w));
+            // CORRECTION 2 : Rejet strict des objets de premier plan
+            // Si l'échantillon est plus proche de la caméra que P d'une distance > thickness, on l'ignore.
+            if ((S1.z - P.z) > thickness_threshold)
+                w1 = 0.0f;
+
+            float len_d1 = sqrt(dist2_1);
+            float c1 = dot(d1, V) / max(len_d1, 1e-4f);
+            cos_h1 = max(cos_h1, lerp(cos_h1, c1, w1));
+
+            // --- Negative Direction (S2) ---
+            float3 S2 = sampleViewPos(float2(px) - dir_ss * dist_ss);
+            float3 d2 = S2 - P;
+            float dist2_2 = dot(d2, d2);
+
+            float w2 = saturate(1.0f - dist2_2 / radius2);
+            w2 = pow(w2, pc.falloff);
+
+            if ((S2.z - P.z) > thickness_threshold)
+                w2 = 0.0f;
+
+            float len_d2 = sqrt(dist2_2);
+            float c2 = dot(d2, V) / max(len_d2, 1e-4f);
+            cos_h2 = max(cos_h2, lerp(cos_h2, c2, w2));
         }
 
-        // Clamp both horizons to the visible hemisphere [gamma − π/2, gamma + π/2]
-        h1 = gamma + clamp(h1 - gamma, -HALF_PI, HALF_PI);
-        h2 = gamma + clamp(h2 - gamma, -HALF_PI, HALF_PI);
+        // Reconvert to angles relative to V
+        float h1 = acos(clamp(cos_h1, -1.0f, 1.0f));
+        float h2 = -acos(clamp(cos_h2, -1.0f, 1.0f)); // Negative side of the slice
 
-        // 1 − 0.5·(cos(h1−γ) + cos(h2−γ))
-        float ao_slice = 1.0f - 0.5f * (cos(h1 - gamma) + cos(gamma - h2));
+        // Clamp horizons to the tangent plane to prevent occlusion from behind the surface
+        h1 = n_gamma + max(h1 - n_gamma, -HALF_PI);
+        h2 = n_gamma + min(h2 - n_gamma, HALF_PI);
+
+        // Analytical integration over the arc
+        float term1 = sin(h1) - sin(h2);
+        float term2 = cos(h1) - cos(h2);
+        float ao_slice = n_len * 0.25f * (term1 * cos(n_gamma) + term2 * sin(n_gamma));
+
         ao += saturate(ao_slice);
     }
 
     ao /= float(pc.sliceCount);
 
-    // Fade to no-AO as ss_radius shrinks toward its minimum clamp.
-    // step_size = ss_radius/(stepCount+1); below ~stepCount px every step
-    // rounds to the same pixel → constant output.  Use a wide smoothstep so
-    // the transition is invisible rather than a sharp band at a specific depth.
-    float ao_fade = smoothstep(2.0f, float(pc.stepCount) * 3.0f, ss_radius);
-    aoOutput[int2(px)] = lerp(1.0f, saturate(ao), ao_fade);
+    // Fade out AO when screen-space radius gets too small (avoids aliasing on distant objects)
+    // float ao_fade = smoothstep(2.0f, float(pc.stepCount) * 3.0f, ss_radius);
+    aoOutput[int2(px)] = saturate(ao);
 }

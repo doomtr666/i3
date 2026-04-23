@@ -11,13 +11,6 @@ StructuredBuffer<GpuInstanceData> instances;
 [[vk::binding(2, 0)]]
 StructuredBuffer<MaterialData> materials;
 
-struct PushConstants
-{
-    float4x4 viewProjection;
-};
-
-[[vk::push_constant]]
-PushConstants pc;
 
 struct Vertex
 {
@@ -96,7 +89,7 @@ VertexOutput vertexMain(uint indexId: SV_VertexID,
 
     VertexOutput output;
     float4 worldPos = mul(instance.worldTransform, float4(vPos, 1.0));
-    output.clipPosition = mul(pc.viewProjection, worldPos);
+    output.clipPosition = mul(g_common.viewProjection, worldPos);
 
     float3x3 normalMatrix = (float3x3)instance.worldTransform;
     float3 worldNormal = normalize(mul(normalMatrix, vNormal));

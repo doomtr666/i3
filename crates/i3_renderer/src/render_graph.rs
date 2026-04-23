@@ -35,12 +35,29 @@ pub struct CommonData {
     pub view_projection: nalgebra_glm::Mat4,
     pub inv_projection: nalgebra_glm::Mat4,
     pub inv_view_projection: nalgebra_glm::Mat4,
+    pub prev_view_projection: nalgebra_glm::Mat4,
+
+    pub camera_pos: nalgebra_glm::Vec3,
     pub near_plane: f32,
+    pub sun_dir: nalgebra_glm::Vec3,
+    pub sun_intensity: f32,
+    pub sun_color: nalgebra_glm::Vec3,
     pub far_plane: f32,
+
     pub screen_width: u32,
     pub screen_height: u32,
-    pub camera_pos: nalgebra_glm::Vec3,
     pub light_count: u32,
+    pub frame_index: u32,
+
+    pub ibl_lut_index: u32,
+    pub ibl_irr_index: u32,
+    pub ibl_pref_index: u32,
+    pub ibl_env_index: u32,
+
+    pub blue_noise_index: u32,
+    pub debug_channel: u32,
+    pub ibl_intensity: f32,
+    pub dt: f32,
 }
 
 /// Indices of IBL textures in the global bindless array.
@@ -90,17 +107,22 @@ impl RenderPass for ClearBufferPass {
 /// Trivial pass that declares AO_Resolved and writes 1.0 (AO disabled).
 struct AoNonePass {
     ao_resolved: ImageHandle,
-    pipeline:    Option<i3_gfx::graph::backend::BackendPipeline>,
+    pipeline: Option<i3_gfx::graph::backend::BackendPipeline>,
 }
 
 impl AoNonePass {
     fn new() -> Self {
-        Self { ao_resolved: ImageHandle::INVALID, pipeline: None }
+        Self {
+            ao_resolved: ImageHandle::INVALID,
+            pipeline: None,
+        }
     }
 }
 
 impl RenderPass for AoNonePass {
-    fn name(&self) -> &str { "AoNonePass" }
+    fn name(&self) -> &str {
+        "AoNonePass"
+    }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
@@ -116,32 +138,37 @@ impl RenderPass for AoNonePass {
 
     fn declare(&mut self, builder: &mut PassBuilder) {
         let depth = builder.resolve_image("DepthBuffer");
-        let desc  = builder.get_image_desc(depth);
+        let desc = builder.get_image_desc(depth);
         let img_desc = ImageDesc {
-            width:        desc.width,
-            height:       desc.height,
-            depth:        1,
-            format:       Format::R32_SFLOAT,
-            mip_levels:   1,
+            width: desc.width,
+            height: desc.height,
+            depth: 1,
+            format: Format::R32_SFLOAT,
+            mip_levels: 1,
             array_layers: 1,
-            usage:        ImageUsageFlags::STORAGE | ImageUsageFlags::SAMPLED,
-            view_type:    ImageViewType::Type2D,
-            swizzle:      ComponentMapping::default(),
-            clear_value:  None,
+            usage: ImageUsageFlags::STORAGE | ImageUsageFlags::SAMPLED,
+            view_type: ImageViewType::Type2D,
+            swizzle: ComponentMapping::default(),
+            clear_value: None,
         };
         self.ao_resolved = builder.declare_image_history_output("AO_Resolved", img_desc);
         builder.write_image(self.ao_resolved, ResourceUsage::SHADER_WRITE);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
-        let Some(pipeline) = self.pipeline else { return; };
+        let Some(pipeline) = self.pipeline else {
+            return;
+        };
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let (w, h) = (common.screen_width, common.screen_height);
         ctx.bind_pipeline_raw(pipeline);
         let ds = ctx.create_descriptor_set(
-            pipeline, 0,
+            pipeline,
+            0,
             &[i3_gfx::graph::backend::DescriptorWrite::storage_image(
-                0, 0, self.ao_resolved,
+                0,
+                0,
+                self.ao_resolved,
                 i3_gfx::graph::backend::DescriptorImageLayout::General,
             )],
         );
@@ -242,6 +269,10 @@ pub struct DefaultRenderGraph {
     /// Bindless index of the blue-noise texture (stable across frames).
     pub blue_noise_index: u32,
     pub sampler_indices: GlobalSamplerIndices,
+
+    pub common_buffer: i3_gfx::graph::backend::BackendBuffer,
+    pub frame_index: u32,
+    pub last_dt: f32,
 }
 
 /// Configuration for GBuffer target dimensions.
@@ -440,11 +471,11 @@ impl DefaultRenderGraph {
             nearest_sampler,
             debug_channel: DebugChannel::Lit,
             fxaa_enabled: true,
-            ao_mode: AoMode::Gtao,
+            ao_mode: AoMode::Rtao,
             gtao_group,
             rtao_group: RtaoGroup::new(),
             ao_none_pass: AoNonePass::new(),
-            prev_ao_mode: AoMode::Gtao,
+            prev_ao_mode: AoMode::None,
             light_buffer,
             temporal_registry: i3_gfx::graph::temporal::TemporalRegistry::new(),
             bindless_manager,
@@ -480,6 +511,14 @@ impl DefaultRenderGraph {
             last_compiled_debug_channel: DebugChannel::Lit,
             graph_dirty: true,
             compiled_had_staging: false,
+
+            common_buffer: _backend.create_buffer(&BufferDesc {
+                size: std::mem::size_of::<crate::frame_constant_data::GpuCommonData>() as u64,
+                usage: BufferUsageFlags::UNIFORM_BUFFER | BufferUsageFlags::TRANSFER_DST,
+                memory: MemoryType::GpuOnly,
+            }),
+            frame_index: 0,
+            last_dt: 0.016,
         };
 
         // 4. Initialization: Run pass-specific initialization logic
@@ -979,6 +1018,7 @@ impl DefaultRenderGraph {
         dt: f32,
     ) -> Result<Option<u64>, i3_gfx::graph::types::GraphError> {
         // 1. GPU sync
+        self.last_dt = dt;
         self.sync(backend, window, scene);
 
         // 2. Build CommonData
@@ -996,19 +1036,95 @@ impl DefaultRenderGraph {
             .try_inverse()
             .map(|v| v.column(3).xyz())
             .unwrap_or_else(|| nalgebra_glm::vec3(0.0, 0.0, 0.0));
+
+        let (sun_dir, sun_int, sun_col) = if !self.ibl_images.is_empty() {
+            (
+                nalgebra_glm::make_vec3(&self.ibl_sun.direction),
+                self.ibl_sun.intensity,
+                nalgebra_glm::make_vec3(&self.ibl_sun.color),
+            )
+        } else {
+            (
+                nalgebra_glm::vec3(0.0, -1.0, 0.0),
+                1.0,
+                nalgebra_glm::vec3(1.0, 1.0, 1.0),
+            )
+        };
+
         let common = CommonData {
             view,
             projection,
             view_projection,
             inv_projection,
             inv_view_projection,
+            prev_view_projection: self.prev_view_projection,
             near_plane,
             far_plane,
             screen_width,
             screen_height,
             camera_pos,
             light_count,
+            frame_index: self.frame_index,
+            dt,
+            sun_dir,
+            sun_intensity: sun_int,
+            sun_color: sun_col,
+            ibl_lut_index: self.ibl_indices.lut_index,
+            ibl_irr_index: self.ibl_indices.irr_index,
+            ibl_pref_index: self.ibl_indices.pref_index,
+            ibl_env_index: self.ibl_indices.env_index,
+            ibl_intensity: self.ibl_indices.intensity_scale,
+            debug_channel: self.debug_channel as u32,
+            blue_noise_index: self.blue_noise_index,
         };
+
+        // Update GPU-side CommonData
+        let gpu_common = crate::frame_constant_data::GpuCommonData {
+            view: common.view.into(),
+            projection: common.projection.into(),
+            view_projection: common.view_projection.into(),
+            inv_projection: common.inv_projection.into(),
+
+            inv_view_projection: common.inv_view_projection.into(),
+            prev_view_projection: common.prev_view_projection.into(),
+
+            camera_pos: [
+                common.camera_pos.x,
+                common.camera_pos.y,
+                common.camera_pos.z,
+                common.near_plane,
+            ],
+            sun_dir: [
+                common.sun_dir.x,
+                common.sun_dir.y,
+                common.sun_dir.z,
+                common.sun_intensity,
+            ],
+            sun_color: [
+                common.sun_color.x,
+                common.sun_color.y,
+                common.sun_color.z,
+                common.far_plane,
+            ],
+
+            screen_size: [
+                common.screen_width,
+                common.screen_height,
+                common.light_count,
+                common.frame_index,
+            ],
+            ibl_indices: [
+                common.ibl_lut_index,
+                common.ibl_irr_index,
+                common.ibl_pref_index,
+                common.ibl_env_index,
+            ],
+            extra_indices: [common.blue_noise_index, common.debug_channel, 0, 0],
+            time_params: [common.dt, common.ibl_intensity, 0.0, 0.0],
+        };
+        backend
+            .upload_buffer_data(self.common_buffer, &gpu_common, 0)
+            .unwrap();
 
         // When IBL is loaded, its extracted sun overrides any scene directional light.
         let (sun_dir, sun_int, sun_col) = if !self.ibl_images.is_empty() {
@@ -1025,6 +1141,7 @@ impl DefaultRenderGraph {
         // 3. Populate FrameBlackboard for execute() access
         let mut frame_data = i3_gfx::graph::compiler::FrameBlackboard::new();
         frame_data.publish("Common", common);
+        frame_data.publish("CommonBuffer", self.common_buffer);
         frame_data.publish("PrevViewProjection", self.prev_view_projection);
         frame_data.publish("SunDirection", sun_dir);
         frame_data.publish("SunIntensity", sun_int);
@@ -1170,11 +1287,14 @@ impl DefaultRenderGraph {
         }
 
         // 7. Execute the cached compiled graph.
-        self.compiled.as_mut().unwrap().execute(
+        let res = self.compiled.as_mut().unwrap().execute(
             backend,
             &frame_data,
             Some(&mut self.temporal_registry),
-        )
+        );
+
+        self.frame_index += 1;
+        res
     }
 
     /// Records the full render graph for one frame.
@@ -1209,18 +1329,45 @@ impl DefaultRenderGraph {
             .map(|v| v.column(3).xyz())
             .unwrap_or_else(|| nalgebra_glm::vec3(0.0, 0.0, 0.0));
 
+        let (sun_dir, sun_int, sun_col) = if !self.ibl_images.is_empty() {
+            (
+                nalgebra_glm::make_vec3(&self.ibl_sun.direction),
+                self.ibl_sun.intensity,
+                nalgebra_glm::make_vec3(&self.ibl_sun.color),
+            )
+        } else {
+            (
+                nalgebra_glm::vec3(0.0, -1.0, 0.0),
+                1.0,
+                nalgebra_glm::vec3(1.0, 1.0, 1.0),
+            )
+        };
+
         let common = CommonData {
             view,
             projection,
             view_projection,
             inv_projection,
             inv_view_projection,
+            prev_view_projection: self.prev_view_projection,
             near_plane,
             far_plane,
             screen_width,
             screen_height,
             camera_pos,
             light_count,
+            frame_index: self.frame_index,
+            dt: self.last_dt, // or self.dt if available
+            sun_dir,
+            sun_intensity: sun_int,
+            sun_color: sun_col,
+            ibl_lut_index: self.ibl_indices.lut_index,
+            ibl_irr_index: self.ibl_indices.irr_index,
+            ibl_pref_index: self.ibl_indices.pref_index,
+            ibl_env_index: self.ibl_indices.env_index,
+            ibl_intensity: self.ibl_indices.intensity_scale,
+            debug_channel: self.debug_channel as u32,
+            blue_noise_index: self.blue_noise_index,
         };
 
         let channel = self.debug_channel;
@@ -1256,6 +1403,7 @@ impl DefaultRenderGraph {
             builder.publish("Backbuffer", backbuffer);
             // LightBuffer is owned here; mesh/instance/material/draw buffers are imported by their passes
             builder.import_buffer("LightBuffer", light_buffer_physical);
+            builder.import_buffer("CommonBuffer", self.common_buffer);
 
             // 0. Sync CPU scene delta to GPU (imports MeshDescriptorBuffer, InstanceBuffer, MaterialBuffer)
             builder.add_pass(&mut self.sync_group);
@@ -1304,8 +1452,10 @@ impl DefaultRenderGraph {
                 || channel == DebugChannel::LightDensity
                 || channel == DebugChannel::ClusterGrid
                 || channel == DebugChannel::SsrResolved
+                || channel == DebugChannel::SsrRaw
                 || channel == DebugChannel::BloomBuffer
             {
+
                 // 4. Deferred Lighting (includes HdrMipsPass + SSR + Bloom)
                 self.record_lighting(builder);
 

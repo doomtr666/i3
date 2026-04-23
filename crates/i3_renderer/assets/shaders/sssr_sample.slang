@@ -1,41 +1,17 @@
 // Stochastic Screen-Space Reflections — Sample pass
 //
 // One ray per pixel per frame, direction importance-sampled from GGX.
-//
-// Algorithm:
-//   1. Build a TBN frame from the view-space normal.
-//   2. Draw two uniform samples (IGN + golden-ratio rotation per frame).
-//   3. Map samples to a half-vector H in the GGX distribution.
-//      For roughness=0 H degenerates to N → deterministic mirror ray.
-//   4. Reflect -V around H to get the reflection direction R.
-//   5. Frustum-clip the ray endpoint if R points toward the camera.
-//   6. March linearly in screen space (max_steps equal steps + 8-step binary
-//      search at the first intersection found).
-//   7. Reject hits closer than 4 px (self-intersection guard) or deeper
-//      than pc.thickness in view-space.
-//
-// Output: float4(hit_color, confidence)
-//   - hit_color  : HDR colour at the intersection point.
-//   - confidence : edge_fade × (1 − hit_t²) ∈ [0, 1].
-//   The composite pass applies the BRDF weight (split-sum factor) that
-//   matches the IBL term computed by deferred_resolve.
 
 #include "common.slangh"
-#include "noise.slangh"
+#include "sampling.slangh"
 
 struct SssrSamplePc
 {
-    float4x4 inv_projection; // view-space position reconstruction
-    float4x4 projection;     // viewToClip
-    float4x4 view;           // world normal → view normal
-    float2 screen_size;
     float max_distance;
     float thickness; // max view-space depth gap for hit acceptance
     float roughness_cutoff;
     uint max_steps;
-    uint frame_index;
     uint enabled;
-    uint blue_noise_index; // bindless index of the 64×64 RG8 blue-noise texture
 };
 [[vk::push_constant]]
 SssrSamplePc pc;
@@ -43,11 +19,11 @@ SssrSamplePc pc;
 [[vk::binding(0, 0)]]
 Texture2D<float> depthBuffer;
 [[vk::binding(1, 0)]]
-Texture2D<float2> gbufferNormal;
+Texture2D<float> hizBuffer;
 [[vk::binding(2, 0)]]
-Texture2D<float2> gbufferRoughMetal;
+Texture2D<float2> gbufferNormal;
 [[vk::binding(3, 0)]]
-Texture2D<float4> hdrTarget;
+Texture2D<float2> gbufferRoughMetal;
 [[vk::binding(4, 0)]]
 RWTexture2D<float4> ssrOutput;
 
@@ -55,83 +31,139 @@ RWTexture2D<float4> ssrOutput;
 
 float3 viewSpacePos(uint2 px, float depth)
 {
-    float2 uv = (float2(px) + 0.5f) / pc.screen_size;
+    float2 uv = (float2(px) + 0.5f) / float2(g_common.GetScreenWidth(), g_common.GetScreenHeight());
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float4 vh = mul(pc.inv_projection, float4(ndc, depth, 1.0f));
+    float4 vh = mul(g_common.invProjection, float4(ndc, depth, 1.0f));
     return vh.xyz / vh.w;
 }
 
-float4 viewToClip(float3 P)
+float3 projectViewToScreenSpace(float3 viewPos)
 {
-    return mul(pc.projection, float4(P, 1.0f));
-}
-
-// Y-flip: uv.y = 0.5 - ndc.y * 0.5  (negative-viewport, §5 engine_conventions.md).
-float4 clipToScreenFull(float4 clip)
-{
+    float4 clip = mul(g_common.projection, float4(viewPos, 1.0f));
+    clip.w = max(clip.w, 1e-6f);
     float2 ndc = clip.xy / clip.w;
-    return float4(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f, clip.z, clip.w);
+    return float3(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f, clip.z / clip.w);
 }
 
-float linearZ(float ndc_d)
+// Traçage Hi-Z optimisé pour Reverse-Z (1.0 = Proche, 0.0 = Loin)
+// Retourne true si une intersection valide est trouvée, et stocke la position UVZ du hit.
+bool traceHiZ(
+    float3 startUVZ,     // Coordonnées de départ : UV [0,1] + Depth [0,1]
+    float3 rayDirUVZ,    // Direction vectorielle (P_end - P_start projeté)
+    float4x4 invProj,    // Matrice inverse pour le test d'épaisseur
+    float maxThickness,  // Tolérance d'épaisseur en mètres
+    out float3 outHitUVZ // Résultat en UVZ (si hit)
+)
 {
-    float4 v = mul(pc.inv_projection, float4(0.0f, 0.0f, ndc_d, 1.0f));
-    return v.z / v.w;
+    const int MaxMipLevel = 5;
+    float2 screenSize = g_common.GetScreenSize();
+
+    // 1. SCALER EN ESPACE PIXEL
+    float3 rayPos = float3(startUVZ.xy * screenSize, startUVZ.z);
+    float3 rayDir = float3(rayDirUVZ.xy * screenSize, rayDirUVZ.z);
+
+    float rayLength = length(rayDir.xy);
+    if (rayLength < 0.001f)
+        return false;
+
+    // Pré-calculs de l'algorithme DDA (Protection NaN)
+    float2 dir = rayDir.xy;
+    dir.x = abs(dir.x) < 1e-5f ? (dir.x >= 0.0f ? 1e-5f : -1e-5f) : dir.x;
+    dir.y = abs(dir.y) < 1e-5f ? (dir.y >= 0.0f ? 1e-5f : -1e-5f) : dir.y;
+    float2 invDir = 1.0f / dir;
+
+    int2 stepDir = int2(rayDir.x >= 0.0f ? 1 : -1, rayDir.y >= 0.0f ? 1 : -1);
+    float2 crossStep = float2(stepDir.x > 0 ? 1.0f : 0.0f, stepDir.y > 0 ? 1.0f : 0.0f);
+
+    float tEpsilon = 0.01f / rayLength;
+
+    float t = 0.0f;
+    int mipLevel = 0;
+    const uint MAX_ITER = 100;
+
+    for (uint i = 0; i < MAX_ITER; i++)
+    {
+        float3 currentPos = rayPos + rayDir * t;
+
+        // Condition d'arrêt : Sortie d'écran
+        if (currentPos.x < 0.0f || currentPos.x >= screenSize.x ||
+            currentPos.y < 0.0f || currentPos.y >= screenSize.y ||
+            currentPos.z < 0.0f || currentPos.z > 1.0f)
+        {
+            return false;
+        }
+
+        float cellSize = exp2(float(mipLevel));
+        float2 cellIndex = floor((currentPos.xy + rayDir.xy * 0.01f) / cellSize);
+
+        float2 distanceToBoundary = (cellIndex + crossStep) * cellSize - currentPos.xy;
+        float2 tToBoundary = distanceToBoundary * invDir;
+
+        float tAdvance = min(tToBoundary.x, tToBoundary.y);
+        float nextT = t + tAdvance;
+
+        // Test d'heuristique (Reverse-Z)
+        float z1 = currentPos.z;
+        float z2 = rayPos.z + rayDir.z * nextT;
+        float minZ_segment = min(z1, z2);
+
+        int2 mipCoords = int2(cellIndex);
+        float cellMaxZ = hizBuffer.Load(int3(mipCoords, mipLevel)).r;
+
+        if (minZ_segment <= cellMaxZ)
+        {
+            if (mipLevel == 0)
+            {
+                // --- TEST D'ÉPAISSEUR INTÉGRÉ ---
+                float2 ndc_xy = (currentPos.xy / screenSize) * 2.0f - 1.0f;
+                ndc_xy.y = -ndc_xy.y; // Inversion Vulkan
+
+                float4 ray_clip = mul(invProj, float4(ndc_xy, currentPos.z, 1.0f));
+                float ray_view_z = ray_clip.z / ray_clip.w;
+
+                float4 geo_clip = mul(invProj, float4(ndc_xy, cellMaxZ, 1.0f));
+                float geo_view_z = geo_clip.z / geo_clip.w;
+
+                float thickness = abs(geo_view_z - ray_view_z);
+
+                if (thickness > maxThickness)
+                {
+                    // Faux positif : on passe derrière un objet fin (ex: guirlande).
+                    // On avance et on continue à chercher.
+                    t = nextT;
+                    mipLevel = min(mipLevel + 1, MaxMipLevel);
+                    continue;
+                }
+
+                // Vrai contact
+                outHitUVZ = float3(currentPos.xy / screenSize, currentPos.z);
+                return true;
+            }
+            else
+            {
+                mipLevel--;
+            }
+        }
+        else
+        {
+            t = nextT + tEpsilon;
+            mipLevel = min(mipLevel + 1, MaxMipLevel);
+        }
+    }
+
+    return false;
 }
-
-// pixelNoise — thin wrapper over blue_noise.slangh for this pass.
-void pixelNoise(uint2 px, uint frame, out float u1, out float u2, out float jitter)
-{
-    float4 bn = blueNoiseBase(px, pc.blue_noise_index);
-    u1 = bnTemporal(bn.r, frame, 0.618033988f); // φ    — azimuthal angle
-    u2 = bnTemporal(bn.g, frame, 0.381966011f); // 1/φ² — polar angle
-    jitter = bnJitter(px, frame);               // march step offset
-}
-
-float rayDepth(float cz_s, float cw_s, float cz_e, float cw_e, float t)
-{
-    return lerp(cz_s, cz_e, t) / lerp(cw_s, cw_e, t);
-}
-
-// ─── GGX importance sampling ─────────────────────────────────────────────────
-//
-// Given two uniform samples u1, u2 ∈ [0,1) and GGX roughness α = roughness²,
-// returns a half-vector H in the local tangent frame (Z = up).
-// PDF(H) = α² * cosθ / (π * ((cosθ² * (α²−1) + 1)²))
-//
-// For α→0 the formula degenerates; clamp to 1e-3 → deterministic mirror.
-
-float3 sampleGGX_H(float u1, float u2, float alpha)
-{
-    float a2 = alpha * alpha;
-    float phi = 2.0f * PI * u1;
-    float denom = max(1.0f + (a2 - 1.0f) * u2, 1e-6f);
-    float cos2 = (1.0f - u2) / denom;
-    float cosT = sqrt(max(cos2, 0.0f));
-    float sinT = sqrt(max(1.0f - cos2, 0.0f));
-    return float3(sinT * cos(phi), sinT * sin(phi), cosT);
-}
-
-// Build an orthonormal TBN with Z = N (view-space).
-void buildTBN(float3 N, out float3 T, out float3 B)
-{
-    float3 up = abs(N.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
-    T = normalize(cross(up, N));
-    B = cross(N, T);
-}
-
-// ─── Main ────────────────────────────────────────────────────────────────────
 
 [numthreads(8, 8, 1)]
 void computeMain(uint3 id: SV_DispatchThreadID)
 {
     uint2 px = id.xy;
-    if (any(px >= uint2(pc.screen_size)))
+    if (any(px >= uint2(g_common.GetScreenWidth(), g_common.GetScreenHeight())))
         return;
 
     if (pc.enabled == 0u)
     {
-        ssrOutput[int2(px)] = 0;
+        ssrOutput[px] = 0;
         return;
     }
 
@@ -143,219 +175,87 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     }
 
     float roughness = gbufferRoughMetal.Load(int3(px, 0)).r;
-    if (roughness > pc.roughness_cutoff)
-    {
-        ssrOutput[int2(px)] = 0;
-        return;
-    }
-
-    // ── Geometry ──────────────────────────────────────────────────────────────
 
     float3 P = viewSpacePos(px, depth);
     float3 N_world = decodeOctahedral(gbufferNormal.Load(int3(px, 0)).rg);
-    float3x3 viewRot = float3x3(pc.view[0].xyz, pc.view[1].xyz, pc.view[2].xyz);
+    float3x3 viewRot = float3x3(g_common.view[0].xyz, g_common.view[1].xyz, g_common.view[2].xyz);
     float3 N = normalize(mul(viewRot, N_world));
     float3 V = normalize(-P);
 
-    // ── GGX importance-sample the reflection direction ─────────────────────────
-    //
-    // Two independent noise samples, rotated each frame.
-    // u1 controls the azimuthal angle φ; u2 controls the polar angle θ.
-    // A golden-ratio offset on u2 breaks temporal coherence between frames
-    // without destroying the spatial stratification of IGN on u1.
+    float3 noise = pcg3f(uint3(px, g_common.GetFrameIndex()));
 
-    float alpha = max(roughness * roughness, 1e-3f);
-
-    float u1, u2, marchNoise;
-    pixelNoise(px, pc.frame_index, u1, u2, marchNoise);
-
-    float3 H_local = sampleGGX_H(u1, u2, alpha);
-
+    // 1. Construire la base
     float3 T, B;
-    buildTBN(N, T, B);
+    buildBasis(N, T, B);
+
+    // 2. Transformer V en espace tangent
+    float3 V_tangent = float3(dot(V, T), dot(V, B), dot(V, N));
+
+    // 3. Sampler avec le V tangentiel
+    float3 H_local = sampleGGXVNDF(V_tangent, roughness, roughness, noise.x, noise.y);
+
+    // 4. Repasser H en View Space
     float3 H = normalize(T * H_local.x + B * H_local.y + N * H_local.z);
 
-    // Guard: if H is below the surface, flip to mirror side.
-    if (dot(H, N) < 0.0f)
-        H = reflect(H, N);
+    float3 D = reflect(-V, H);
 
-    float3 R = reflect(-V, H);
+    // --- Calcul de l'Indice de Confiance (Fade) ---
+    float confidence = 1.0f;
 
-    // Reject rays going into the surface (possible for very rough materials).
-    if (dot(R, N) <= 0.0f)
+    // Rejet si le rayon plonge sous la géométrie
+    if (dot(D, N) <= 0.001f)
     {
-        ssrOutput[int2(px)] = 0;
+        ssrOutput[px] = float4(0, 0, 0, 0);
         return;
     }
 
-    // ── Ray endpoints ─────────────────────────────────────────────────────────
+    // Fondu directionnel pour la caméra (évite les hard cuts sur les vitres)
+    float fade_camera = smoothstep(0.1f, -0.1f, D.z);
+    confidence *= fade_camera;
 
-    float3 P_start = P + N * 0.05f;
-    float3 P_end = P + R * pc.max_distance;
+    // Calcul du point de fin du rayon (ex: 100 mètres)
+    float3 P_end = P + D * 100.0f;
 
-    float4 clip_s = viewToClip(P_start);
-    float4 clip_e = viewToClip(P_end);
+    float3 screen_P = projectViewToScreenSpace(P);
+    float3 screen_P_end = projectViewToScreenSpace(P_end);
 
-    if (clip_s.w <= 0.0f)
+    float3 screen_RayDir = normalize(screen_P_end - screen_P);
+
+    float2 screen_RayDir_Pixels = screen_RayDir.xy * g_common.GetScreenSize();
+    float step_scale = 1.0f / max(abs(screen_RayDir_Pixels.x), abs(screen_RayDir_Pixels.y));
+    float3 ray_step_screen = screen_RayDir * step_scale;
+
+    // --- LE FIX (Ray Bump) ---
+    // Offset pour éviter l'auto-intersection
+    float start_offset = 4.0f + noise.z;
+    float3 safe_start_P = screen_P + ray_step_screen * start_offset;
+
+    // Lancer avec test d'épaisseur intégré
+    float3 hit_UVZ;
+    bool valid_hit = traceHiZ(safe_start_P, ray_step_screen, g_common.invProjection, pc.thickness, hit_UVZ);
+
+    if (!valid_hit)
     {
-        ssrOutput[int2(px)] = 0;
+        // On écrit du noir/vide pur pour que le TAA l'efface proprement
+        ssrOutput[px] = float4(0, 0, 0, 0);
         return;
     }
 
-    // Frustum clip: if the endpoint is behind the camera, clip to near plane.
-    if (clip_e.w <= 0.0f)
-    {
-        float t_near = clip_s.w / (clip_s.w - clip_e.w) * 0.99f;
-        if (t_near < 0.02f)
-        {
-            ssrOutput[int2(px)] = 0;
-            return;
-        }
-        P_end = lerp(P_start, P_end, t_near);
-        clip_e = viewToClip(P_end);
-        if (clip_e.w <= 0.0f)
-        {
-            ssrOutput[int2(px)] = 0;
-            return;
-        }
-    }
+    // --- Atténuations post-hit ---
+    // 1. Vignettage écran
+    float2 edge_dist = smoothstep(0.0f, 0.05f, hit_UVZ.xy) * smoothstep(1.0f, 0.95f, hit_UVZ.xy);
+    confidence *= (edge_dist.x * edge_dist.y);
 
-    float4 ss_s = clipToScreenFull(clip_s);
-    float4 ss_e = clipToScreenFull(clip_e);
+    // 2. Fondu sur la rugosité
+    confidence *= 1.0f - smoothstep(0.6f, 0.8f, roughness);
 
-    float2 uv_start = ss_s.xy;
-    float2 uv_delta = ss_e.xy - ss_s.xy;
+    // 3. Validation Backface
+    uint2 hit_px = uint2(hit_UVZ.xy * g_common.GetScreenSize());
+    float3 hit_N_world = decodeOctahedral(gbufferNormal.Load(int3(hit_px, 0)).rg);
+    float3 hit_N = normalize(mul(viewRot, hit_N_world)); // On le repasse en View Space !
+    float N_dot_D = dot(hit_N, D);
 
-    float cz_s = ss_s.z, cw_s = ss_s.w;
-    float cz_e = ss_e.z, cw_e = ss_e.w;
+    confidence *= smoothstep(0.1f, -0.1f, N_dot_D);
 
-    float start_ndc = cz_s / cw_s;
-    if (start_ndc < 0.0f || start_ndc > 1.0f)
-    {
-        ssrOutput[int2(px)] = 0;
-        return;
-    }
-
-    float ray_px = max(abs(uv_delta.x) * pc.screen_size.x,
-                       abs(uv_delta.y) * pc.screen_size.y);
-    if (ray_px < 1.0f)
-    {
-        ssrOutput[int2(px)] = 0;
-        return;
-    }
-
-    // ── Phase 1: linear march ─────────────────────────────────────────────────
-    //
-    // Fixed step count — no HiZ needed for SSSR (temporal denoises noise).
-    // dt = 1/max_steps in t-space; jitter within the first step to avoid
-    // repeating the same pattern every frame.
-
-    float dt = 1.0f / float(pc.max_steps);
-    float t = marchNoise * dt;
-    float t_prev = 0.0f;
-    bool bracketed = false;
-
-    [loop]
-    for (uint step = 0u; step < pc.max_steps; ++step)
-    {
-        float2 uv = uv_start + uv_delta * t;
-        if (any(uv < 0.0f) || any(uv > 1.0f) || t >= 1.0f)
-            break;
-
-        float ray_d = rayDepth(cz_s, cw_s, cz_e, cw_e, t);
-        float buf_d = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], uv, 0.0f).r;
-
-        // Reverse-Z: ray_d > buf_d → ray is closer to camera (in front).
-        if (ray_d > buf_d)
-        {
-            t_prev = t;
-            t += dt;
-        }
-        else
-        {
-            // Ray crossed behind the surface — bracket found.
-            bracketed = true;
-            break;
-        }
-    }
-
-    if (!bracketed)
-    {
-        ssrOutput[int2(px)] = 0;
-        return;
-    }
-
-    // ── Phase 2: binary search within [t_prev, t] ────────────────────────────
-
-    float t_lo = t_prev;
-    float t_hi = t;
-
-    [loop]
-    for (uint b = 0u; b < 8u; ++b)
-    {
-        float t_mid = (t_lo + t_hi) * 0.5f;
-        float rd_mid = rayDepth(cz_s, cw_s, cz_e, cw_e, t_mid);
-        float2 uv_mid = uv_start + uv_delta * t_mid;
-        float bd_mid = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], uv_mid, 0.0f).r;
-        if (rd_mid > bd_mid)
-            t_lo = t_mid;
-        else
-            t_hi = t_mid;
-    }
-
-    float2 hit_uv = uv_start + uv_delta * t_hi;
-    float hit_rd = rayDepth(cz_s, cw_s, cz_e, cw_e, t_hi);
-    float hit_bd = depthBuffer.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], hit_uv, 0.0f).r;
-
-    // Reject: depth gap too large → thin-surface false intersection.
-    if (abs(linearZ(hit_rd) - linearZ(hit_bd)) >= pc.thickness)
-    {
-        ssrOutput[int2(px)] = 0;
-        return;
-    }
-
-    // ── Hit validation (AMD FidelityFX SSSR approach) ────────────────────────────
-
-    // Guard 1: reject hits that didn't meaningfully advance the ray.
-    // A manhattan distance < 2px in both axes means we landed on (or next to) the
-    // source pixel — classic self-intersection on flat surfaces like floors.
-    // The view-space normal bias (P + N*0.05) does not change clip-space Z for
-    // horizontal surfaces, so the depth test alone cannot prevent this.
-    {
-        float2 src_uv = (float2(px) + 0.5f) / pc.screen_size;
-        float2 manhattan = abs(hit_uv - src_uv);
-        if (all(manhattan < 2.0f / pc.screen_size))
-        {
-            ssrOutput[int2(px)] = 0;
-            return;
-        }
-    }
-
-    // Guard 2: back-face rejection.
-    // The reflected ray must hit the *front* of a surface. If dot(hit_N, R) > 0
-    // the ray hits the back side → reject. This also catches any remaining
-    // self-intersection where R aligns with the surface normal (e.g. grazing floor
-    // with slightly curved normal map).
-    {
-        float2 hit_norm_enc = gbufferNormal.SampleLevel(bindlessSamplers[SAMPLER_NEAREST_BORDER], hit_uv, 0.0f).rg;
-        float3 hit_N_world = decodeOctahedral(hit_norm_enc);
-        float3 hit_N = normalize(mul(viewRot, hit_N_world));
-        if (dot(hit_N, R) > 0.0f)
-        {
-            ssrOutput[int2(px)] = 0;
-            return;
-        }
-    }
-
-    // ── Sample reflected colour ───────────────────────────────────────────────
-
-    // The composite will apply the split-sum BRDF weight; store raw colour here.
-    float3 color = hdrTarget.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], hit_uv, 0.0f).rgb;
-
-    // ── Confidence ────────────────────────────────────────────────────────────
-
-    float2 edge_fade = smoothstep(0.0f, 0.05f, hit_uv) * smoothstep(1.0f, 0.95f, hit_uv);
-    float conf = saturate(edge_fade.x * edge_fade.y * (1.0f - t_hi * t_hi));
-
-    ssrOutput[int2(px)] = float4(color, conf);
+    ssrOutput[px] = float4(hit_UVZ, confidence);
 }

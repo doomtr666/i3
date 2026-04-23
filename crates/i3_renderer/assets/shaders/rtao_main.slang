@@ -6,7 +6,7 @@
 //
 
 #include "common.slangh"
-#include "noise.slangh"
+#include "sampling.slangh"
 
 struct RtaoPushConstants
 {
@@ -44,16 +44,6 @@ float3 worldSpacePos(uint2 px, float depth)
     float4 clip = float4(ndc, depth, 1.0f);
     float4 vh = mul(pc.invViewProj, clip);
     return vh.xyz / vh.w;
-}
-
-void buildBasis(float3 N, out float3 T, out float3 B)
-{
-    // Frisvad
-    float s = N.z >= 0.0f ? 1.0f : -1.0f;
-    float a = -1.0f / (s + N.z);
-    float b = N.x * N.y * a;
-    T = float3(1.0f + s * N.x * N.x * a, s * b, -s * N.x);
-    B = float3(b, s + N.y * N.y * a, -N.y);
 }
 
 bool traceShadow(RayDesc ray)
@@ -96,10 +86,7 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
     float3 N = decodeOctahedral(gbufferNormal[px].rg);
 
     // noise sample depends on position + frameIndex
-    uint3 h = pcg3(uint3(px, pc.frameIndex));
-    float u1 = float(h.x) * (1.0f / 4294967296.0f);
-    float u2 = float(h.y) * (1.0f / 4294967296.0f);
-    float2 noise = float2(u1, u2);
+    float2 noise = pcg3f(uint3(px, pc.frameIndex)).xy;
 
     // generate cosine weighted direction (tangent space)
     float3 tangent_dir = float3(

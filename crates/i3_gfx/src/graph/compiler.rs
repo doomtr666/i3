@@ -130,8 +130,19 @@ impl FrameGraph {
     pub fn compile(self, capabilities: &DeviceCapabilities) -> CompiledGraph {
         tracing::debug!("Compiling frame graph");
 
+        // If environment variable is set, dump the graph to a file
+        if std::env::var("I3_DUMP_GRAPH").is_ok() {
+            let mmd = self.to_mermaid();
+            if let Err(e) = std::fs::write("graph.mmd", mmd) {
+                tracing::error!(error = ?e, "Failed to write graph.mmd");
+            } else {
+                tracing::info!("Graph dumped to graph.mmd");
+            }
+        }
+
         let mut flat_passes = Vec::new();
         Self::flatten_recursive(&self.root, &mut flat_passes);
+
 
         Self::assign_queues(&mut flat_passes, capabilities);
 
@@ -455,5 +466,96 @@ impl FrameGraph {
         }
 
         steps
+    }
+
+    /// Generates a Mermaid diagram representing the graph topology.
+    pub fn to_mermaid(&self) -> String {
+        let mut flat_passes = Vec::new();
+        Self::flatten_recursive(&self.root, &mut flat_passes);
+
+        let mut out = String::from("graph TD\n");
+        out.push_str("    subgraph legend[\"Legend\"]\n");
+        out.push_str("        Pass[Pass Name]\n");
+        out.push_str("        Resource((Resource))\n");
+        out.push_str("    end\n\n");
+
+        let mut resources = std::collections::HashSet::new();
+
+        for (i, pass) in flat_passes.iter().enumerate() {
+            let pass_id = format!("P{}", i);
+            let style = match pass.domain {
+                PassDomain::Graphics => "fill:#2c3e50,color:#fff",
+                PassDomain::Compute => "fill:#16a085,color:#fff",
+                PassDomain::Transfer => "fill:#d35400,color:#fff",
+                PassDomain::Cpu => "fill:#7f8c8d,color:#fff",
+            };
+            out.push_str(&format!("    {}[\"{}\"]\n", pass_id, pass.name));
+            out.push_str(&format!("    style {} {}\n", pass_id, style));
+
+            // Image Reads
+            for (h, _usage) in &pass.image_reads {
+                let res_name = self.get_resource_name(h.0);
+                let res_id = format!("R_{}", res_name.replace(' ', "_"));
+                resources.insert((res_id.clone(), res_name));
+                out.push_str(&format!("    {} --> {}\n", res_id, pass_id));
+            }
+
+            // Image Writes
+            for (h, _usage) in &pass.image_writes {
+                let res_name = self.get_resource_name(h.0);
+                let res_id = format!("R_{}", res_name.replace(' ', "_"));
+                resources.insert((res_id.clone(), res_name));
+                out.push_str(&format!("    {} --> {}\n", pass_id, res_id));
+            }
+
+            // Buffer Reads
+            for (h, _usage) in &pass.buffer_reads {
+                let res_name = self.get_resource_name(h.0);
+                let res_id = format!("R_{}", res_name.replace(' ', "_"));
+                resources.insert((res_id.clone(), res_name));
+                out.push_str(&format!("    {} --> {}\n", res_id, pass_id));
+            }
+
+            // Buffer Writes
+            for (h, _usage) in &pass.buffer_writes {
+                let res_name = self.get_resource_name(h.0);
+                let res_id = format!("R_{}", res_name.replace(' ', "_"));
+                resources.insert((res_id.clone(), res_name));
+                out.push_str(&format!("    {} --> {}\n", pass_id, res_id));
+            }
+        }
+
+        for (id, name) in resources {
+            out.push_str(&format!("    {}(({}))\n", id, name));
+        }
+
+        out
+    }
+
+    fn get_resource_name(&self, id: SymbolId) -> String {
+        let node_id = (id.0 >> 32) as u64;
+        let index = (id.0 & 0xFFFFFFFF) as usize;
+
+        // Try global symbols first
+        if node_id == 0xFFFF_FFFF {
+             if let Some(s) = self.globals.symbols.get(index) {
+                 return s.name.clone();
+             }
+        }
+
+        // Search recursively in storage
+        fn find_name(node: &NodeStorage, target_node_id: u64, index: usize) -> Option<String> {
+            if node.node_id == target_node_id {
+                return node.symbols.symbols.get(index).map(|s| s.name.clone());
+            }
+            for child in &node.children {
+                if let Some(name) = find_name(child, target_node_id, index) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+
+        find_name(&self.root, node_id, index).unwrap_or_else(|| format!("Unknown_{:x}", id.0))
     }
 }

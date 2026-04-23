@@ -22,14 +22,7 @@
 #include "common.slangh"
 
 struct SssrCompositePc {
-    float4x4 inv_view_proj;
-    float3   camera_pos;
     float    intensity;
-    float2   screen_size;
-    uint     ibl_lut_index;
-    uint     ibl_pref_index;
-    float    ibl_intensity;
-    float    _pad;
 };
 [[vk::push_constant]] SssrCompositePc pc;
 
@@ -54,12 +47,12 @@ void computeMain(uint3 id: SV_DispatchThreadID) {
 
     // ── Reconstruct world position and view direction ─────────────────────────
 
-    float2 uv = (float2(id.xy) + 0.5f) / pc.screen_size;
+    float2 uv = (float2(id.xy) + 0.5f) / float2(g_common.GetScreenWidth(), g_common.GetScreenHeight());
     float  x  =  uv.x * 2.0f - 1.0f;
     float  y  = (1.0f - uv.y) * 2.0f - 1.0f;
-    float4 wh = mul(pc.inv_view_proj, float4(x, y, depth, 1.0f));
+    float4 wh = mul(g_common.invViewProjection, float4(x, y, depth, 1.0f));
     float3 world_pos = wh.xyz / wh.w;
-    float3 V = normalize(pc.camera_pos - world_pos);
+    float3 V = normalize(g_common.GetCameraPos() - world_pos);
 
     // ── PBR parameters ────────────────────────────────────────────────────────
 
@@ -81,23 +74,24 @@ void computeMain(uint3 id: SV_DispatchThreadID) {
 
     float4 hdr = hdrTarget[coord];
 
-    if (pc.ibl_pref_index != 0xFFFFFFFF && pc.ibl_lut_index != 0xFFFFFFFF) {
+    if (g_common.GetIblPrefIndex() != 0 && g_common.GetIblLutIndex() != 0) {
         float3 R_mirror    = reflect(-V, N);
         float  mip         = roughness * 5.0f;
-        float3 prefiltered = bindlessTextures[pc.ibl_pref_index]
+        float3 prefiltered = bindlessTextures[g_common.GetIblPrefIndex()]
             .SampleLevel(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(R_mirror), mip).rgb;
-        float2 brdf        = bindlessTextures[pc.ibl_lut_index]
+        float2 brdf        = bindlessTextures[g_common.GetIblLutIndex()]
             .SampleLevel(bindlessSamplers[SAMPLER_LINEAR], float2(NdotV, roughness), 0).rg;
         float3 brdf_weight = F0 * brdf.x + brdf.y;
 
         // ibl_spec includes ao to match deferred_resolve's diffuse term scaling.
         // ssr_spec has no ibl_intensity (ssr.rgb is already in scene-radiance units)
         // and no ao (a traced ray handles occlusion naturally).
-        float3 ibl_spec = prefiltered * brdf_weight * pc.ibl_intensity * ao;
+        float3 ibl_spec = prefiltered * brdf_weight * g_common.GetIblIntensity() * ao;
         float3 ssr_spec = ssr.rgb     * brdf_weight;
 
         hdrTarget[coord] = float4(hdr.rgb + lerp(ibl_spec, ssr_spec, eff_conf), hdr.a);
     } else {
+
         // No IBL: add SSR additively weighted by F0 when there is a hit.
         hdrTarget[coord] = float4(hdr.rgb + eff_conf * ssr.rgb * F0, hdr.a);
     }

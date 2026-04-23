@@ -1,0 +1,261 @@
+graph TD
+    subgraph legend["Legend"]
+        Pass[Pass Name]
+        Resource((Resource))
+    end
+
+    P0["MeshRegistrySyncPass"]
+    style P0 fill:#7f8c8d,color:#fff
+    P1["InstanceSyncPass"]
+    style P1 fill:#7f8c8d,color:#fff
+    P2["MaterialSyncPass"]
+    style P2 fill:#7f8c8d,color:#fff
+    P3["BlasUpdate"]
+    style P3 fill:#7f8c8d,color:#fff
+    P4["ClearDrawCount"]
+    style P4 fill:#d35400,color:#fff
+    P4 --> R_DrawCountBuffer
+    P5["DrawCallGenCompute"]
+    style P5 fill:#16a085,color:#fff
+    R_MeshDescriptorBuffer --> P5
+    R_InstanceBuffer --> P5
+    P5 --> R_DrawCallBuffer
+    P5 --> R_DrawCountBuffer
+    P6["TlasRebuild"]
+    style P6 fill:#7f8c8d,color:#fff
+    P7["ClusteringGroup"]
+    style P7 fill:#7f8c8d,color:#fff
+    P8["ClearClusterIndices"]
+    style P8 fill:#d35400,color:#fff
+    P8 --> R_ClusterLightIndices
+    P9["ClusterBuild"]
+    style P9 fill:#16a085,color:#fff
+    P9 --> R_ClusterAABBs
+    P10["LightCull"]
+    style P10 fill:#16a085,color:#fff
+    R_ClusterAABBs --> P10
+    R_LightBuffer --> P10
+    P10 --> R_ClusterGrid
+    P10 --> R_ClusterLightIndices
+    P11["GBufferPass"]
+    style P11 fill:#7f8c8d,color:#fff
+    P12["GBufferFillPass"]
+    style P12 fill:#2c3e50,color:#fff
+    P12 --> R_GBuffer_Albedo
+    P12 --> R_GBuffer_Normal
+    P12 --> R_GBuffer_RoughMetal
+    P12 --> R_GBuffer_Emissive
+    P12 --> R_DepthBuffer
+    R_MeshDescriptorBuffer --> P12
+    R_InstanceBuffer --> P12
+    R_DrawCallBuffer --> P12
+    R_DrawCountBuffer --> P12
+    R_MaterialBuffer --> P12
+    R_CommonBuffer --> P12
+    P13["HiZBuild"]
+    style P13 fill:#7f8c8d,color:#fff
+    P14["HiZBlit"]
+    style P14 fill:#16a085,color:#fff
+    R_DepthBuffer --> P14
+    P14 --> R_HiZFinal
+    P15["HiZReduce"]
+    style P15 fill:#16a085,color:#fff
+    R_HiZFinal --> P15
+    P15 --> R_HiZFinal
+    P16["HiZReduce"]
+    style P16 fill:#16a085,color:#fff
+    R_HiZFinal --> P16
+    P16 --> R_HiZFinal
+    P17["HiZReduce"]
+    style P17 fill:#16a085,color:#fff
+    R_HiZFinal --> P17
+    P17 --> R_HiZFinal
+    P18["HiZReduce"]
+    style P18 fill:#16a085,color:#fff
+    R_HiZFinal --> P18
+    P18 --> R_HiZFinal
+    P19["HiZReduce"]
+    style P19 fill:#16a085,color:#fff
+    R_HiZFinal --> P19
+    P19 --> R_HiZFinal
+    P20["HiZReduce"]
+    style P20 fill:#16a085,color:#fff
+    R_HiZFinal --> P20
+    P20 --> R_HiZFinal
+    P21["HiZReduce"]
+    style P21 fill:#16a085,color:#fff
+    R_HiZFinal --> P21
+    P21 --> R_HiZFinal
+    P22["HiZReduce"]
+    style P22 fill:#16a085,color:#fff
+    R_HiZFinal --> P22
+    P22 --> R_HiZFinal
+    P23["HiZReduce"]
+    style P23 fill:#16a085,color:#fff
+    R_HiZFinal --> P23
+    P23 --> R_HiZFinal
+    P24["HiZReduce"]
+    style P24 fill:#16a085,color:#fff
+    R_HiZFinal --> P24
+    P24 --> R_HiZFinal
+    P25["SkyPass"]
+    style P25 fill:#2c3e50,color:#fff
+    P25 --> R_HDR_Target
+    P25 --> R_DepthBuffer
+    R_CommonBuffer --> P25
+    P26["RtaoPass"]
+    style P26 fill:#16a085,color:#fff
+    R_DepthBuffer --> P26
+    R_GBuffer_Normal --> P26
+    R_RTAO_Accum_History --> P26
+    P26 --> R_RTAO_Accum
+    P26 --> R_AO_Resolved
+    P27["DeferredResolvePass"]
+    style P27 fill:#2c3e50,color:#fff
+    R_AO_Resolved --> P27
+    R_GBuffer_Albedo --> P27
+    R_GBuffer_Normal --> P27
+    R_GBuffer_RoughMetal --> P27
+    R_GBuffer_Emissive --> P27
+    R_DepthBuffer --> P27
+    P27 --> R_HDR_Target
+    R_LightBuffer --> P27
+    R_ClusterGrid --> P27
+    R_ClusterLightIndices --> P27
+    R_ExposureBuffer_History --> P27
+    R_CommonBuffer --> P27
+    P28["SssrSamplePass"]
+    style P28 fill:#16a085,color:#fff
+    R_DepthBuffer --> P28
+    R_HiZFinal --> P28
+    R_GBuffer_Normal --> P28
+    R_GBuffer_RoughMetal --> P28
+    P28 --> R_SSR_Raw
+    R_CommonBuffer --> P28
+    P29["SssrTemporalPass"]
+    style P29 fill:#16a085,color:#fff
+    R_DepthBuffer --> P29
+    R_SSR_Raw --> P29
+    R_SSR_Resolved_History --> P29
+    R_HDR_Target --> P29
+    P29 --> R_SSR_Resolved
+    R_CommonBuffer --> P29
+    P30["SssrCompositePass"]
+    style P30 fill:#16a085,color:#fff
+    R_DepthBuffer --> P30
+    R_GBuffer_Normal --> P30
+    R_GBuffer_Albedo --> P30
+    R_GBuffer_RoughMetal --> P30
+    R_SSR_Resolved --> P30
+    R_AO_Resolved --> P30
+    R_HDR_Target --> P30
+    P30 --> R_HDR_Target
+    R_CommonBuffer --> P30
+    P31["BloomPass"]
+    style P31 fill:#7f8c8d,color:#fff
+    P32["BloomPrefilter"]
+    style P32 fill:#16a085,color:#fff
+    R_HDR_Target --> P32
+    P32 --> R_Bloom_Buffer
+    P33["BloomDown"]
+    style P33 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P33
+    P33 --> R_Bloom_Buffer
+    P34["BloomDown"]
+    style P34 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P34
+    P34 --> R_Bloom_Buffer
+    P35["BloomDown"]
+    style P35 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P35
+    P35 --> R_Bloom_Buffer
+    P36["BloomDown"]
+    style P36 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P36
+    P36 --> R_Bloom_Buffer
+    P37["BloomUp"]
+    style P37 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P37
+    P37 --> R_Bloom_Buffer
+    P38["BloomUp"]
+    style P38 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P38
+    P38 --> R_Bloom_Buffer
+    P39["BloomUp"]
+    style P39 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P39
+    P39 --> R_Bloom_Buffer
+    P40["BloomUp"]
+    style P40 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P40
+    P40 --> R_Bloom_Buffer
+    P41["BloomComposite"]
+    style P41 fill:#16a085,color:#fff
+    R_Bloom_Buffer --> P41
+    R_HDR_Target --> P41
+    P41 --> R_HDR_Target
+    P42["ClearHistogram"]
+    style P42 fill:#d35400,color:#fff
+    P42 --> R_HistogramBuffer
+    P43["HistogramBuildPass"]
+    style P43 fill:#16a085,color:#fff
+    R_HDR_Target --> P43
+    R_ExposureBuffer_History --> P43
+    P43 --> R_HistogramBuffer
+    P44["AverageLuminancePass"]
+    style P44 fill:#16a085,color:#fff
+    R_HistogramBuffer --> P44
+    R_ExposureBuffer_History --> P44
+    P44 --> R_ExposureBuffer
+    P45["ToneMapPass"]
+    style P45 fill:#2c3e50,color:#fff
+    R_HDR_Target --> P45
+    P45 --> R_LDR_Target
+    R_ExposureBuffer --> P45
+    P46["FxaaPass"]
+    style P46 fill:#2c3e50,color:#fff
+    R_LDR_Target --> P46
+    P46 --> R_Window_2
+    P47["DebugDraw"]
+    style P47 fill:#7f8c8d,color:#fff
+    P48["EguiPass"]
+    style P48 fill:#2c3e50,color:#fff
+    R_egui_font_image --> P48
+    P48 --> R_Window_2
+    P48 --> R_egui_vb
+    P48 --> R_egui_ib
+    P49["PresentPass"]
+    style P49 fill:#16a085,color:#fff
+    R_Window_2 --> P49
+    R_MeshDescriptorBuffer((MeshDescriptorBuffer))
+    R_HistogramBuffer((HistogramBuffer))
+    R_LightBuffer((LightBuffer))
+    R_egui_font_image((egui_font_image))
+    R_egui_ib((egui_ib))
+    R_GBuffer_Emissive((GBuffer_Emissive))
+    R_LDR_Target((LDR_Target))
+    R_DrawCountBuffer((DrawCountBuffer))
+    R_GBuffer_Normal((GBuffer_Normal))
+    R_GBuffer_RoughMetal((GBuffer_RoughMetal))
+    R_DepthBuffer((DepthBuffer))
+    R_ExposureBuffer_History((ExposureBuffer_History))
+    R_SSR_Resolved_History((SSR_Resolved_History))
+    R_HDR_Target((HDR_Target))
+    R_Bloom_Buffer((Bloom_Buffer))
+    R_egui_vb((egui_vb))
+    R_GBuffer_Albedo((GBuffer_Albedo))
+    R_ClusterGrid((ClusterGrid))
+    R_RTAO_Accum_History((RTAO_Accum_History))
+    R_ClusterAABBs((ClusterAABBs))
+    R_InstanceBuffer((InstanceBuffer))
+    R_Window_2((Window_2))
+    R_MaterialBuffer((MaterialBuffer))
+    R_ClusterLightIndices((ClusterLightIndices))
+    R_SSR_Resolved((SSR_Resolved))
+    R_ExposureBuffer((ExposureBuffer))
+    R_CommonBuffer((CommonBuffer))
+    R_DrawCallBuffer((DrawCallBuffer))
+    R_AO_Resolved((AO_Resolved))
+    R_HiZFinal((HiZFinal))
+    R_RTAO_Accum((RTAO_Accum))
+    R_SSR_Raw((SSR_Raw))

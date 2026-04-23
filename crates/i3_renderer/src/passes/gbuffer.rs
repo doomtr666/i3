@@ -2,11 +2,8 @@ use std::sync::Arc;
 use i3_gfx::prelude::*;
 
 
-/// A single draw command extracted from the scene for the GBuffer pass.
-#[derive(Clone, Copy, Debug)]
 pub struct DrawCommand {
     pub mesh: crate::scene::Mesh,
-    pub push_constants: GBufferPushConstants,
 }
 
 /// GBuffer vertex layout: position + normal + color.
@@ -19,20 +16,6 @@ pub struct GBufferVertex {
     pub tangent: [f32; 4],
 }
 
-/// Push constants for the GBuffer pass.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct GBufferPushConstants {
-    pub view_projection: nalgebra_glm::Mat4,
-}
-
-impl Default for GBufferPushConstants {
-    fn default() -> Self {
-        Self {
-            view_projection: nalgebra_glm::identity(),
-        }
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GBufferFillPass — records the actual GPU draw commands
@@ -53,6 +36,7 @@ pub struct GBufferFillPass {
     draw_call_buffer:       BufferHandle,
     draw_count_buffer:      BufferHandle,
     material_buffer:        BufferHandle,
+    common_buffer:          BufferHandle,
 
     // Persistence
     pipeline: Option<BackendPipeline>,
@@ -72,6 +56,7 @@ impl GBufferFillPass {
             draw_call_buffer:       BufferHandle::INVALID,
             draw_count_buffer:      BufferHandle::INVALID,
             material_buffer:        BufferHandle::INVALID,
+            common_buffer:          BufferHandle::INVALID,
 
             bindless_set: DescriptorSetHandle(0),
             pipeline:     None,
@@ -110,6 +95,7 @@ impl RenderPass for GBufferFillPass {
         self.draw_call_buffer       = builder.resolve_buffer("DrawCallBuffer");
         self.draw_count_buffer      = builder.resolve_buffer("DrawCountBuffer");
         self.material_buffer        = builder.resolve_buffer("MaterialBuffer");
+        self.common_buffer          = builder.resolve_buffer("CommonBuffer");
 
         // Declare read intents
         builder.read_buffer(self.mesh_descriptor_buffer, ResourceUsage::SHADER_READ);
@@ -117,6 +103,7 @@ impl RenderPass for GBufferFillPass {
         builder.read_buffer(self.draw_call_buffer, ResourceUsage::INDIRECT_READ);
         builder.read_buffer(self.draw_count_buffer, ResourceUsage::INDIRECT_READ);
         builder.read_buffer(self.material_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.common_buffer, ResourceUsage::SHADER_READ);
 
         // Resolve bindless descriptor set
         self.bindless_set = *builder.consume::<DescriptorSetHandle>("BindlessSet");
@@ -134,7 +121,7 @@ impl RenderPass for GBufferFillPass {
             tracing::error!("GBufferFillPass::execute: pipeline not initialized!");
             return;
         };
-        let common = frame.consume::<crate::render_graph::CommonData>("Common");
+        let _common = frame.consume::<crate::render_graph::CommonData>("Common");
         ctx.bind_pipeline_raw(pipeline);
 
         let scene_set = ctx.create_descriptor_set(
@@ -147,16 +134,16 @@ impl RenderPass for GBufferFillPass {
             ],
         );
         ctx.bind_descriptor_set(0, scene_set);
+
+        let common_set = ctx.create_descriptor_set(
+            pipeline,
+            1,
+            &[DescriptorWrite::uniform_buffer(0, 0, self.common_buffer)],
+        );
+        ctx.bind_descriptor_set(1, common_set);
+
         ctx.bind_descriptor_set(2, self.bindless_set);
 
-        ctx.push_constant_data(
-            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-            0,
-            &GBufferPushConstants {
-                view_projection: common.view_projection,
-                ..Default::default()
-            },
-        );
 
         ctx.draw_indirect_count(
             self.draw_call_buffer,

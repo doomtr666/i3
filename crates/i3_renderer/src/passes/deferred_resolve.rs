@@ -1,24 +1,13 @@
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 
-use nalgebra_glm as glm;
 
+/// Push constants for the DeferredResolve pass — minimized since most data moved to CommonData.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct DeferredResolvePushConstants {
-    pub inv_view_proj: glm::Mat4,
-    pub inv_projection: glm::Mat4,
-    pub camera_pos: glm::Vec3,
-    pub near_plane: f32,
-    pub grid_size: [u32; 3],
-    pub far_plane: f32,
-    pub screen_dimensions: [f32; 2],
-    pub debug_mode: u32,
-    pub ibl_lut_index: u32,
-    pub ibl_irr_index: u32,
-    pub ibl_pref_index: u32,
-    pub ibl_intensity: f32,
-    pub ao_strength: f32,
+    pub grid_size:   [u32; 3],
+    pub ao_strength: f32, // 0.0 = no AO, 1.0 = full AO
 }
 
 pub struct DeferredResolvePass {
@@ -36,7 +25,8 @@ pub struct DeferredResolvePass {
     cluster_grid: BufferHandle,
     cluster_light_indices: BufferHandle,
     exposure_buffer: BufferHandle,
-    ao_raw: ImageHandle,
+    common_buffer:   BufferHandle,
+    ao_raw:          ImageHandle,
 
     // Persistence
     pipeline: Option<BackendPipeline>,
@@ -56,9 +46,10 @@ impl DeferredResolvePass {
             cluster_grid: BufferHandle::INVALID,
             cluster_light_indices: BufferHandle::INVALID,
             exposure_buffer: BufferHandle::INVALID,
-            ao_raw: ImageHandle::INVALID,
-            tlas_handle: AccelerationStructureHandle::INVALID,
-            pipeline: None,
+            common_buffer:   BufferHandle::INVALID,
+            ao_raw:          ImageHandle::INVALID,
+            tlas_handle:     AccelerationStructureHandle::INVALID,
+            pipeline:        None,
         }
     }
 }
@@ -100,6 +91,7 @@ impl RenderPass for DeferredResolvePass {
         self.cluster_grid = builder.resolve_buffer("ClusterGrid");
         self.cluster_light_indices = builder.resolve_buffer("ClusterLightIndices");
         self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
+        self.common_buffer = builder.resolve_buffer("CommonBuffer");
 
         // Resolve AO_Resolved (temporal accumulated AO — always present after GtaoTemporalPass)
         self.ao_raw = builder.resolve_image("AO_Resolved");
@@ -124,6 +116,7 @@ impl RenderPass for DeferredResolvePass {
         builder.read_buffer(self.cluster_grid, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.cluster_light_indices, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.exposure_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.common_buffer, ResourceUsage::SHADER_READ);
 
         // Write to HDR target
         builder.write_image(self.hdr_target, ResourceUsage::COLOR_ATTACHMENT);
@@ -167,29 +160,25 @@ impl RenderPass for DeferredResolvePass {
             return;
         };
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
-        let debug_mode = *frame.consume::<u32>("DebugChannel");
-        let ibl = frame.consume::<crate::render_graph::IblIndices>("IblIndices");
         let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
 
         let grid_x = (common.screen_width + 63) / 64;
         let grid_y = (common.screen_height + 63) / 64;
         let grid_size = [grid_x, grid_y, 16u32];
+
         let push_constants = DeferredResolvePushConstants {
-            inv_view_proj: common.inv_view_projection,
-            inv_projection: common.inv_projection,
-            camera_pos: common.camera_pos,
-            near_plane: common.near_plane,
             grid_size,
-            far_plane: common.far_plane,
-            screen_dimensions: [common.screen_width as f32, common.screen_height as f32],
-            debug_mode,
-            ibl_lut_index: ibl.lut_index,
-            ibl_irr_index: ibl.irr_index,
-            ibl_pref_index: ibl.pref_index,
-            ibl_intensity: ibl.intensity_scale,
             ao_strength: 1.0,
         };
+
+        let common_set = ctx.create_descriptor_set(
+            pipeline,
+            1,
+            &[DescriptorWrite::uniform_buffer(0, 0, self.common_buffer)],
+        );
+
         ctx.bind_pipeline_raw(pipeline);
+        ctx.bind_descriptor_set(1, common_set);
         ctx.bind_descriptor_set(2, bindless_set);
         ctx.push_constant_data(
             ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,

@@ -476,7 +476,9 @@ impl ExampleApp for DeferredGltfApp {
                     DebugChannel::Depth        => "Depth",
                     DebugChannel::AO           => "AO (accumulated)",
                     DebugChannel::SsrResolved  => "SSR (resolved)",
+                    DebugChannel::SsrRaw       => "SSR (raw stochastic)",
                     DebugChannel::BloomBuffer  => "Bloom buffer",
+
                     DebugChannel::LightDensity => "Light density",
                     DebugChannel::ClusterGrid  => "Cluster grid",
                 };
@@ -492,7 +494,9 @@ impl ExampleApp for DeferredGltfApp {
                         ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::Depth,        "Depth");
                         ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::AO,           "AO (accumulated)");
                         ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::SsrResolved,  "SSR (resolved)");
+                        ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::SsrRaw,       "SSR (raw stochastic)");
                         ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::BloomBuffer,  "Bloom buffer");
+
                         ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::LightDensity, "Light density");
                         ui.selectable_value(&mut self.render_graph.debug_channel, DebugChannel::ClusterGrid,  "Cluster grid");
                     });
