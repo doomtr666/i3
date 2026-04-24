@@ -1,18 +1,10 @@
-// Stochastic SSR — Temporal accumulation pass
-//
-// Exponential moving average over SSR_Raw frames.
-// Identical logic to the previous SSR temporal pass; renamed for clarity.
-//
-// No-hit handling:
-//   • Jitter miss (some neighbours still have hits) → graceful decay (alpha * history)
-//   • Real occlusion (no neighbour has a hit)       → zero out immediately
-
 #include "common.slangh"
 
 struct SssrTemporalPc
 {
     float alpha;
 };
+
 [[vk::push_constant]]
 SssrTemporalPc pc;
 
@@ -23,9 +15,44 @@ Texture2D<float4> ssrRaw;
 [[vk::binding(2, 0)]]
 Texture2D<float4> ssrHistory;
 [[vk::binding(3, 0)]]
-Texture2D<float4> hdrLit;
+Texture2D<float4> gbufferNormal;
 [[vk::binding(4, 0)]]
+Texture2D<float4> gbufferRoughMetal;
+[[vk::binding(5, 0)]]
+Texture2D<float4> hdrLit;
+[[vk::binding(6, 0)]]
 RWTexture2D<float4> ssrResolved;
+
+static const float COMPRESSION_FACTOR = 0.1f;
+
+float3 Compress(float3 c)
+{
+    float luminance = max(max(c.r, c.g), c.b);
+    return c / (1.0f + luminance * COMPRESSION_FACTOR);
+}
+
+float3 Decompress(float3 c)
+{
+    float luminance = max(max(c.r, c.g), c.b);
+    // Sécurité pour éviter la division par zéro
+    return c / max(1.0f - luminance * COMPRESSION_FACTOR, 1e-5f);
+}
+
+// Fonction analytique d'écrêtage directionnel
+float3 ClipAABB(float3 aabb_min, float3 aabb_max, float3 prev_sample, float3 avg)
+{
+    float3 r = prev_sample - avg;
+    float3 rmax = aabb_max - avg;
+    float3 rmin = aabb_min - avg;
+
+    const float eps = 1e-5f;
+
+    // Calcul de l'intersection du rayon vers la boîte de variance
+    float3 t = max(rmax / max(r, eps), rmin / min(r, -eps));
+    float t_final = saturate(min(min(t.x, t.y), t.z));
+
+    return avg + r * t_final;
+}
 
 float3 worldPosFromDepth(float2 uv, float depth)
 {
@@ -35,41 +62,14 @@ float3 worldPosFromDepth(float2 uv, float depth)
     return wp.xyz / wp.w;
 }
 
-// 1. Mise à jour de la boîte de variance
-float4 varianceClip(float4 history, int2 px, float3 current_color, float current_conf)
-{
-    if (current_conf <= 0.0f)
-        return history;
-
-    float3 mn = current_color;
-    float3 mx = current_color;
-
-    for (int dy = -1; dy <= 1; dy++)
-    {
-        for (int dx = -1; dx <= 1; dx++)
-        {
-            if (dx == 0 && dy == 0)
-                continue;
-
-            float4 raw_neighbor = ssrRaw.Load(int3(px + int2(dx, dy), 0));
-
-            if (raw_neighbor.a > 0.0f)
-            {
-                // Fetch direct sur la cible HDR courante via les UV de l'impact
-                float3 s = hdrLit.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], raw_neighbor.xy, 0.0f).rgb;
-                mn = min(mn, s);
-                mx = max(mx, s);
-            }
-        }
-    }
-    return float4(clamp(history.rgb, mn, mx), history.a);
-}
-
 [numthreads(8, 8, 1)]
 void computeMain(uint3 id: SV_DispatchThreadID)
 {
     uint2 px = id.xy;
-    if (any(px >= uint2(g_common.GetScreenWidth(), g_common.GetScreenHeight())))
+    int w = g_common.GetScreenWidth();
+    int h = g_common.GetScreenHeight();
+
+    if (any(px >= uint2(w, h)))
         return;
 
     float depth = depthBuffer.Load(int3(px, 0)).r;
@@ -79,30 +79,17 @@ void computeMain(uint3 id: SV_DispatchThreadID)
         return;
     }
 
-    float2 uv = (float2(px) + 0.5f) / float2(g_common.GetScreenWidth(), g_common.GetScreenHeight());
+    float2 uv = (float2(px) + 0.5f) / float2(w, h);
+    float4 current = ssrRaw.Load(int3(px, 0));
 
-    // 1. On lit le résultat brut du raymarcher
-    float4 raw_data = ssrRaw.Load(int3(px, 0));
-    float2 hit_uv = raw_data.xy;
-    float confidence = raw_data.a; // C'est CA la vraie confiance !
-
-    // 2. On prépare la couleur courante (noire par défaut)
-    float4 current = float4(0.0f, 0.0f, 0.0f, confidence);
-
-    // 3. On ne lit le HDR que si le rayon a vraiment touché quelque chose
-    if (confidence > 0.0f)
-    {
-        current.rgb = hdrLit.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], hit_uv, 0.0f).rgb;
-    }
-
-    // Cold-start: write current directly on frame 0.
+    // Démarrage à froid
     if (g_common.GetFrameIndex() == 0u)
     {
         ssrResolved[int2(px)] = current;
         return;
     }
 
-    // Reproject surface to find previous-frame UV.
+    // Reprojection
     float3 worldPos = worldPosFromDepth(uv, depth);
     float4 prevClip = mul(g_common.prevViewProjection, float4(worldPos, 1.0f));
     float2 prevNdc = prevClip.xy / prevClip.w;
@@ -114,38 +101,44 @@ void computeMain(uint3 id: SV_DispatchThreadID)
         return;
     }
 
-    float4 history = ssrHistory.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], prevUv, 0.0f);
+    // --- 1. Statistiques spatiales (Voisinage 3x3 en espace compressé) ---
+    float3 m1 = float3(0.0f);
+    float3 m2 = float3(0.0f);
 
-    // --- LE BLOC NO-HIT EST OBLIGATOIRE ---
-    // Si ce pixel n'a pas de reflet valide, on doit le laisser s'éteindre doucement.
-    if (confidence <= 0.0f)
+    for (int y = -1; y <= 1; y++)
     {
-        float neighbour_conf = 0.0f;
-        for (int dy = -1; dy <= 1; dy++)
+        for (int x = -1; x <= 1; x++)
         {
-            for (int dx = -1; dx <= 1; dx++)
-            {
-                neighbour_conf = max(neighbour_conf, ssrRaw.Load(int3(px + int2(dx, dy), 0)).a);
-            }
-        }
+            // Protection des bords d'écran
+            int2 neighbor_px = clamp(int2(px) + int2(x, y), int2(0), int2(w - 1, h - 1));
+            float3 sample_color = ssrRaw.Load(int3(neighbor_px, 0)).rgb;
 
-        if (neighbour_conf <= 0.0f)
-        {
-            // Vrai vide : on coupe tout
-            ssrResolved[int2(px)] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+            float3 compressed_color = Compress(sample_color);
+
+            m1 += compressed_color;
+            m2 += compressed_color * compressed_color;
         }
-        else
-        {
-            // Vide dû au bruit stochastique : on garde l'historique
-            ssrResolved[int2(px)] = history * pc.alpha;
-        }
-        return;
     }
 
-    // Normal blend
-    float4 clipped = varianceClip(history, int2(px), current.rgb, confidence);
-    float3 col_blend = lerp(current.rgb, clipped.rgb, pc.alpha);
-    float conf_blend = lerp(current.a, clipped.a, pc.alpha);
+    float3 mu = m1 / 9.0f;
+    float3 variance = max(m2 / 9.0f - mu * mu, 0.0f);
+    float3 sigma = sqrt(variance);
 
-    ssrResolved[int2(px)] = float4(col_blend, conf_blend);
+    float gamma = 1.5f;
+    float3 box_min = mu - gamma * sigma;
+    float3 box_max = mu + gamma * sigma;
+
+    // --- 2. Lecture et écrêtage de l'historique ---
+    float3 history = ssrHistory.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], prevUv, 0.0f).rgb;
+    float3 compressed_history = Compress(history);
+
+    float3 clipped_history = ClipAABB(box_min, box_max, compressed_history, mu);
+
+    // --- 3. Mélange exponentiel et décompression ---
+    float3 compressed_current = Compress(current.rgb);
+    float3 resolved_compressed = lerp(compressed_current, clipped_history, pc.alpha);
+
+    float3 final_color = Decompress(resolved_compressed);
+
+    ssrResolved[int2(px)] = float4(final_color, 1.0f);
 }

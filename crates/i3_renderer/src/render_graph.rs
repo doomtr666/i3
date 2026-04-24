@@ -33,6 +33,7 @@ pub struct CommonData {
     pub view: nalgebra_glm::Mat4,
     pub projection: nalgebra_glm::Mat4,
     pub view_projection: nalgebra_glm::Mat4,
+    pub inv_view: nalgebra_glm::Mat4,
     pub inv_projection: nalgebra_glm::Mat4,
     pub inv_view_projection: nalgebra_glm::Mat4,
     pub prev_view_projection: nalgebra_glm::Mat4,
@@ -1023,6 +1024,8 @@ impl DefaultRenderGraph {
 
         // 2. Build CommonData
         let view_projection = projection * view;
+
+        let inv_view = view.try_inverse().unwrap_or_else(nalgebra_glm::identity);
         let inv_projection = projection
             .try_inverse()
             .unwrap_or_else(nalgebra_glm::identity);
@@ -1055,6 +1058,7 @@ impl DefaultRenderGraph {
             view,
             projection,
             view_projection,
+            inv_view,
             inv_projection,
             inv_view_projection,
             prev_view_projection: self.prev_view_projection,
@@ -1084,7 +1088,7 @@ impl DefaultRenderGraph {
             projection: common.projection.into(),
             view_projection: common.view_projection.into(),
             inv_projection: common.inv_projection.into(),
-
+            inv_view: common.inv_view.into(),
             inv_view_projection: common.inv_view_projection.into(),
             prev_view_projection: common.prev_view_projection.into(),
 
@@ -1314,6 +1318,7 @@ impl DefaultRenderGraph {
         dt: f32,
     ) {
         let view_projection = projection * view;
+        let inv_view = view.try_inverse().unwrap_or_else(nalgebra_glm::identity);
         let inv_projection = projection
             .try_inverse()
             .unwrap_or_else(nalgebra_glm::identity);
@@ -1347,6 +1352,7 @@ impl DefaultRenderGraph {
             view,
             projection,
             view_projection,
+            inv_view,
             inv_projection,
             inv_view_projection,
             prev_view_projection: self.prev_view_projection,
@@ -1455,7 +1461,6 @@ impl DefaultRenderGraph {
                 || channel == DebugChannel::SsrRaw
                 || channel == DebugChannel::BloomBuffer
             {
-
                 // 4. Deferred Lighting (includes HdrMipsPass + SSR + Bloom)
                 self.record_lighting(builder);
 

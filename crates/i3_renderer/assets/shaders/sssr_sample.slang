@@ -21,10 +21,14 @@ Texture2D<float> depthBuffer;
 [[vk::binding(1, 0)]]
 Texture2D<float> hizBuffer;
 [[vk::binding(2, 0)]]
-Texture2D<float2> gbufferNormal;
+Texture2D<float3> gbufferAlbedo;
 [[vk::binding(3, 0)]]
-Texture2D<float2> gbufferRoughMetal;
+Texture2D<float2> gbufferNormal;
 [[vk::binding(4, 0)]]
+Texture2D<float2> gbufferRoughMetal;
+[[vk::binding(5, 0)]]
+Texture2D<float4> hdrLit;
+[[vk::binding(6, 0)]]
 RWTexture2D<float4> ssrOutput;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -43,6 +47,11 @@ float3 projectViewToScreenSpace(float3 viewPos)
     clip.w = max(clip.w, 1e-6f);
     float2 ndc = clip.xy / clip.w;
     return float3(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f, clip.z / clip.w);
+}
+
+float3 FresnelSchlick(float cosTheta, float3 F0)
+{
+    return F0 + (1.0f - F0) * pow(max(1.0f - cosTheta, 0.0f), 5.0f);
 }
 
 // Traçage Hi-Z optimisé pour Reverse-Z (1.0 = Proche, 0.0 = Loin)
@@ -174,88 +183,93 @@ void computeMain(uint3 id: SV_DispatchThreadID)
         return;
     }
 
-    float roughness = gbufferRoughMetal.Load(int3(px, 0)).r;
+    float2 rm = gbufferRoughMetal.Load(int3(px, 0)).rg;
+    float metallic = rm.g;
+
+    float roughness = rm.r;
+    float alpha = roughness * roughness;
 
     float3 P = viewSpacePos(px, depth);
     float3 N_world = decodeOctahedral(gbufferNormal.Load(int3(px, 0)).rg);
+    // Albedo lu depuis le GBuffer (nécessaire pour le Fresnel des métaux)
+    float3 albedo = gbufferAlbedo.Load(int3(px, 0));
+    float3 F0 = lerp(float3(0.04f), albedo, metallic);
+
     float3x3 viewRot = float3x3(g_common.view[0].xyz, g_common.view[1].xyz, g_common.view[2].xyz);
     float3 N = normalize(mul(viewRot, N_world));
     float3 V = normalize(-P);
 
-    float3 noise = pcg3f(uint3(px, g_common.GetFrameIndex()));
+    const int NUM_SAMPLES = 1;
 
-    // 1. Construire la base
-    float3 T, B;
-    buildBasis(N, T, B);
+    float3 accum_color = float3(0, 0, 0);
 
-    // 2. Transformer V en espace tangent
-    float3 V_tangent = float3(dot(V, T), dot(V, B), dot(V, N));
-
-    // 3. Sampler avec le V tangentiel
-    float3 H_local = sampleGGXVNDF(V_tangent, roughness, roughness, noise.x, noise.y);
-
-    // 4. Repasser H en View Space
-    float3 H = normalize(T * H_local.x + B * H_local.y + N * H_local.z);
-
-    float3 D = reflect(-V, H);
-
-    // --- Calcul de l'Indice de Confiance (Fade) ---
-    float confidence = 1.0f;
-
-    // Rejet si le rayon plonge sous la géométrie
-    if (dot(D, N) <= 0.001f)
+    for (int i = 0; i < NUM_SAMPLES; i++)
     {
-        ssrOutput[px] = float4(0, 0, 0, 0);
-        return;
+        float3 noise = pcg3f(uint3(px, g_common.GetFrameIndex()));
+
+        // 1. Construire la base
+        float3 T, B;
+        buildBasis(N, T, B);
+
+        // 2. Transformer V en espace tangent
+        float3 V_tangent = float3(dot(V, T), dot(V, B), dot(V, N));
+
+        // 3. Sampler avec le V tangentiel
+        float3 H_local = sampleGGXVNDF(V_tangent, alpha, alpha, noise.x, noise.y);
+
+        // 4. Repasser H en View Space
+        float3 H = normalize(T * H_local.x + B * H_local.y + N * H_local.z);
+
+        float3 D = reflect(-V, H);
+
+        // Matrice inverse pour repasser en World Space (à adapter selon ta structure exacte)
+        float3x3 invViewRot = float3x3(g_common.invView[0].xyz, g_common.invView[1].xyz, g_common.invView[2].xyz);
+        float3 D_world = normalize(mul(invViewRot, D));
+
+        float3 output_color = bindlessTextures[g_common.GetIblEnvIndex()].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(D_world), 0).rgb;
+
+        // Rejet si le rayon plonge sous la géométrie
+        if (dot(D, N) > 0.001f)
+        {
+
+            // Calcul du point de fin du rayon (ex: 100 mètres)
+            float3 P_end = P + D * 1000.0f;
+
+            float3 screen_P = projectViewToScreenSpace(P);
+            float3 screen_P_end = projectViewToScreenSpace(P_end);
+
+            float3 screen_RayDir = normalize(screen_P_end - screen_P);
+
+            float2 screen_RayDir_Pixels = screen_RayDir.xy * g_common.GetScreenSize();
+            float step_scale = 1.0f / max(abs(screen_RayDir_Pixels.x), abs(screen_RayDir_Pixels.y));
+            float3 ray_step_screen = screen_RayDir * step_scale;
+
+            // --- LE FIX (Ray Bump) ---
+            // Offset pour éviter l'auto-intersection
+            float start_offset = 2.0f; // + noise.z;
+            float3 safe_start_P = screen_P + ray_step_screen * start_offset;
+
+            // Lancer avec test d'épaisseur intégré
+            float3 hit_UVZ;
+            bool valid_hit = traceHiZ(safe_start_P, ray_step_screen, g_common.invProjection, pc.thickness, hit_UVZ);
+
+            if (valid_hit)
+            {
+
+                // 3. Validation Backface
+                uint2 hit_px = uint2(hit_UVZ.xy * g_common.GetScreenSize());
+                float3 hit_N_world = decodeOctahedral(gbufferNormal.Load(int3(hit_px, 0)).rg);
+                float3 hit_N = normalize(mul(viewRot, hit_N_world)); // On le repasse en View Space !
+                float N_dot_D = dot(hit_N, D);
+                if (N_dot_D < -0.001f)
+                {
+                    output_color = hdrLit.SampleLevel(bindlessSamplers[SAMPLER_LINEAR], hit_UVZ.xy, 0).rgb;
+                }
+            }
+        }
+
+        float3 brdf_weight = FresnelSchlick(max(dot(V, H), 0.0f), F0) * GGXVNDFWeight(V, D, N, alpha);
+        accum_color += output_color * brdf_weight;
     }
-
-    // Fondu directionnel pour la caméra (évite les hard cuts sur les vitres)
-    float fade_camera = smoothstep(0.1f, -0.1f, D.z);
-    confidence *= fade_camera;
-
-    // Calcul du point de fin du rayon (ex: 100 mètres)
-    float3 P_end = P + D * 100.0f;
-
-    float3 screen_P = projectViewToScreenSpace(P);
-    float3 screen_P_end = projectViewToScreenSpace(P_end);
-
-    float3 screen_RayDir = normalize(screen_P_end - screen_P);
-
-    float2 screen_RayDir_Pixels = screen_RayDir.xy * g_common.GetScreenSize();
-    float step_scale = 1.0f / max(abs(screen_RayDir_Pixels.x), abs(screen_RayDir_Pixels.y));
-    float3 ray_step_screen = screen_RayDir * step_scale;
-
-    // --- LE FIX (Ray Bump) ---
-    // Offset pour éviter l'auto-intersection
-    float start_offset = 4.0f + noise.z;
-    float3 safe_start_P = screen_P + ray_step_screen * start_offset;
-
-    // Lancer avec test d'épaisseur intégré
-    float3 hit_UVZ;
-    bool valid_hit = traceHiZ(safe_start_P, ray_step_screen, g_common.invProjection, pc.thickness, hit_UVZ);
-
-    if (!valid_hit)
-    {
-        // On écrit du noir/vide pur pour que le TAA l'efface proprement
-        ssrOutput[px] = float4(0, 0, 0, 0);
-        return;
-    }
-
-    // --- Atténuations post-hit ---
-    // 1. Vignettage écran
-    float2 edge_dist = smoothstep(0.0f, 0.05f, hit_UVZ.xy) * smoothstep(1.0f, 0.95f, hit_UVZ.xy);
-    confidence *= (edge_dist.x * edge_dist.y);
-
-    // 2. Fondu sur la rugosité
-    confidence *= 1.0f - smoothstep(0.6f, 0.8f, roughness);
-
-    // 3. Validation Backface
-    uint2 hit_px = uint2(hit_UVZ.xy * g_common.GetScreenSize());
-    float3 hit_N_world = decodeOctahedral(gbufferNormal.Load(int3(hit_px, 0)).rg);
-    float3 hit_N = normalize(mul(viewRot, hit_N_world)); // On le repasse en View Space !
-    float N_dot_D = dot(hit_N, D);
-
-    confidence *= smoothstep(0.1f, -0.1f, N_dot_D);
-
-    ssrOutput[px] = float4(hit_UVZ, confidence);
+    ssrOutput[px] = float4(accum_color / NUM_SAMPLES, 1.0f);
 }

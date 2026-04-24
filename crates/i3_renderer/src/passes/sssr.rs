@@ -53,8 +53,10 @@ pub struct SssrSamplePass {
 
     depth_buffer: ImageHandle,
     hiz_buffer: ImageHandle,
+    gbuffer_albedo: ImageHandle,
     gbuffer_normal: ImageHandle,
     gbuffer_roughmetal: ImageHandle,
+    hdr_lit: ImageHandle,
     ssr_raw: ImageHandle,
     common_buffer: BufferHandle,
 }
@@ -72,8 +74,10 @@ impl SssrSamplePass {
             frame_index: 0,
             depth_buffer: ImageHandle::INVALID,
             hiz_buffer: ImageHandle::INVALID,
+            gbuffer_albedo: ImageHandle::INVALID,
             gbuffer_normal: ImageHandle::INVALID,
             gbuffer_roughmetal: ImageHandle::INVALID,
+            hdr_lit: ImageHandle::INVALID,
             ssr_raw: ImageHandle::INVALID,
             common_buffer: BufferHandle::INVALID,
         }
@@ -104,8 +108,10 @@ impl RenderPass for SssrSamplePass {
     fn declare(&mut self, builder: &mut PassBuilder) {
         self.depth_buffer = builder.resolve_image("DepthBuffer");
         self.hiz_buffer = builder.resolve_image("HiZFinal");
+        self.gbuffer_albedo = builder.resolve_image("GBuffer_Albedo");
         self.gbuffer_normal = builder.resolve_image("GBuffer_Normal");
         self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
+        self.hdr_lit = builder.resolve_image("HDR_Target");
 
         let depth_desc = builder.get_image_desc(self.depth_buffer);
         let (w, h) = (depth_desc.width, depth_desc.height);
@@ -128,11 +134,13 @@ impl RenderPass for SssrSamplePass {
         self.ssr_raw = builder.resolve_image("SSR_Raw");
         self.common_buffer = builder.resolve_buffer("CommonBuffer");
 
+        builder.read_buffer(self.common_buffer, ResourceUsage::SHADER_READ);
         builder.read_image(self.depth_buffer, ResourceUsage::SHADER_READ);
         builder.read_image(self.hiz_buffer, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_albedo, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
-        builder.read_buffer(self.common_buffer, ResourceUsage::SHADER_READ);
+        builder.read_image(self.hdr_lit, ResourceUsage::SHADER_READ);
         builder.write_image(self.ssr_raw, ResourceUsage::SHADER_WRITE);
     }
 
@@ -184,16 +192,28 @@ impl RenderPass for SssrSamplePass {
                 DescriptorWrite::sampled_image(
                     2,
                     0,
-                    self.gbuffer_normal,
+                    self.gbuffer_albedo,
                     DescriptorImageLayout::ShaderReadOnlyOptimal,
                 ),
                 DescriptorWrite::sampled_image(
                     3,
                     0,
+                    self.gbuffer_normal,
+                    DescriptorImageLayout::ShaderReadOnlyOptimal,
+                ),
+                DescriptorWrite::sampled_image(
+                    4,
+                    0,
                     self.gbuffer_roughmetal,
                     DescriptorImageLayout::ShaderReadOnlyOptimal,
                 ),
-                DescriptorWrite::storage_image(4, 0, self.ssr_raw, DescriptorImageLayout::General),
+                DescriptorWrite::sampled_image(
+                    5,
+                    0,
+                    self.hdr_lit,
+                    DescriptorImageLayout::ShaderReadOnlyOptimal,
+                ),
+                DescriptorWrite::storage_image(6, 0, self.ssr_raw, DescriptorImageLayout::General),
             ],
         );
         ctx.bind_descriptor_set(0, ds);
@@ -215,6 +235,8 @@ pub struct SssrTemporalPass {
     depth_buffer: ImageHandle,
     ssr_raw: ImageHandle,
     ssr_history: ImageHandle,
+    gbuffer_normal: ImageHandle,
+    gbuffer_roughmetal: ImageHandle,
     hdr_lit: ImageHandle,
     ssr_resolved: ImageHandle,
     common_buffer: BufferHandle,
@@ -229,6 +251,8 @@ impl SssrTemporalPass {
             depth_buffer: ImageHandle::INVALID,
             ssr_raw: ImageHandle::INVALID,
             ssr_history: ImageHandle::INVALID,
+            gbuffer_normal: ImageHandle::INVALID,
+            gbuffer_roughmetal: ImageHandle::INVALID,
             hdr_lit: ImageHandle::INVALID,
             ssr_resolved: ImageHandle::INVALID,
             common_buffer: BufferHandle::INVALID,
@@ -278,11 +302,15 @@ impl RenderPass for SssrTemporalPass {
         self.hdr_lit = builder.resolve_image("HDR_Target");
         self.ssr_resolved = builder.declare_image_history_output("SSR_Resolved", hist_desc);
         self.ssr_history = builder.read_image_history("SSR_Resolved");
+        self.gbuffer_normal = builder.resolve_image("GBuffer_Normal");
+        self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
 
         builder.read_image(self.depth_buffer, ResourceUsage::SHADER_READ);
         builder.read_image(self.ssr_raw, ResourceUsage::SHADER_READ);
         builder.read_image(self.ssr_history, ResourceUsage::SHADER_READ);
         builder.read_image(self.hdr_lit, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);
+        builder.read_image(self.gbuffer_roughmetal, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.common_buffer, ResourceUsage::SHADER_READ);
         builder.write_image(self.ssr_resolved, ResourceUsage::SHADER_WRITE);
     }
@@ -335,11 +363,23 @@ impl RenderPass for SssrTemporalPass {
                 DescriptorWrite::sampled_image(
                     3,
                     0,
+                    self.gbuffer_normal,
+                    DescriptorImageLayout::ShaderReadOnlyOptimal,
+                ),
+                DescriptorWrite::sampled_image(
+                    4,
+                    0,
+                    self.gbuffer_roughmetal,
+                    DescriptorImageLayout::ShaderReadOnlyOptimal,
+                ),
+                DescriptorWrite::sampled_image(
+                    5,
+                    0,
                     self.hdr_lit,
                     DescriptorImageLayout::ShaderReadOnlyOptimal,
                 ),
                 DescriptorWrite::storage_image(
-                    4,
+                    6,
                     0,
                     self.ssr_resolved,
                     DescriptorImageLayout::General,
