@@ -1,3 +1,4 @@
+use crate::constants::div_ceil;
 use crate::groups::gtao_group::GtaoGroup;
 use crate::groups::rtao_group::RtaoGroup;
 use crate::passes::cull::DrawCallGenPass;
@@ -174,7 +175,7 @@ impl RenderPass for AoNonePass {
             )],
         );
         ctx.bind_descriptor_set(0, ds);
-        ctx.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(w, 8), div_ceil(h, 8), 1);
     }
 }
 

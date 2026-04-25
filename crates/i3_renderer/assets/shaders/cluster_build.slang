@@ -15,12 +15,6 @@ PushConstants pc;
 [[vk::binding(0, 0)]]
 RWStructuredBuffer<ClusterAABB> cluster_aabbs;
 
-float3 screen2view(float2 uv, float depth, float4x4 inv_proj) {
-    float4 clip = float4(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
-    float4 view = mul(inv_proj, clip);
-    return view.xyz / view.w;
-}
-
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 threadId : SV_DispatchThreadID) {
@@ -41,10 +35,10 @@ void main(uint3 threadId : SV_DispatchThreadID) {
     float z_near = pc.near_plane * pow(pc.far_plane / pc.near_plane, float(threadId.z) / float(pc.grid_size.z));
     float z_far = pc.near_plane * pow(pc.far_plane / pc.near_plane, float(threadId.z + 1) / float(pc.grid_size.z));
 
-    float3 view_top_left = screen2view(float2(uv_min.x, uv_min.y), 1.0, pc.inv_projection);
-    float3 view_top_right = screen2view(float2(uv_max.x, uv_min.y), 1.0, pc.inv_projection);
-    float3 view_bot_left = screen2view(float2(uv_min.x, uv_max.y), 1.0, pc.inv_projection);
-    float3 view_bot_right = screen2view(float2(uv_max.x, uv_max.y), 1.0, pc.inv_projection);
+    float3 view_top_left = viewSpacePosFromUV(float2(uv_min.x, uv_min.y), 1.0, pc.inv_projection);
+    float3 view_top_right = viewSpacePosFromUV(float2(uv_max.x, uv_min.y), 1.0, pc.inv_projection);
+    float3 view_bot_left = viewSpacePosFromUV(float2(uv_min.x, uv_max.y), 1.0, pc.inv_projection);
+    float3 view_bot_right = viewSpacePosFromUV(float2(uv_max.x, uv_max.y), 1.0, pc.inv_projection);
 
     float3 p_near_tl = view_top_left * (-z_near / view_top_left.z);
     float3 p_near_tr = view_top_right * (-z_near / view_top_right.z);

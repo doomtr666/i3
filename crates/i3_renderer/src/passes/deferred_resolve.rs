@@ -1,3 +1,4 @@
+use crate::constants::div_ceil;
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 
@@ -162,8 +163,8 @@ impl RenderPass for DeferredResolvePass {
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
 
-        let grid_x = (common.screen_width + 63) / 64;
-        let grid_y = (common.screen_height + 63) / 64;
+        let grid_x = div_ceil(common.screen_width, 64);
+        let grid_y = div_ceil(common.screen_height, 64);
         let grid_size = [grid_x, grid_y, 16u32];
 
         let push_constants = DeferredResolvePushConstants {

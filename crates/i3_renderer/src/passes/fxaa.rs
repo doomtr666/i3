@@ -52,8 +52,6 @@ impl RenderPass for FxaaPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        let common = *builder.consume::<crate::render_graph::CommonData>("Common");
-
         self.ldr_target = builder.resolve_image("LDR_Target");
         self.backbuffer = builder.resolve_image("Backbuffer");
 
@@ -66,8 +64,6 @@ impl RenderPass for FxaaPass {
                 DescriptorImageLayout::ShaderReadOnlyOptimal,
             );
         });
-
-        let _ = common;
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {

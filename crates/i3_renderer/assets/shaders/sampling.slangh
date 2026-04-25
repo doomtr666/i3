@@ -84,33 +84,33 @@ float3 pcg3f(uint3 v)
     return float3(pcg3(v)) * (1.0f / 4294967296.0f);
 }
 
-// u1, u2 : nombres aléatoires uniformes [0, 1)
-// V : vecteur vue dans l'espace tangent
-// alpha_x, alpha_y : rugosité au carré
+// u1, u2 : uniform random numbers [0, 1)
+// V : view vector in tangent space
+// alpha_x, alpha_y : squared roughness
 float3 sampleGGXVNDF(float3 V, float alpha_x, float alpha_y, float u1, float u2)
 {
-    // 1. Étirement de la vue par la rugosité
+    // 1. Stretch view by roughness
     float3 V_stretched = normalize(float3(alpha_x * V.x, alpha_y * V.y, V.z));
 
-    // 2. Construction d'un repère orthogonal sur la vue étirée
+    // 2. Build orthogonal basis on the stretched view
     float3 T1 = (V_stretched.z < 0.9999f) ? normalize(cross(V_stretched, float3(0, 0, 1))) : float3(1, 0, 0);
     float3 T2 = cross(T1, V_stretched);
 
-    // 3. Échantillonnage sur le disque projeté
+    // 3. Sampling on the projected disk
     float r = sqrt(u1);
     float phi = 2.0f * PI * u2;
     float t1 = r * cos(phi);
     float t2 = r * sin(phi);
 
-    // Mise à l'échelle de l'axe Z pour la projection hémisphérique
-    // L'astuce de Heitz : on re-scale t2 pour simuler le volume
+    // Scale Z axis for hemispherical projection
+    // Heitz's trick: re-scale t2 to simulate volume
     float s = 0.5f * (1.0f + V_stretched.z);
     t2 = (1.0f - s) * sqrt(1.0f - t1 * t1) + s * t2;
 
-    // 4. Reprojection sur la demi-sphère étirée
+    // 4. Reprojection onto the stretched hemisphere
     float3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0f, 1.0f - t1 * t1 - t2 * t2)) * V_stretched;
 
-    // 5. Annulation de l'étirement (retour à l'espace tangent)
+    // 5. Remove stretching (back to tangent space)
     float3 H = normalize(float3(alpha_x * Nh.x, alpha_y * Nh.y, max(0.0f, Nh.z)));
 
     return H;

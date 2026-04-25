@@ -1,3 +1,4 @@
+use crate::constants::{HISTOGRAM_MIN_LOG_LUM, HISTOGRAM_MAX_LOG_LUM};
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 
@@ -78,8 +79,8 @@ impl RenderPass for AverageLuminancePass {
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let dt = *frame.consume::<f32>("TimeDelta");
         let push_constants = AverageLuminancePushConstants {
-            min_log_lum: -10.0,
-            max_log_lum: 10.0,
+            min_log_lum: HISTOGRAM_MIN_LOG_LUM,
+            max_log_lum: HISTOGRAM_MAX_LOG_LUM,
             time_delta: dt,
             adaptation_rate: 2.0,
             pixel_count: (common.screen_width * common.screen_height) as f32,

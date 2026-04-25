@@ -114,4 +114,20 @@ VertexOutput main(float4 pos : POSITION, uniform float4x4 MVP) {
 // VK:   FrontFace=CW (Hidden),   CullMode=User
 // DX12: FrontFace=CCW (Hidden),  CullMode=User
 ```
-```
+
+---
+
+## 6. PBR Roughness Convention
+
+| Name | Source | Range | Used in |
+|:---|:---|:---|:---|
+| `roughness` | GBuffer / textures | [0, 1] | Direct-light geometry (Disney remapping), IBL BRDF LUT |
+| `alpha` | Derived: `roughness * roughness` | [0, 1] | GGX NDF, Smith G2, VNDF sampling, IBL mip selection |
+
+**Rule:** Any shader reading `roughness` from a GBuffer or texture **must** derive `float alpha = roughness * roughness;` before passing it to any GGX equation.
+
+- `DistributionGGX(N, H, alpha)` — takes α.
+- `GGXVNDFWeight(V, L, N, alpha)` — takes α.
+- `GeometrySmith` / `GeometrySchlickGGX` — Disney direct-light remapping `k = (roughness+1)²/8`; takes perceptual `roughness` intentionally.
+- IBL prefiltered-map mip: `mip = alpha * MAX_MIP`.
+- IBL split-sum BRDF LUT: parameterized by `(NdotV, roughness)` — perceptual roughness on the V-axis.

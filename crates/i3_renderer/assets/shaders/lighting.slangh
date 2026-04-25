@@ -23,19 +23,16 @@ struct ClusterAABB {
 
 // --- PBR Functions (Cook-Torrance) ---
 
-float DistributionGGX(float3 N, float3 H, float roughness) {
-    float a = roughness*roughness;
-    float a2 = a*a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH*NdotH;
-
-    float num = a2;
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+float DistributionGGX(float3 N, float3 H, float alpha) {
+    float alpha2 = alpha * alpha;
+    float NdotH  = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    float denom  = NdotH2 * (alpha2 - 1.0) + 1.0;
     denom = PI * denom * denom;
-
-    return num / max(denom, 0.0000001); 
+    return alpha2 / max(denom, 0.0000001);
 }
 
+// Disney direct-light remapping: k = (roughness+1)²/8 — uses perceptual roughness intentionally.
 float GeometrySchlickGGX(float NdotV, float roughness) {
     float r = (roughness + 1.0);
     float k = (r*r) / 8.0;
@@ -62,14 +59,16 @@ float3 fresnelSchlick(float cosTheta, float3 F0) {
 float3 computeBRDF(float3 L, float3 V, float3 N, float3 albedo, float metallic, float roughness, float3 radiance) {
     float3 H = normalize(V + L);
     float NdotL = max(dot(N, L), 0.0);
-    
+
     if (NdotL <= 0.0) return float3(0.0, 0.0, 0.0);
 
-    float3 F0 = float3(0.04, 0.04, 0.04); 
+    float alpha = roughness * roughness;
+
+    float3 F0 = FRESNEL_F0_DIELECTRIC;
     F0 = lerp(F0, albedo, metallic);
 
-    float NDF = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
+    float NDF = DistributionGGX(N, H, alpha);
+    float G = GeometrySmith(N, V, L, roughness); // perceptual roughness for Disney direct-light remapping
     float3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
 
     float3 numerator = NDF * G * F;

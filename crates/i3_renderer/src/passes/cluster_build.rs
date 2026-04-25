@@ -1,3 +1,4 @@
+use crate::constants::{div_ceil, CLUSTER_GRID_Z, CLUSTER_TILE_SIZE};
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 
@@ -63,11 +64,9 @@ impl RenderPass for ClusterBuildPass {
             return;
         };
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
-        let grid_x = (common.screen_width + crate::constants::CLUSTER_TILE_SIZE - 1)
-            / crate::constants::CLUSTER_TILE_SIZE;
-        let grid_y = (common.screen_height + crate::constants::CLUSTER_TILE_SIZE - 1)
-            / crate::constants::CLUSTER_TILE_SIZE;
-        let grid_z: u32 = crate::constants::CLUSTER_GRID_Z;
+        let grid_x = div_ceil(common.screen_width, CLUSTER_TILE_SIZE);
+        let grid_y = div_ceil(common.screen_height, CLUSTER_TILE_SIZE);
+        let grid_z: u32 = CLUSTER_GRID_Z;
         let push_constants = ClusterBuildPushConstants {
             inv_projection: common.inv_projection,
             grid_size: [grid_x, grid_y, grid_z],

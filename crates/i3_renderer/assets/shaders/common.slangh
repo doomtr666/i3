@@ -310,3 +310,35 @@ void buildBasis(float3 N, out float3 T, out float3 B)
     T = float3(1.0f + s * N.x * N.x * a, s * b, -s * N.x);
     B = float3(b, s + N.y * N.y * a, -N.y);
 }
+
+// --- PBR Constants ---
+
+/// Fresnel F0 for common dielectric materials (4% reflectance at normal incidence).
+static const float3 FRESNEL_F0_DIELECTRIC = float3(0.04f, 0.04f, 0.04f);
+
+// --- Position Reconstruction Helpers (Reverse-Z, Vulkan conventions) ---
+
+// Reconstruct world-space position from UV + depth using an arbitrary inv(VP) matrix.
+// Suitable for both current-frame and temporal reprojection.
+float3 worldPosFromDepth(float2 uv, float depth, float4x4 invViewProj)
+{
+    float x =  uv.x * 2.0f - 1.0f;
+    float y = (1.0f - uv.y) * 2.0f - 1.0f;
+    float4 wp = mul(invViewProj, float4(x, y, depth, 1.0f));
+    return wp.xyz / wp.w;
+}
+
+// Reconstruct view-space position from UV [0,1] + depth.
+float3 viewSpacePosFromUV(float2 uv, float depth, float4x4 invProjection)
+{
+    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float4 vh  = mul(invProjection, float4(ndc, depth, 1.0f));
+    return vh.xyz / vh.w;
+}
+
+// Reconstruct view-space position from pixel coords + depth.
+float3 viewSpacePosFromPixel(uint2 px, float depth, float2 screenSize, float4x4 invProjection)
+{
+    float2 uv = (float2(px) + 0.5f) / screenSize;
+    return viewSpacePosFromUV(uv, depth, invProjection);
+}

@@ -2,7 +2,7 @@
 //
 // One ray per pixel per frame, direction importance-sampled from GGX.
 
-#include "common.slangh"
+#include "lighting.slangh"
 #include "sampling.slangh"
 
 struct SssrSamplePc
@@ -33,14 +33,6 @@ RWTexture2D<float4> ssrOutput;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-float3 viewSpacePos(uint2 px, float depth)
-{
-    float2 uv = (float2(px) + 0.5f) / float2(g_common.GetScreenWidth(), g_common.GetScreenHeight());
-    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float4 vh = mul(g_common.invProjection, float4(ndc, depth, 1.0f));
-    return vh.xyz / vh.w;
-}
-
 float3 projectViewToScreenSpace(float3 viewPos)
 {
     float4 clip = mul(g_common.projection, float4(viewPos, 1.0f));
@@ -49,25 +41,20 @@ float3 projectViewToScreenSpace(float3 viewPos)
     return float3(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f, clip.z / clip.w);
 }
 
-float3 FresnelSchlick(float cosTheta, float3 F0)
-{
-    return F0 + (1.0f - F0) * pow(max(1.0f - cosTheta, 0.0f), 5.0f);
-}
-
-// Traçage Hi-Z optimisé pour Reverse-Z (1.0 = Proche, 0.0 = Loin)
-// Retourne true si une intersection valide est trouvée, et stocke la position UVZ du hit.
+// Hi-Z tracing optimized for Reverse-Z (1.0 = Near, 0.0 = Far)
+// Returns true if a valid intersection is found, and stores the hit's UVZ position.
 bool traceHiZ(
-    float3 startUVZ,     // Coordonnées de départ : UV [0,1] + Depth [0,1]
-    float3 rayDirUVZ,    // Direction vectorielle (P_end - P_start projeté)
-    float4x4 invProj,    // Matrice inverse pour le test d'épaisseur
-    float maxThickness,  // Tolérance d'épaisseur en mètres
-    out float3 outHitUVZ // Résultat en UVZ (si hit)
+    float3 startUVZ,     // Starting coordinates: UV [0,1] + Depth [0,1]
+    float3 rayDirUVZ,    // Direction vector (projected P_end - P_start)
+    float4x4 invProj,    // Inverse matrix for thickness testing
+    float maxThickness,  // Thickness tolerance in meters
+    out float3 outHitUVZ // Result in UVZ (if hit)
 )
 {
     const int MaxMipLevel = 5;
     float2 screenSize = g_common.GetScreenSize();
 
-    // 1. SCALER EN ESPACE PIXEL
+    // 1. SCALE TO PIXEL SPACE
     float3 rayPos = float3(startUVZ.xy * screenSize, startUVZ.z);
     float3 rayDir = float3(rayDirUVZ.xy * screenSize, rayDirUVZ.z);
 
@@ -75,7 +62,7 @@ bool traceHiZ(
     if (rayLength < 0.001f)
         return false;
 
-    // Pré-calculs de l'algorithme DDA (Protection NaN)
+    // DDA algorithm pre-computations (NaN protection)
     float2 dir = rayDir.xy;
     dir.x = abs(dir.x) < 1e-5f ? (dir.x >= 0.0f ? 1e-5f : -1e-5f) : dir.x;
     dir.y = abs(dir.y) < 1e-5f ? (dir.y >= 0.0f ? 1e-5f : -1e-5f) : dir.y;
@@ -94,7 +81,7 @@ bool traceHiZ(
     {
         float3 currentPos = rayPos + rayDir * t;
 
-        // Condition d'arrêt : Sortie d'écran
+        // Stop condition: Off-screen
         if (currentPos.x < 0.0f || currentPos.x >= screenSize.x ||
             currentPos.y < 0.0f || currentPos.y >= screenSize.y ||
             currentPos.z < 0.0f || currentPos.z > 1.0f)
@@ -111,7 +98,7 @@ bool traceHiZ(
         float tAdvance = min(tToBoundary.x, tToBoundary.y);
         float nextT = t + tAdvance;
 
-        // Test d'heuristique (Reverse-Z)
+        // Heuristic test (Reverse-Z)
         float z1 = currentPos.z;
         float z2 = rayPos.z + rayDir.z * nextT;
         float minZ_segment = min(z1, z2);
@@ -123,9 +110,9 @@ bool traceHiZ(
         {
             if (mipLevel == 0)
             {
-                // --- TEST D'ÉPAISSEUR INTÉGRÉ ---
+                // --- INTEGRATED THICKNESS TEST ---
                 float2 ndc_xy = (currentPos.xy / screenSize) * 2.0f - 1.0f;
-                ndc_xy.y = -ndc_xy.y; // Inversion Vulkan
+                ndc_xy.y = -ndc_xy.y; // Vulkan inversion
 
                 float4 ray_clip = mul(invProj, float4(ndc_xy, currentPos.z, 1.0f));
                 float ray_view_z = ray_clip.z / ray_clip.w;
@@ -137,14 +124,14 @@ bool traceHiZ(
 
                 if (thickness > maxThickness)
                 {
-                    // Faux positif : on passe derrière un objet fin (ex: guirlande).
-                    // On avance et on continue à chercher.
+                    // False positive: passing behind a thin object (e.g., a garland).
+                    // Advance and continue searching.
                     t = nextT;
                     mipLevel = min(mipLevel + 1, MaxMipLevel);
                     continue;
                 }
 
-                // Vrai contact
+                // Valid hit
                 outHitUVZ = float3(currentPos.xy / screenSize, currentPos.z);
                 return true;
             }
@@ -189,11 +176,11 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     float roughness = rm.r;
     float alpha = roughness * roughness;
 
-    float3 P = viewSpacePos(px, depth);
+    float3 P = viewSpacePosFromPixel(px, depth, g_common.GetScreenSize(), g_common.invProjection);
     float3 N_world = decodeOctahedral(gbufferNormal.Load(int3(px, 0)).rg);
-    // Albedo lu depuis le GBuffer (nécessaire pour le Fresnel des métaux)
+    // Albedo read from GBuffer (required for metal Fresnel)
     float3 albedo = gbufferAlbedo.Load(int3(px, 0));
-    float3 F0 = lerp(float3(0.04f), albedo, metallic);
+    float3 F0 = lerp(FRESNEL_F0_DIELECTRIC, albedo, metallic);
 
     float3x3 viewRot = float3x3(g_common.view[0].xyz, g_common.view[1].xyz, g_common.view[2].xyz);
     float3 N = normalize(mul(viewRot, N_world));
@@ -207,32 +194,32 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     {
         float3 noise = pcg3f(uint3(px, g_common.GetFrameIndex()));
 
-        // 1. Construire la base
+        // 1. Build basis
         float3 T, B;
         buildBasis(N, T, B);
 
-        // 2. Transformer V en espace tangent
+        // 2. Transform V to tangent space
         float3 V_tangent = float3(dot(V, T), dot(V, B), dot(V, N));
 
-        // 3. Sampler avec le V tangentiel
+        // 3. Sample with tangential V
         float3 H_local = sampleGGXVNDF(V_tangent, alpha, alpha, noise.x, noise.y);
 
-        // 4. Repasser H en View Space
+        // 4. Transform H back to View Space
         float3 H = normalize(T * H_local.x + B * H_local.y + N * H_local.z);
 
         float3 D = reflect(-V, H);
 
-        // Matrice inverse pour repasser en World Space (à adapter selon ta structure exacte)
+        // Inverse matrix to transform back to World Space (adjust to your specific structure)
         float3x3 invViewRot = float3x3(g_common.invView[0].xyz, g_common.invView[1].xyz, g_common.invView[2].xyz);
         float3 D_world = normalize(mul(invViewRot, D));
 
         float3 output_color = bindlessTextures[g_common.GetIblEnvIndex()].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(D_world), 0).rgb;
 
-        // Rejet si le rayon plonge sous la géométrie
+        // Reject if ray plunges below geometry
         if (dot(D, N) > 0.001f)
         {
 
-            // Calcul du point de fin du rayon (ex: 100 mètres)
+            // Calculate ray end point (e.g., 100 meters)
             float3 P_end = P + D * 1000.0f;
 
             float3 screen_P = projectViewToScreenSpace(P);
@@ -244,22 +231,22 @@ void computeMain(uint3 id: SV_DispatchThreadID)
             float step_scale = 1.0f / max(abs(screen_RayDir_Pixels.x), abs(screen_RayDir_Pixels.y));
             float3 ray_step_screen = screen_RayDir * step_scale;
 
-            // --- LE FIX (Ray Bump) ---
-            // Offset pour éviter l'auto-intersection
+            // --- THE FIX (Ray Bump) ---
+            // Offset to avoid self-intersection
             float start_offset = 2.0f; // + noise.z;
             float3 safe_start_P = screen_P + ray_step_screen * start_offset;
 
-            // Lancer avec test d'épaisseur intégré
+            // Trace with integrated thickness test
             float3 hit_UVZ;
             bool valid_hit = traceHiZ(safe_start_P, ray_step_screen, g_common.invProjection, pc.thickness, hit_UVZ);
 
             if (valid_hit)
             {
 
-                // 3. Validation Backface
+                // 3. Backface validation
                 uint2 hit_px = uint2(hit_UVZ.xy * g_common.GetScreenSize());
                 float3 hit_N_world = decodeOctahedral(gbufferNormal.Load(int3(hit_px, 0)).rg);
-                float3 hit_N = normalize(mul(viewRot, hit_N_world)); // On le repasse en View Space !
+                float3 hit_N = normalize(mul(viewRot, hit_N_world)); // Transform back to View Space!
                 float N_dot_D = dot(hit_N, D);
                 if (N_dot_D < -0.001f)
                 {
@@ -268,7 +255,7 @@ void computeMain(uint3 id: SV_DispatchThreadID)
             }
         }
 
-        float3 brdf_weight = FresnelSchlick(max(dot(V, H), 0.0f), F0) * GGXVNDFWeight(V, D, N, alpha);
+        float3 brdf_weight = fresnelSchlick(max(dot(V, H), 0.0f), F0) * GGXVNDFWeight(V, D, N, alpha);
         accum_color += output_color * brdf_weight;
     }
     ssrOutput[px] = float4(accum_color / NUM_SAMPLES, 1.0f);

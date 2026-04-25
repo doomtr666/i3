@@ -1,3 +1,4 @@
+use crate::constants::div_ceil;
 use bytemuck::{Pod, Zeroable};
 use i3_gfx::graph::backend::{
     BackendPipeline, DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, PassContext,
@@ -189,9 +190,7 @@ impl RenderPass for HiZBlitSubPass {
         );
         ctx.bind_descriptor_set(0, descriptor_set);
 
-        let groups_x = (self.dst_size[0] + 7) / 8;
-        let groups_y = (self.dst_size[1] + 7) / 8;
-        ctx.dispatch(groups_x, groups_y, 1);
+        ctx.dispatch(div_ceil(self.dst_size[0], 8), div_ceil(self.dst_size[1], 8), 1);
     }
 }
 
@@ -248,8 +247,6 @@ impl RenderPass for HiZReduceSubPass {
         );
         ctx.bind_descriptor_set(0, descriptor_set);
 
-        let groups_x = (self.dst_size[0] + 7) / 8;
-        let groups_y = (self.dst_size[1] + 7) / 8;
-        ctx.dispatch(groups_x, groups_y, 1);
+        ctx.dispatch(div_ceil(self.dst_size[0], 8), div_ceil(self.dst_size[1], 8), 1);
     }
 }

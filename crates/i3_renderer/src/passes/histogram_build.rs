@@ -1,3 +1,4 @@
+use crate::constants::{div_ceil, HISTOGRAM_MIN_LOG_LUM, HISTOGRAM_MAX_LOG_LUM};
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 
@@ -79,16 +80,15 @@ impl RenderPass for HistogramBuildPass {
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let dt = *frame.consume::<f32>("TimeDelta");
         let push_constants = HistogramPushConstants {
-            min_log_lum: -10.0,
-            max_log_lum: 10.0,
+            min_log_lum: HISTOGRAM_MIN_LOG_LUM,
+            max_log_lum: HISTOGRAM_MAX_LOG_LUM,
             time_delta: dt,
             pad: 0,
         };
         ctx.bind_pipeline_raw(pipeline);
         ctx.push_constant_data(ShaderStageFlags::Compute, 0, &push_constants);
-        // Assuming GROUP_SIZE = 16
-        let group_count_x = (common.screen_width + 15) / 16;
-        let group_count_y = (common.screen_height + 15) / 16;
+        let group_count_x = div_ceil(common.screen_width, 16);
+        let group_count_y = div_ceil(common.screen_height, 16);
         ctx.dispatch(group_count_x, group_count_y, 1);
     }
 }

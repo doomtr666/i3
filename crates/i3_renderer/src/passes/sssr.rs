@@ -1,3 +1,4 @@
+use crate::constants::div_ceil;
 use bytemuck::{Pod, Zeroable};
 use i3_gfx::graph::backend::{
     BackendPipeline, DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, PassContext,
@@ -219,7 +220,7 @@ impl RenderPass for SssrSamplePass {
         ctx.bind_descriptor_set(0, ds);
 
         ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
-        ctx.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(w, 8), div_ceil(h, 8), 1);
     }
 }
 
@@ -389,7 +390,7 @@ impl RenderPass for SssrTemporalPass {
         ctx.bind_descriptor_set(0, ds);
 
         ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
-        ctx.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(w, 8), div_ceil(h, 8), 1);
     }
 }
 
@@ -545,6 +546,6 @@ impl RenderPass for SssrCompositePass {
         ctx.bind_descriptor_set(0, ds);
 
         ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
-        ctx.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(w, 8), div_ceil(h, 8), 1);
     }
 }

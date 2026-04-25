@@ -24,3 +24,16 @@ pub const DRAW_INDIRECT_CMD_SIZE: u64 = 20;
 /// Maximum number of materials in the material buffer.
 pub const MAX_MATERIALS: u64 = 65536;
 
+/// Log-luminance range for the histogram passes.
+/// Both HistogramBuildPass and AverageLuminancePass must use identical values
+/// so that bin indices are consistent across the two passes.
+pub const HISTOGRAM_MIN_LOG_LUM: f32 = -10.0;
+pub const HISTOGRAM_MAX_LOG_LUM: f32 = 10.0;
+
+/// Ceiling-division: smallest integer ≥ n/d.
+/// Used to compute compute-shader dispatch group counts.
+#[inline(always)]
+pub const fn div_ceil(n: u32, d: u32) -> u32 {
+    (n + d - 1) / d
+}
+

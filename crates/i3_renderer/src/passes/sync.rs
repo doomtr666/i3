@@ -4,7 +4,7 @@ use i3_gfx::prelude::*;
 
 pub struct MeshRegistrySyncPass {
     mesh_descriptors:        Vec<(u32, GpuMeshDescriptor)>,
-    pub mesh_descriptors_cache:  Vec<(u32, GpuMeshDescriptor)>,
+    pub(crate) mesh_descriptors_cache:  Vec<(u32, GpuMeshDescriptor)>,
     mesh_descriptor_buffer:  BufferHandle,
     physical_buffer:         BackendBuffer,
     staging_buffer:          Option<BufferHandle>,
@@ -121,7 +121,7 @@ impl RenderPass for MeshRegistrySyncPass {
 
 pub struct InstanceSyncPass {
     instances:        Vec<GpuInstanceData>,
-    pub instances_cache:  Vec<GpuInstanceData>,
+    pub(crate) instances_cache:  Vec<GpuInstanceData>,
     instance_buffer:  BufferHandle,
     physical_buffer:  BackendBuffer,
     staging_buffer:   Option<BufferHandle>,
@@ -221,7 +221,7 @@ pub struct MaterialSyncPass {
     physical_buffer:  BackendBuffer,
     staging_buffer:   Option<BufferHandle>,
     materials:        Vec<(u32, MaterialData)>,
-    pub materials_cache:  Vec<(u32, MaterialData)>,
+    pub(crate) materials_cache:  Vec<(u32, MaterialData)>,
     pub is_dirty:     bool,
 }
 

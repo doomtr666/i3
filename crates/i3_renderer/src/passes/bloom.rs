@@ -1,3 +1,4 @@
+use crate::constants::div_ceil;
 use bytemuck::{Pod, Zeroable};
 use i3_gfx::graph::backend::{
     BackendPipeline, DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, PassContext,
@@ -249,7 +250,7 @@ impl RenderPass for BloomPrefilterSubPass {
 
         let dst_w = (self.hdr_size[0] / 2).max(1);
         let dst_h = (self.hdr_size[1] / 2).max(1);
-        ctx.dispatch((dst_w + 7) / 8, (dst_h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(dst_w, 8), div_ceil(dst_h, 8), 1);
     }
 }
 
@@ -302,7 +303,7 @@ impl RenderPass for BloomDownSubPass {
 
         let dst_w = (self.src_size[0] / 2).max(1);
         let dst_h = (self.src_size[1] / 2).max(1);
-        ctx.dispatch((dst_w + 7) / 8, (dst_h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(dst_w, 8), div_ceil(dst_h, 8), 1);
     }
 }
 
@@ -357,7 +358,7 @@ impl RenderPass for BloomUpSubPass {
         // Destination mip is one level finer (2× each dim).
         let dst_w = (self.src_size[0] * 2).max(1);
         let dst_h = (self.src_size[1] * 2).max(1);
-        ctx.dispatch((dst_w + 7) / 8, (dst_h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(dst_w, 8), div_ceil(dst_h, 8), 1);
     }
 }
 
@@ -414,6 +415,6 @@ impl RenderPass for BloomCompositeSubPass {
         let common = frame.consume::<crate::render_graph::CommonData>("Common");
         let w = common.screen_width;
         let h = common.screen_height;
-        ctx.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        ctx.dispatch(div_ceil(w, 8), div_ceil(h, 8), 1);
     }
 }

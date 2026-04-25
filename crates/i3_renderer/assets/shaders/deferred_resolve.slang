@@ -1,9 +1,6 @@
 // assets/system/shaders/deferred_resolve.slang
 #include "lighting.slangh"
-
-#define USE_RT
-#define USE_IBL
-
+#include "raytracing.slangh"
 struct PushConstants
 {
     uint3 grid_size;
@@ -45,28 +42,6 @@ struct VertexOutput
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
 };
-
-#ifdef USE_RT
-
-bool traceShadow(RayDesc ray)
-{
-    // Use optimized ray query for shadow testing - terminates at first hit
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
-
-    // Process intersections (simplified for shadow rays)
-    while (q.Proceed())
-    {
-        // For non-opaque triangles, force them to be opaque (simplified alpha handling)
-        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
-            q.CommitNonOpaqueTriangleHit(); // Accept intersection as solid
-    }
-
-    // Return true if any intersection was found (surface is in shadow)
-    return (q.CommittedStatus() != COMMITTED_NOTHING);
-}
-
-#endif
 
 [shader("vertex")]
 VertexOutput vertexMain(uint vertexId: SV_VertexID)
@@ -126,9 +101,9 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     ClusterGridData grid_item = cluster_grid[cluster_index];
 
     float3 V = normalize(g_common.GetCameraPos() - world_pos);
-#ifdef USE_IBL
+
     // IBL ambient
-    float3 F0 = lerp(float3(0.04), albedo, metallic);
+    float3 F0 = lerp(FRESNEL_F0_DIELECTRIC, albedo, metallic);
     float NdotV = saturate(dot(normal, V));
 
     float3 kS = F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
@@ -143,9 +118,6 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 
     float ao = lerp(1.0f, aoTexture.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r, pc.ao_strength);
     float3 color = emissive + diffuse_ambient * g_common.GetIblIntensity() * ao;
-#else
-    float3 color = emissive + 0.005 * albedo;
-#endif
 
     for (uint i = 0; i < grid_item.count; ++i)
     {
@@ -162,22 +134,19 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         {
             L = normalize(-light.direction);
 
-#ifdef USE_RT
             // visibility test
             RayDesc rd;
             rd.Origin = world_pos;
             rd.Direction = L;
             rd.TMin = 0.001f;
             rd.TMax = 1e6;
-            if (!traceShadow(rd))
-#endif
+            if (!traceShadow(tlas, rd))
             {
                 radiance = light.color * light.intensity;
             }
         }
         else // point light
         {
-#ifdef USE_RT
             // visibility test
             RayDesc rd;
             rd.Origin = world_pos;
@@ -185,8 +154,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
             rd.TMin = 0.001f;
             rd.TMax = distance;
 
-            if (!traceShadow(rd))
-#endif
+            if (!traceShadow(tlas, rd))
             {
                 float attenuation = 1.0 / max(distance * distance, 0.01);
                 float r = distance / light.radius;
@@ -210,7 +178,6 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         float density = float(grid_item.count) / 64.0;
         color = float3(density, 0.0, 1.0 - density);
     }
-
 
     float prev_ex = exposure_buffer[0].new_exposure;
     if (prev_ex == 0.0)

@@ -31,21 +31,11 @@ RWTexture2D<float> aoOutput;
 
 // ─── Position reconstruction ──────────────────────────────────────────────────
 
-float3 viewSpacePos(uint2 px, float depth)
-{
-    float2 uv = (float2(px) + 0.5f) / pc.screenSize;
-    // Vulkan viewport: Y-down in screen space, Y-up in NDC/view space → flip Y
-    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float4 clip = float4(ndc, depth, 1.0f);
-    float4 vh = mul(pc.invProjection, clip);
-    return vh.xyz / vh.w;
-}
-
 float3 sampleViewPos(float2 screenPos)
 {
     // round() restores symmetry so +dir and -dir sample at identical pixel offsets
     int2 ipx = int2(round(clamp(screenPos, float2(0.0f), float2(pc.screenSize) - 1.0f)));
-    return viewSpacePos(uint2(ipx), depthBuffer[ipx].r);
+    return viewSpacePosFromPixel(uint2(ipx), depthBuffer[ipx].r, pc.screenSize, pc.invProjection);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -71,7 +61,7 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
     }
 
     // 1. Setup base vectors
-    float3 P = viewSpacePos(px, depth);
+    float3 P = viewSpacePosFromPixel(px, depth, pc.screenSize, pc.invProjection);
     float3 V = normalize(-P); // Vector pointing to the camera
 
     // Decode and transform normal to view space
@@ -132,12 +122,12 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
             float3 d1 = S1 - P;
             float dist2_1 = dot(d1, d1);
 
-            // CORRECTION 1 : Atténuation basée sur la distance 3D réelle au lieu des pixels
+            // CORRECTION 1 : Attenuation based on actual 3D distance instead of pixels
             float w1 = saturate(1.0f - dist2_1 / radius2);
             w1 = pow(w1, pc.falloff);
 
-            // CORRECTION 2 : Rejet strict des objets de premier plan
-            // Si l'échantillon est plus proche de la caméra que P d'une distance > thickness, on l'ignore.
+            // CORRECTION 2 : Strict rejection of foreground objects
+            // If sample is closer to camera than P by distance > thickness, ignore it.
             if ((S1.z - P.z) > thickness_threshold)
                 w1 = 0.0f;
 

@@ -26,16 +26,6 @@ TemporalPushConstants pc;
 [[vk::binding(2, 0)]] Texture2D<float>   aoHistory;  // previous frame accumulated
 [[vk::binding(3, 0)]] RWTexture2D<float> aoResolved; // output (also becomes next history)
 
-// Reconstruct world-space position from UV + depth (reverse-Z, Vulkan conventions).
-float3 worldPosFromDepth(float2 uv, float depth)
-{
-    // Vulkan NDC: X in [-1,1] left→right, Y in [-1,1] bottom→top (after Y-flip from UV)
-    float x =  uv.x * 2.0f - 1.0f;
-    float y = (1.0f - uv.y) * 2.0f - 1.0f;
-    float4 clip = float4(x, y, depth, 1.0f);
-    float4 wp   = mul(pc.invViewProj, clip);
-    return wp.xyz / wp.w;
-}
 
 [numthreads(8, 8, 1)]
 void computeMain(uint3 id: SV_DispatchThreadID)
@@ -58,7 +48,7 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     }
 
     // 1. Reconstruct world position.
-    float3 worldPos = worldPosFromDepth(uv, depth);
+    float3 worldPos = worldPosFromDepth(uv, depth, pc.invViewProj);
 
     // 2. Project into previous frame.
     float4 prevClip = mul(pc.prevViewProj, float4(worldPos, 1.0f));

@@ -1,10 +1,7 @@
+use crate::constants::MAX_INSTANCES;
 use std::sync::Arc;
 use i3_gfx::prelude::*;
 
-
-pub struct DrawCommand {
-    pub mesh: crate::scene::Mesh,
-}
 
 /// GBuffer vertex layout: position + normal + color.
 #[repr(C)]
@@ -150,7 +147,7 @@ impl RenderPass for GBufferFillPass {
             0,
             self.draw_count_buffer,
             0,
-            1024 * 64,
+            MAX_INSTANCES as u32,
             std::mem::size_of::<i3_gfx::graph::backend::DrawIndirectCommand>() as u32,
         );
     }

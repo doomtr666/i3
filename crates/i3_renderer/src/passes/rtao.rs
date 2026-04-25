@@ -1,3 +1,4 @@
+use crate::constants::div_ceil;
 use bytemuck::{Pod, Zeroable};
 use i3_gfx::graph::backend::{
     BackendPipeline, DescriptorImageLayout, DescriptorSetHandle, DescriptorWrite, PassContext,
@@ -160,8 +161,6 @@ impl RenderPass for RtaoPass {
         );
         ctx.bind_descriptor_set(0, ds);
 
-        let gx = (width  + 7) / 8;
-        let gy = (height + 7) / 8;
-        ctx.dispatch(gx, gy, 1);
+        ctx.dispatch(div_ceil(width, 8), div_ceil(height, 8), 1);
     }
 }

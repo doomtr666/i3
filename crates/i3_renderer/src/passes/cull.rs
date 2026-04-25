@@ -1,4 +1,4 @@
-use crate::constants::{DRAW_INDIRECT_CMD_SIZE, MAX_INSTANCES};
+use crate::constants::{div_ceil, DRAW_INDIRECT_CMD_SIZE, MAX_INSTANCES};
 use i3_gfx::prelude::*;
 use std::sync::Arc;
 
@@ -110,8 +110,7 @@ impl RenderPass for DrawCallGenComputePass {
             },
         );
 
-        let group_count = (self.instance_count + 63) / 64;
-        ctx.dispatch(group_count, 1, 1);
+        ctx.dispatch(div_ceil(self.instance_count, 64), 1, 1);
     }
 }
 

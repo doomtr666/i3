@@ -1,3 +1,4 @@
+use crate::constants::{div_ceil, CLUSTER_GRID_Z, CLUSTER_TILE_SIZE};
 use crate::passes::average_luminance::AverageLuminancePass;
 use crate::passes::cluster_build::ClusterBuildPass;
 use crate::passes::fxaa::FxaaPass;
@@ -36,9 +37,9 @@ impl RenderPass for ClusteringGroup {
 
     fn declare(&mut self, builder: &mut PassBuilder) {
         let common = *builder.consume::<crate::render_graph::CommonData>("Common");
-        let grid_x = (common.screen_width + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
-        let grid_y = (common.screen_height + crate::constants::CLUSTER_TILE_SIZE - 1) / crate::constants::CLUSTER_TILE_SIZE;
-        let grid_z: u32 = crate::constants::CLUSTER_GRID_Z;
+        let grid_x = div_ceil(common.screen_width, CLUSTER_TILE_SIZE);
+        let grid_y = div_ceil(common.screen_height, CLUSTER_TILE_SIZE);
+        let grid_z: u32 = CLUSTER_GRID_Z;
         let max_clusters = (grid_x * grid_y * grid_z) as u64;
 
         builder.declare_buffer_output("ClusterAABBs", BufferDesc {

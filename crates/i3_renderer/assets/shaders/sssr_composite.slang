@@ -72,9 +72,10 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     float3 albedo = gbufferAlbedo[coord].rgb;
     float2 rm = gbufferRoughMetal[coord].rg;
     float roughness = rm.r;
-    float metallic = rm.g;
+    float alpha     = roughness * roughness;
+    float metallic  = rm.g;
 
-    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float3 F0 = lerp(FRESNEL_F0_DIELECTRIC, albedo, metallic);
     float NdotV = saturate(dot(N, V));
     float ao = aoResolved[coord].r;
 
@@ -89,7 +90,7 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     if (g_common.GetIblPrefIndex() != 0 && g_common.GetIblLutIndex() != 0)
     {
         float3 R_mirror = reflect(-V, N);
-        float mip = roughness * 5.0f;
+        float mip = alpha * 5.0f;
         float3 prefiltered = bindlessTextures[g_common.GetIblPrefIndex()]
                                  .SampleLevel(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(R_mirror), mip)
                                  .rgb;

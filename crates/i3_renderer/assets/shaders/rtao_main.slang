@@ -7,6 +7,7 @@
 
 #include "common.slangh"
 #include "sampling.slangh"
+#include "raytracing.slangh"
 
 struct RtaoPushConstants
 {
@@ -36,33 +37,6 @@ RWTexture2D<float> aoOutput; // resolved AO for this frame
 [[vk::binding(5, 0)]]
 RaytracingAccelerationStructure tlas;
 
-float3 worldSpacePos(uint2 px, float depth)
-{
-    float2 uv = (float2(px) + 0.5f) / pc.screenSize;
-    // Vulkan viewport: Y-down in screen space, Y-up in NDC/view space → flip Y
-    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float4 clip = float4(ndc, depth, 1.0f);
-    float4 vh = mul(pc.invViewProj, clip);
-    return vh.xyz / vh.w;
-}
-
-bool traceShadow(RayDesc ray)
-{
-    // Use optimized ray query for shadow testing - terminates at first hit
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
-
-    // Process intersections (simplified for shadow rays)
-    while (q.Proceed())
-    {
-        // For non-opaque triangles, force them to be opaque (simplified alpha handling)
-        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
-            q.CommitNonOpaqueTriangleHit(); // Accept intersection as solid
-    }
-
-    // Return true if any intersection was found (surface is in shadow)
-    return (q.CommittedStatus() != COMMITTED_NOTHING);
-}
 
 [numthreads(8, 8, 1)]
 void computeMain(uint3 dispatchId: SV_DispatchThreadID)
@@ -80,7 +54,8 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
         rtaoAccumOut[int2(px)] = 1.0f;
         return;
     }
-    float3 P = worldSpacePos(px, depth);
+    float2 uv = (float2(px) + 0.5f) / pc.screenSize;
+    float3 P = worldPosFromDepth(uv, depth, pc.invViewProj);
 
     // decode world space normal
     float3 N = decodeOctahedral(gbufferNormal[px].rg);
@@ -106,7 +81,7 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
     ray.TMin = 0.001f;
     ray.TMax = pc.radius;
 
-    float visibility = traceShadow(ray) ? 0.0 : 1.0;
+    float visibility = traceShadow(tlas, ray) ? 0.0 : 1.0;
 
     // Progressive accumulation
     float accumulated;
