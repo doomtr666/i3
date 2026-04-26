@@ -6,6 +6,9 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+profiling = ["i3_renderer/profiling", "i3_vulkan_backend/profiling", "i3_gfx/profiling"]
+
 [dependencies]
 i3_gfx = { path = "../../crates/i3_gfx" }
 i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }

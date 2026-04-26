@@ -250,6 +250,7 @@ pub struct DefaultRenderGraph {
     pub hiz_build_final: crate::passes::hiz_build::HiZBuildPass,
     pub sssr_sample_pass: crate::passes::sssr::SssrSamplePass,
     pub sssr_temporal_pass: crate::passes::sssr::SssrTemporalPass,
+    pub sssr_bilateral_pass: crate::passes::sssr::SssrBilateralUpsamplePass,
     pub sssr_composite_pass: crate::passes::sssr::SssrCompositePass,
     pub bloom_pass: crate::passes::bloom::BloomPass,
 
@@ -452,6 +453,7 @@ impl DefaultRenderGraph {
         let mut sssr_sample_pass = crate::passes::sssr::SssrSamplePass::new();
         sssr_sample_pass.blue_noise_index = blue_noise_index;
         let sssr_temporal_pass = crate::passes::sssr::SssrTemporalPass::new();
+        let sssr_bilateral_pass = crate::passes::sssr::SssrBilateralUpsamplePass::new();
         let sssr_composite_pass = crate::passes::sssr::SssrCompositePass::new();
         let bloom_pass = crate::passes::bloom::BloomPass::new();
         let mut gtao_group = GtaoGroup::new();
@@ -489,6 +491,7 @@ impl DefaultRenderGraph {
             hiz_build_final,
             sssr_sample_pass,
             sssr_temporal_pass,
+            sssr_bilateral_pass,
             sssr_composite_pass,
             bloom_pass,
             scene_mesh_descriptors: Vec::new(),
@@ -661,6 +664,8 @@ impl DefaultRenderGraph {
             .init_pass_direct(&mut self.sssr_sample_pass, backend);
         self.graph
             .init_pass_direct(&mut self.sssr_temporal_pass, backend);
+        self.graph
+            .init_pass_direct(&mut self.sssr_bilateral_pass, backend);
         self.graph
             .init_pass_direct(&mut self.sssr_composite_pass, backend);
         self.graph.init_pass_direct(&mut self.bloom_pass, backend);
@@ -1155,8 +1160,6 @@ impl DefaultRenderGraph {
         frame_data.publish("DebugChannel", self.debug_channel as u32);
         frame_data.publish("BindlessSet", self.bindless_manager.bindless_set);
 
-        // Camera-moved detection (before updating prev, so comparison is valid).
-        let camera_moved = view_projection != self.prev_view_projection;
         // Update prev VP for the next frame (after publishing this frame's prev)
         self.prev_view_projection = view_projection;
 
@@ -1177,18 +1180,12 @@ impl DefaultRenderGraph {
         // AO mode switch → recompile graph (different group added to the graph).
         if self.ao_mode != self.prev_ao_mode {
             self.graph_dirty = true;
-            self.rtao_group.rtao_pass.reset_accumulation();
             self.prev_ao_mode = self.ao_mode;
         }
 
         self.rtao_group.rtao_pass.blue_noise_index = self.blue_noise_index;
         self.gtao_group.tick();
         self.rtao_group.tick();
-
-        // Reset RTAO accumulation on camera move.
-        if camera_moved {
-            self.rtao_group.rtao_pass.reset_accumulation();
-        }
         self.sssr_sample_pass.tick();
         self.sssr_temporal_pass.tick();
 
@@ -1460,6 +1457,7 @@ impl DefaultRenderGraph {
                 || channel == DebugChannel::ClusterGrid
                 || channel == DebugChannel::SsrResolved
                 || channel == DebugChannel::SsrRaw
+                || channel == DebugChannel::SsrUpsampled
                 || channel == DebugChannel::BloomBuffer
             {
                 // 4. Deferred Lighting (includes HdrMipsPass + SSR + Bloom)
@@ -1498,7 +1496,9 @@ impl DefaultRenderGraph {
         builder.add_pass(&mut self.deferred_resolve_pass);
         builder.add_pass(&mut self.sssr_sample_pass);
         builder.add_pass(&mut self.sssr_temporal_pass);
-        // Composite SSR_Resolved onto HDR_Target (in-place, mip 0).
+        // Bilateral upsample: low-res SSR_Resolved → full-res SSR_Upsampled.
+        builder.add_pass(&mut self.sssr_bilateral_pass);
+        // Composite SSR_Upsampled onto HDR_Target (in-place, mip 0).
         builder.add_pass(&mut self.sssr_composite_pass);
         // Bloom — bright-pass filter → downsample → upsample → additive composite.
         builder.add_pass(&mut self.bloom_pass);

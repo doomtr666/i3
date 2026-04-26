@@ -126,11 +126,16 @@ fn copy_dll_to_output_from_path(dll_path: &Path, dll_name: &str) -> Result<(), B
         return Err(format!("Missing DLL: {}", dll_name).into());
     }
 
-    let target_dir = get_target_dir()?;
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let output_dir = target_dir.join(profile);
+    // OUT_DIR is target/<profile>/build/<crate>-<hash>/out — navigate up to target/<profile>/
+    // PROFILE returns "release" for any release-inheriting profile, so it can't be used for
+    // custom profiles like [profile.profiling]. OUT_DIR is always correct.
+    let out_dir = env::var("OUT_DIR")?;
+    let output_dir = Path::new(&out_dir)
+        .parent().unwrap() // out → <crate>-<hash>
+        .parent().unwrap() // <crate>-<hash> → build
+        .parent().unwrap(); // build → target/<profile>
 
-    fs::create_dir_all(&output_dir)?;
+    fs::create_dir_all(output_dir)?;
     let dest_path = output_dir.join(dll_name);
 
     fs::copy(dll_path, &dest_path)?;
@@ -179,15 +184,3 @@ pub fn setup_native_lib(lib_name: &str, link_libs: &[&str]) -> Result<(), Box<dy
     Ok(())
 }
 
-/// Finds the workspace target directory
-fn get_target_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // Use CARGO_TARGET_DIR if defined
-    if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
-        return Ok(PathBuf::from(target_dir));
-    }
-
-    // Otherwise, look in the workspace
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let workspace_root = find_workspace_root(&manifest_dir);
-    Ok(workspace_root.join("target"))
-}

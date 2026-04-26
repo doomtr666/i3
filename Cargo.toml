@@ -49,3 +49,12 @@ i3_io = { path = "crates/i3_io" }
 i3_slang = { path = "crates/i3_slang" }
 postcard = "1.0"
 ron = "0.8"
+
+[profile.release]
+debug = 0
+strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = 2
+strip = "none"

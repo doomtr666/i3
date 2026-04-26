@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "rtao_temporal",
+    shader: Path("../shaders/rtao_temporal.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "computeMain",
+    )),
+)

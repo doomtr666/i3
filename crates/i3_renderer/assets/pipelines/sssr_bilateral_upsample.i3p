@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "sssr_bilateral_upsample",
+    shader: Path("../shaders/sssr_bilateral_upsample.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "computeMain",
+    )),
+)

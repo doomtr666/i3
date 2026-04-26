@@ -230,11 +230,18 @@ impl ImportedData for ImportedPipelineData {
 }
 
 #[derive(Clone, Copy)]
-pub struct PipelineImporter;
+pub struct PipelineImporter {
+    pub debug_info: bool,
+}
 
 impl PipelineImporter {
     pub fn new() -> Self {
-        Self
+        Self { debug_info: false }
+    }
+
+    pub fn with_debug_info(mut self, v: bool) -> Self {
+        self.debug_info = v;
+        self
     }
 }
 
@@ -254,8 +261,9 @@ impl Importer for PipelineImporter {
         let config: PipelineConfig = ron::from_str(&content)
             .map_err(|e| crate::error::BakerError::Pipeline(format!("Failed to parse RON {}: {}", source_path.display(), e)))?;
 
-        let compiler = SlangCompiler::new()
+        let mut compiler = SlangCompiler::new()
             .map_err(|e| crate::error::BakerError::Pipeline(e))?;
+        compiler.debug_info = self.debug_info;
 
         let shader_module = if let Some(compute) = &config.compute {
             let rel_path = match &config.shader {

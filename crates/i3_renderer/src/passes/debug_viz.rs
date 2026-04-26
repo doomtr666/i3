@@ -17,6 +17,7 @@ pub enum DebugChannel {
     Lit = 10,
     LightDensity = 11,
     ClusterGrid = 12,
+    SsrUpsampled = 13,
 }
 
 
@@ -46,10 +47,11 @@ pub struct DebugVizPass {
     gbuffer_roughmetal: ImageHandle,
     gbuffer_emissive: ImageHandle,
     gbuffer_depth: ImageHandle,
-    ao_resolved:  ImageHandle,
-    ssr_resolved: ImageHandle,
-    ssr_raw:      ImageHandle,
-    bloom_buf:    ImageHandle,
+    ao_resolved:   ImageHandle,
+    ssr_resolved:  ImageHandle,
+    ssr_raw:       ImageHandle,
+    ssr_upsampled: ImageHandle,
+    bloom_buf:     ImageHandle,
 
 
     // Persistence
@@ -65,10 +67,11 @@ impl DebugVizPass {
             gbuffer_roughmetal: ImageHandle::INVALID,
             gbuffer_emissive: ImageHandle::INVALID,
             gbuffer_depth: ImageHandle::INVALID,
-            ao_resolved:  ImageHandle::INVALID,
-            ssr_resolved: ImageHandle::INVALID,
-            ssr_raw:      ImageHandle::INVALID,
-            bloom_buf:    ImageHandle::INVALID,
+            ao_resolved:   ImageHandle::INVALID,
+            ssr_resolved:  ImageHandle::INVALID,
+            ssr_raw:       ImageHandle::INVALID,
+            ssr_upsampled: ImageHandle::INVALID,
+            bloom_buf:     ImageHandle::INVALID,
 
             channel: DebugChannel::Lit,
             backbuffer_name: "Backbuffer".to_string(),
@@ -116,6 +119,10 @@ impl RenderPass for DebugVizPass {
             self.ssr_raw = builder.resolve_image("SSR_Raw");
             builder.read_image(self.ssr_raw, ResourceUsage::SHADER_READ);
         }
+        if self.channel == DebugChannel::SsrUpsampled {
+            self.ssr_upsampled = builder.resolve_image("SSR_Upsampled");
+            builder.read_image(self.ssr_upsampled, ResourceUsage::SHADER_READ);
+        }
         // Bloom_Buffer only exists when BloomPass is enabled.
         if self.channel == DebugChannel::BloomBuffer {
             self.bloom_buf = builder.resolve_image("Bloom_Buffer");
@@ -141,6 +148,8 @@ impl RenderPass for DebugVizPass {
             self.ssr_resolved
         } else if self.channel == DebugChannel::SsrRaw {
             self.ssr_raw
+        } else if self.channel == DebugChannel::SsrUpsampled {
+            self.ssr_upsampled
         } else {
             self.ao_resolved
         };

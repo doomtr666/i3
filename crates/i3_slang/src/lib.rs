@@ -42,6 +42,7 @@ impl ShaderTarget {
 /// Slang compiler wrapper
 pub struct SlangCompiler {
     global_session: slang::GlobalSession,
+    pub debug_info: bool,
 }
 
 impl SlangCompiler {
@@ -50,21 +51,21 @@ impl SlangCompiler {
         let global_session = slang::GlobalSession::new()
             .ok_or_else(|| "Failed to create Slang global session".to_string())?;
 
-        Ok(Self { global_session })
+        Ok(Self { global_session, debug_info: false })
     }
 
-    fn create_options() -> slang::CompilerOptions {
-        if cfg!(debug_assertions) {
-            slang::CompilerOptions::default()
-                .optimization(slang::OptimizationLevel::None)
-                .debug_information(slang::DebugInfoLevel::Maximal)
-                .matrix_layout_column(true)
+    fn create_options(debug_info: bool) -> slang::CompilerOptions {
+        let want_debug = cfg!(debug_assertions) || debug_info;
+        let opt = if cfg!(debug_assertions) && !debug_info {
+            slang::OptimizationLevel::None
         } else {
-            slang::CompilerOptions::default()
-                .optimization(slang::OptimizationLevel::High)
-                .debug_information(slang::DebugInfoLevel::None)
-                .matrix_layout_column(true)
-        }
+            slang::OptimizationLevel::High
+        };
+        let dbg = if want_debug { slang::DebugInfoLevel::Maximal } else { slang::DebugInfoLevel::None };
+        slang::CompilerOptions::default()
+            .optimization(opt)
+            .debug_information(dbg)
+            .matrix_layout_column(true)
     }
 
     /// Extract reflection data from linked program
@@ -359,7 +360,7 @@ impl SlangCompiler {
         }
 
         // Configure compiler options
-        let session_options = Self::create_options();
+        let session_options = Self::create_options(self.debug_info);
 
         // Configure target
         let target_desc = slang::TargetDesc::default()
@@ -467,7 +468,7 @@ impl SlangCompiler {
             .collect();
         let search_path_ptrs: Vec<_> = search_path_cstrings.iter().map(|s| s.as_ptr()).collect();
 
-        let session_options = Self::create_options();
+        let session_options = Self::create_options(self.debug_info);
 
         let target_desc = slang::TargetDesc::default()
             .format(target.to_slang_target())
@@ -573,7 +574,7 @@ impl SlangCompiler {
         let search_path_ptrs: Vec<_> = search_path_cstrings.iter().map(|s| s.as_ptr()).collect();
 
         // Configure compiler options
-        let session_options = Self::create_options();
+        let session_options = Self::create_options(self.debug_info);
 
         // Configure target
         let target_desc = slang::TargetDesc::default()

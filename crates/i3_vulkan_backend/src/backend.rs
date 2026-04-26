@@ -948,12 +948,12 @@ impl RenderBackend for VulkanBackend {
         crate::descriptors::update_bindless_sampler(self, sampler, index, set, binding);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "profiling"))]
     fn set_image_name(&mut self, image: BackendImage, name: &str) {
         crate::debug::set_image_name(self, image, name);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "profiling"))]
     fn set_buffer_name(&mut self, buffer: BackendBuffer, name: &str) {
         crate::debug::set_buffer_name(self, buffer, name);
     }
@@ -1083,7 +1083,7 @@ impl RenderBackendInternal for VulkanBackend {
         crate::commands::record_barriers(self, passes)
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "profiling"))]
     fn begin_debug_label(&self, command_buffer: BackendCommandBuffer, name: &str, color: [f32; 4]) {
         let c_name = std::ffi::CString::new(name).unwrap();
         let label = vk::DebugUtilsLabelEXT::default()
@@ -1097,7 +1097,7 @@ impl RenderBackendInternal for VulkanBackend {
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "profiling"))]
     fn end_debug_label(&self, command_buffer: BackendCommandBuffer) {
         unsafe {
             let cb = vk::CommandBuffer::from_raw(command_buffer.0);
@@ -1169,7 +1169,7 @@ impl RenderBackendInternal for VulkanBackend {
                 .expect("Failed to begin Vulkan command buffer")
         };
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "profiling"))]
         self.begin_debug_label(
             BackendCommandBuffer(cmd.as_raw()),
             &prepared.name,
@@ -1276,7 +1276,7 @@ impl RenderBackendInternal for VulkanBackend {
             }
         }
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "profiling"))]
         self.end_debug_label(BackendCommandBuffer(cmd.as_raw()));
 
         unsafe {

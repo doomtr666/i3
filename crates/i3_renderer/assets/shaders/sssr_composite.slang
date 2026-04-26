@@ -37,7 +37,7 @@ Texture2D<float4> gbufferAlbedo;
 [[vk::binding(3, 0)]]
 Texture2D<float2> gbufferRoughMetal;
 [[vk::binding(4, 0)]]
-Texture2D<float4> ssrResolved;
+Texture2D<float4> ssrUpsampled;
 [[vk::binding(5, 0)]]
 Texture2D<float> aoResolved;
 [[vk::binding(6, 0)]]
@@ -80,7 +80,7 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     float ao = aoResolved[coord].r;
 
     // SSR confidence: 0 when no hit or roughness above cutoff.
-    float4 ssr = ssrResolved[coord];
+    float4 ssr = ssrUpsampled[coord];
     float eff_conf = saturate(ssr.a * pc.intensity);
 
     // ── Specular indirect ─────────────────────────────────────────────────────

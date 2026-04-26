@@ -7,11 +7,10 @@
 
 struct SssrSamplePc
 {
-    float max_distance;
     float thickness; // max view-space depth gap for hit acceptance
-    float roughness_cutoff;
-    uint max_steps;
     uint enabled;
+    uint downsample_factor; // 1 = full-res, 2 = half-res, etc.
+    uint num_samples;       // 1..16, clamped on CPU side
 };
 [[vk::push_constant]]
 SssrSamplePc pc;
@@ -74,8 +73,8 @@ bool traceHiZ(
     float tEpsilon = 0.01f / rayLength;
 
     float t = 0.0f;
-    int mipLevel = 0;
-    const uint MAX_ITER = 100;
+    int mipLevel = MaxMipLevel;  // Fix 1: start coarse, descend on intersection
+    const uint MAX_ITER = 64;    // Fix 4: was 100
 
     for (uint i = 0; i < MAX_ITER; i++)
     {
@@ -89,7 +88,7 @@ bool traceHiZ(
             return false;
         }
 
-        float cellSize = exp2(float(mipLevel));
+        float cellSize = float(1 << mipLevel);  // Fix 5: integer shift instead of exp2
         float2 cellIndex = floor((currentPos.xy + rayDir.xy * 0.01f) / cellSize);
 
         float2 distanceToBoundary = (cellIndex + crossStep) * cellSize - currentPos.xy;
@@ -103,36 +102,36 @@ bool traceHiZ(
         float z2 = rayPos.z + rayDir.z * nextT;
         float minZ_segment = min(z1, z2);
 
+        // Pre-compute UV for thickness test — independent of texture fetch (Fix 2 + Fix 3)
+        float2 hit_uv = currentPos.xy / screenSize;
+
         int2 mipCoords = int2(cellIndex);
         float cellMaxZ = hizBuffer.Load(int3(mipCoords, mipLevel)).r;
+
+        // Independent of cellMaxZ — hides texture fetch latency (Fix 2)
+        float t_next = nextT + tEpsilon;
+        int mip_next = min(mipLevel + 1, MaxMipLevel);
 
         if (minZ_segment <= cellMaxZ)
         {
             if (mipLevel == 0)
             {
-                // --- INTEGRATED THICKNESS TEST ---
-                float2 ndc_xy = (currentPos.xy / screenSize) * 2.0f - 1.0f;
-                ndc_xy.y = -ndc_xy.y; // Vulkan inversion
-
-                float4 ray_clip = mul(invProj, float4(ndc_xy, currentPos.z, 1.0f));
-                float ray_view_z = ray_clip.z / ray_clip.w;
-
-                float4 geo_clip = mul(invProj, float4(ndc_xy, cellMaxZ, 1.0f));
-                float geo_view_z = geo_clip.z / geo_clip.w;
+                // --- INTEGRATED THICKNESS TEST (Fix 3: avoids 2x mat4-vec4 multiply) ---
+                float ray_view_z = viewSpacePosFromUV(hit_uv, currentPos.z, invProj).z;
+                float geo_view_z = viewSpacePosFromUV(hit_uv, cellMaxZ, invProj).z;
 
                 float thickness = abs(geo_view_z - ray_view_z);
 
                 if (thickness > maxThickness)
                 {
                     // False positive: passing behind a thin object (e.g., a garland).
-                    // Advance and continue searching.
                     t = nextT;
-                    mipLevel = min(mipLevel + 1, MaxMipLevel);
+                    mipLevel = mip_next;
                     continue;
                 }
 
                 // Valid hit
-                outHitUVZ = float3(currentPos.xy / screenSize, currentPos.z);
+                outHitUVZ = float3(hit_uv, currentPos.z);
                 return true;
             }
             else
@@ -142,8 +141,8 @@ bool traceHiZ(
         }
         else
         {
-            t = nextT + tEpsilon;
-            mipLevel = min(mipLevel + 1, MaxMipLevel);
+            t = t_next;
+            mipLevel = mip_next;
         }
     }
 
@@ -154,8 +153,13 @@ bool traceHiZ(
 void computeMain(uint3 id: SV_DispatchThreadID)
 {
     uint2 px = id.xy;
-    if (any(px >= uint2(g_common.GetScreenWidth(), g_common.GetScreenHeight())))
+    uint f = pc.downsample_factor;
+    // Bounds check against low-res dispatch dimensions
+    if (any(px >= uint2(g_common.GetScreenWidth() / f, g_common.GetScreenHeight() / f)))
         return;
+
+    // Full-res pixel at the center of the block this low-res pixel represents
+    uint2 full_px = px * f + f / 2;
 
     if (pc.enabled == 0u)
     {
@@ -163,36 +167,36 @@ void computeMain(uint3 id: SV_DispatchThreadID)
         return;
     }
 
-    float depth = depthBuffer.Load(int3(px, 0)).r;
+    float depth = depthBuffer.Load(int3(full_px, 0)).r;
     if (depth <= 0.0f)
     {
         ssrOutput[int2(px)] = 0;
         return;
     }
 
-    float2 rm = gbufferRoughMetal.Load(int3(px, 0)).rg;
+    float2 rm = gbufferRoughMetal.Load(int3(full_px, 0)).rg;
     float metallic = rm.g;
 
     float roughness = rm.r;
     float alpha = roughness * roughness;
 
-    float3 P = viewSpacePosFromPixel(px, depth, g_common.GetScreenSize(), g_common.invProjection);
-    float3 N_world = decodeOctahedral(gbufferNormal.Load(int3(px, 0)).rg);
+    float3 P = viewSpacePosFromPixel(full_px, depth, g_common.GetScreenSize(), g_common.invProjection);
+    float3 N_world = decodeOctahedral(gbufferNormal.Load(int3(full_px, 0)).rg);
     // Albedo read from GBuffer (required for metal Fresnel)
-    float3 albedo = gbufferAlbedo.Load(int3(px, 0));
+    float3 albedo = gbufferAlbedo.Load(int3(full_px, 0));
     float3 F0 = lerp(FRESNEL_F0_DIELECTRIC, albedo, metallic);
 
     float3x3 viewRot = float3x3(g_common.view[0].xyz, g_common.view[1].xyz, g_common.view[2].xyz);
     float3 N = normalize(mul(viewRot, N_world));
     float3 V = normalize(-P);
 
-    const int NUM_SAMPLES = 1;
+    uint num_samples = pc.num_samples;
 
     float3 accum_color = float3(0, 0, 0);
 
-    for (int i = 0; i < NUM_SAMPLES; i++)
+    for (uint i = 0; i < num_samples; i++)
     {
-        float3 noise = pcg3f(uint3(px, g_common.GetFrameIndex()));
+        float3 noise = pcg3f(uint3(px, g_common.GetFrameIndex() + i));
 
         // 1. Build basis
         float3 T, B;
@@ -258,5 +262,5 @@ void computeMain(uint3 id: SV_DispatchThreadID)
         float3 brdf_weight = fresnelSchlick(max(dot(V, H), 0.0f), F0) * GGXVNDFWeight(V, D, N, alpha);
         accum_color += output_color * brdf_weight;
     }
-    ssrOutput[px] = float4(accum_color / NUM_SAMPLES, 1.0f);
+    ssrOutput[px] = float4(accum_color / float(num_samples), 1.0f);
 }

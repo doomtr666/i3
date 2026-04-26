@@ -290,7 +290,7 @@ impl CompiledGraph {
                         let handle = *symbol
                             .data.as_ref().expect("Image without handle")
                             .downcast_ref::<ImageHandle>().expect("Not a handle");
-                        #[cfg(debug_assertions)]
+                        #[cfg(any(debug_assertions, feature = "profiling"))]
                         backend.set_image_name(physical, &symbol.name);
                         backend.register_external_image(handle, physical);
                     } else if symbol.lifetime == SymbolLifetime::TemporalHistory {
@@ -320,7 +320,7 @@ impl CompiledGraph {
                         let handle = *symbol
                             .data.as_ref().expect("Buffer without handle")
                             .downcast_ref::<BufferHandle>().expect("Not a handle");
-                        #[cfg(debug_assertions)]
+                        #[cfg(any(debug_assertions, feature = "profiling"))]
                         backend.set_buffer_name(physical, &symbol.name);
                         backend.register_external_buffer(handle, physical);
                     } else if symbol.lifetime == SymbolLifetime::TemporalHistory {

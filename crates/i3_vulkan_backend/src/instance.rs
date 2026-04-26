@@ -65,7 +65,7 @@ impl VulkanInstance {
             ash::khr::surface::NAME.as_ptr(),
             #[cfg(target_os = "windows")]
             ash::khr::win32_surface::NAME.as_ptr(),
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "profiling"))]
             ash::ext::debug_utils::NAME.as_ptr(),
         ];
 

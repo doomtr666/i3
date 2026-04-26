@@ -7,6 +7,9 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+profiling = []
+
 [dependencies]
 i3_gfx.workspace = true
 ash.workspace = true

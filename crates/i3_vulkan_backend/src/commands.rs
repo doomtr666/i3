@@ -864,7 +864,7 @@ pub fn record_barriers(
 }
 
 /// Begin a debug label (debug builds only).
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "profiling"))]
 pub fn begin_debug_label(
     backend: &VulkanBackend,
     command_buffer: BackendCommandBuffer,
@@ -885,7 +885,7 @@ pub fn begin_debug_label(
 }
 
 /// End a debug label (debug builds only).
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "profiling"))]
 pub fn end_debug_label(backend: &VulkanBackend, command_buffer: BackendCommandBuffer) {
     unsafe {
         let cb = vk::CommandBuffer::from_raw(command_buffer.0);
@@ -975,7 +975,7 @@ pub fn record_pass(
             .unwrap()
     };
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "profiling"))]
     begin_debug_label(
         backend,
         BackendCommandBuffer(cmd.as_raw()),
@@ -1089,7 +1089,7 @@ pub fn record_pass(
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "profiling"))]
     end_debug_label(backend, BackendCommandBuffer(cmd.as_raw()));
 
     unsafe {

@@ -19,11 +19,15 @@ fn run() -> Result<()> {
         .parent().unwrap();
 
     println!("cargo:rerun-if-changed=viewer_scenes.bake.ron");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_PROFILING");
+
+    let profiling = std::env::var("CARGO_FEATURE_PROFILING").is_ok();
 
     ManifestBaker::from_file(
         Path::new(&manifest_dir).join("viewer_scenes.bake.ron"),
     )
     .with_output_dir(target_dir)
+    .with_shader_debug_info(profiling)
     .execute()?;
 
     // Copy shaders to target directory.

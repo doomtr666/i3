@@ -26,7 +26,7 @@ pub struct VulkanDevice {
     pub rt_supported: bool,
     pub min_scratch_alignment: vk::DeviceSize,
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "profiling"))]
     pub debug_utils: ash::ext::debug_utils::Device,
 }
 
@@ -286,7 +286,7 @@ impl VulkanDevice {
             256 // conservative fallback
         };
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "profiling"))]
         let debug_utils = ash::ext::debug_utils::Device::new(&instance.handle, &handle);
 
         // Initialize VMA Allocator with BDA support
@@ -314,7 +314,7 @@ impl VulkanDevice {
             rt_pipeline,
             rt_supported,
             min_scratch_alignment,
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "profiling"))]
             debug_utils,
         })
     }

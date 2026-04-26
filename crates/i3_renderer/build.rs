@@ -26,11 +26,15 @@ fn run() -> Result<()> {
     println!("cargo:rerun-if-changed=assets/system.bake.ron");
     println!("cargo:rerun-if-changed=assets/pipelines");
     println!("cargo:rerun-if-changed=../../i3_egui/assets/pipelines");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_PROFILING");
+
+    let profiling = std::env::var("CARGO_FEATURE_PROFILING").is_ok();
 
     ManifestBaker::from_file(
         Path::new(&manifest_dir).join("assets/system.bake.ron"),
     )
     .with_output_dir(profile_dir)
+    .with_shader_debug_info(profiling)
     .execute()?;
 
     Ok(())

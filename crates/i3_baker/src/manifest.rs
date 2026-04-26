@@ -58,22 +58,30 @@ pub struct IblManifestEntry {
 /// High-level baker that reads a `BakeManifest` from a RON file and executes
 /// an incremental per-asset bake with file-system caching.
 pub struct ManifestBaker {
-    manifest_path: PathBuf,
-    output_dir:    Option<PathBuf>,
+    manifest_path:     PathBuf,
+    output_dir:        Option<PathBuf>,
+    shader_debug_info: bool,
 }
 
 impl ManifestBaker {
     /// Create a `ManifestBaker` for the given `.bake.ron` file.
     pub fn from_file(path: impl Into<PathBuf>) -> Self {
         Self {
-            manifest_path: path.into(),
-            output_dir:    None,
+            manifest_path:     path.into(),
+            output_dir:        None,
+            shader_debug_info: false,
         }
     }
 
     /// Override the output directory (where `.i3b` / `.i3c` are written).
     pub fn with_output_dir(mut self, dir: impl AsRef<Path>) -> Self {
         self.output_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    /// Enable shader debug info (SPIRV source maps) for profiling builds.
+    pub fn with_shader_debug_info(mut self, v: bool) -> Self {
+        self.shader_debug_info = v;
         self
     }
 
@@ -116,11 +124,14 @@ impl ManifestBaker {
             }
         };
 
-        let cache_dir = output_dir.join(".bake_cache");
+        let cache_dir = output_dir.join(
+            if self.shader_debug_info { ".bake_cache_profiling" } else { ".bake_cache" }
+        );
 
         // ── 4. Build BundleBaker with cache ───────────────────────────────────
         let mut baker = BundleBaker::new_with_output(&manifest.bundle_name, &output_dir)
-            .with_cache_dir(cache_dir);
+            .with_cache_dir(cache_dir)
+            .with_shader_debug_info(self.shader_debug_info);
 
         // Pipelines from directories
         for dir in &manifest.pipelines_dirs {
@@ -140,7 +151,7 @@ impl ManifestBaker {
             let abs = resolve(file);
             baker = baker.add_asset(
                 &abs,
-                crate::importers::PipelineImporter::new(),
+                crate::importers::PipelineImporter::new().with_debug_info(self.shader_debug_info),
             );
         }
 

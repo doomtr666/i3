@@ -260,11 +260,12 @@ fn make_meta(source: &Path, deps: &[PathBuf], config_key: &[u8]) -> CacheMeta {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct BundleBaker {
-    bundle_name: String,
-    output_dir:  PathBuf,
-    assets:      Vec<AssetJob>,
+    bundle_name:       String,
+    output_dir:        PathBuf,
+    assets:            Vec<AssetJob>,
     /// When Some, per-asset incremental caching is enabled.
-    cache_dir:   Option<PathBuf>,
+    cache_dir:         Option<PathBuf>,
+    shader_debug_info: bool,
 }
 
 impl BundleBaker {
@@ -278,10 +279,11 @@ impl BundleBaker {
         let output_dir = manifest_path.join("assets");
 
         Ok(Self {
-            bundle_name: bundle_name.into(),
+            bundle_name:       bundle_name.into(),
             output_dir,
-            assets:    Vec::new(),
-            cache_dir: None,
+            assets:            Vec::new(),
+            cache_dir:         None,
+            shader_debug_info: false,
         })
     }
 
@@ -291,10 +293,11 @@ impl BundleBaker {
         output_dir:  impl AsRef<Path>,
     ) -> Self {
         Self {
-            bundle_name: bundle_name.into(),
-            output_dir:  output_dir.as_ref().to_path_buf(),
-            assets:      Vec::new(),
-            cache_dir:   None,
+            bundle_name:       bundle_name.into(),
+            output_dir:        output_dir.as_ref().to_path_buf(),
+            assets:            Vec::new(),
+            cache_dir:         None,
+            shader_debug_info: false,
         }
     }
 
@@ -309,6 +312,12 @@ impl BundleBaker {
     /// and only recompile assets whose source or dependencies have changed.
     pub fn with_cache_dir(mut self, dir: impl AsRef<Path>) -> Self {
         self.cache_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    /// Enable shader debug info (SPIRV source maps) for profiling builds.
+    pub fn with_shader_debug_info(mut self, v: bool) -> Self {
+        self.shader_debug_info = v;
         self
     }
 
@@ -355,7 +364,7 @@ impl BundleBaker {
             )));
         }
 
-        let importer = crate::importers::PipelineImporter::new();
+        let importer = crate::importers::PipelineImporter::new().with_debug_info(self.shader_debug_info);
 
         for entry in std::fs::read_dir(dir).map_err(|e| crate::BakerError::Os {
             path: dir.to_path_buf(),
@@ -556,6 +565,7 @@ impl BundleBaker {
         let valid: Vec<bool> = self.assets.iter().zip(cache_paths.iter())
             .map(|(job, cache_path)| {
                 if force { return false; }
+                if !cache_path.exists() { return false; }
                 let deps = job.importer.get_dependencies(&job.source_path).unwrap_or_default();
                 load_meta(cache_path)
                     .map(|m| meta_is_valid(&m, &job.source_path, &deps, &job.config_key))

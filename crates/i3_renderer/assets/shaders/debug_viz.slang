@@ -94,6 +94,9 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     case 9: // SSR_Raw — stochastic reflections before temporal denoising
         color = ssrResolved.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb;
         break;
+    case 13: // SSR_Upsampled — bilateral-upsampled full-res SSR
+        color = ssrResolved.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).rgb;
+        break;
     default:
         color = float3(1.0, 0.0, 1.0); // Magenta = unsupported channel
         break;
