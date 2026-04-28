@@ -73,8 +73,8 @@ bool traceHiZ(
     float tEpsilon = 0.01f / rayLength;
 
     float t = 0.0f;
-    int mipLevel = MaxMipLevel;  // Fix 1: start coarse, descend on intersection
-    const uint MAX_ITER = 64;    // Fix 4: was 100
+    int mipLevel = MaxMipLevel; // Fix 1: start coarse, descend on intersection
+    const uint MAX_ITER = 128;  // Fix 4: was 100
 
     for (uint i = 0; i < MAX_ITER; i++)
     {
@@ -88,7 +88,7 @@ bool traceHiZ(
             return false;
         }
 
-        float cellSize = float(1 << mipLevel);  // Fix 5: integer shift instead of exp2
+        float cellSize = float(1 << mipLevel); // Fix 5: integer shift instead of exp2
         float2 cellIndex = floor((currentPos.xy + rayDir.xy * 0.01f) / cellSize);
 
         float2 distanceToBoundary = (cellIndex + crossStep) * cellSize - currentPos.xy;
@@ -219,12 +219,14 @@ void computeMain(uint3 id: SV_DispatchThreadID)
 
         float3 output_color = bindlessTextures[g_common.GetIblEnvIndex()].SampleLevel(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(D_world), 0).rgb;
 
+        const float MAX_DISTANCE = 200.0f;
+
         // Reject if ray plunges below geometry
         if (dot(D, N) > 0.001f)
         {
 
             // Calculate ray end point (e.g., 100 meters)
-            float3 P_end = P + D * 1000.0f;
+            float3 P_end = P + D * MAX_DISTANCE;
 
             float3 screen_P = projectViewToScreenSpace(P);
             float3 screen_P_end = projectViewToScreenSpace(P_end);
