@@ -12,202 +12,74 @@ use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct HiZPushConstants {
-    src_size: [u32; 2],
-    hiz_size: [u32; 2],
-    src_mip:  u32,
-    _pad:     u32,
+struct HiZSpdPc {
+    mip0_size: [u32; 2],
 }
 
-/// Root pass for Hi-Z Pyramid construction.
+/// Hi-Z pyramid builder using a single SPD dispatch.
 ///
-/// Parameterised by input depth image and output HiZ image names so that two
-/// instances can coexist in the same frame graph:
-///   - `HiZBuildPass::new_prez()`  : DepthPreZ  → HiZPreZ  (for occlusion cull)
-///   - `HiZBuildPass::new_final()` : DepthBuffer → HiZFinal (for screen-space effects)
-///
-/// The pass declares its own output image as a transient resource.
+/// GBufferFillPass writes mip 0 of HiZFinal as SV_Target4.
+/// This pass reads mip 0 and generates mips 1..5 in one dispatch via LDS
+/// reductions (16×16 threads, 32×32 tile per group, max reduction for Reverse-Z).
 pub struct HiZBuildPass {
-    input_depth_name: &'static str,
-    output_hiz_name:  &'static str,
-
-    blit_pipeline:   Option<BackendPipeline>,
-    reduce_pipeline: Option<BackendPipeline>,
+    output_hiz_name: &'static str,
+    pipeline: Option<BackendPipeline>,
 }
 
 impl HiZBuildPass {
     pub fn new_final() -> Self {
-        Self::with_names("DepthBuffer", "HiZFinal")
-    }
-
-    fn with_names(input: &'static str, output: &'static str) -> Self {
-        Self {
-            input_depth_name: input,
-            output_hiz_name:  output,
-            blit_pipeline:    None,
-            reduce_pipeline:  None,
-        }
+        Self { output_hiz_name: "HiZFinal", pipeline: None }
     }
 }
 
 impl RenderPass for HiZBuildPass {
-    fn name(&self) -> &str {
-        "HiZBuild"
-    }
+    fn name(&self) -> &str { "HiZBuild" }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
         let loader = globals.consume::<Arc<i3_io::asset::AssetLoader>>("AssetLoader");
-
         if let Ok(asset) = loader
-            .load::<i3_io::pipeline_asset::PipelineAsset>("hiz_build_blit")
+            .load::<i3_io::pipeline_asset::PipelineAsset>("hiz_spd")
             .wait_loaded()
         {
-            self.blit_pipeline = Some(
-                backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
-            );
-        }
-
-        if let Ok(asset) = loader
-            .load::<i3_io::pipeline_asset::PipelineAsset>("hiz_build_reduce")
-            .wait_loaded()
-        {
-            self.reduce_pipeline = Some(
+            self.pipeline = Some(
                 backend.create_compute_pipeline_from_baked(&asset.reflection_data, &asset.bytecode),
             );
         }
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        // Derive HiZ dimensions from the INPUT depth buffer, not from screen size.
-        // For HiZPreZ the input is DepthPreZ (fixed 1024×512 POT).
-        // For HiZFinal the input is DepthBuffer (screen size).
-        let depth_buffer = builder.resolve_image(self.input_depth_name);
-        let depth_desc   = builder.get_image_desc(depth_buffer);
-        let (w, h) = (depth_desc.width, depth_desc.height);
-        let max_dim = w.max(h);
-        let mips = if max_dim > 0 { (31 - max_dim.leading_zeros()) + 1 } else { 1 };
+        let Some(pipeline) = self.pipeline else { return; };
 
-        // Declare the output HiZ image as a transient resource for this frame.
-        builder.declare_image_output(
-            self.output_hiz_name,
-            ImageDesc {
-                width:        w,
-                height:       h,
-                depth:        1,
-                format:       Format::R32_SFLOAT,
-                mip_levels:   mips,
-                array_layers: 1,
-                usage:        ImageUsageFlags::SAMPLED | ImageUsageFlags::STORAGE,
-                view_type:    ImageViewType::Type2D,
-                swizzle:      ComponentMapping::default(),
-                clear_value:  None,
-            },
-        );
-
-        // depth_buffer and depth_desc already resolved above.
+        // HiZFinal is declared by GBufferPass (mip 0 filled via MRT).
+        // We resolve it here and generate mips 1..5.
         let hiz_pyramid = builder.resolve_image(self.output_hiz_name);
         let hiz_desc    = builder.get_image_desc(hiz_pyramid);
-        // HiZ image was declared with the same dimensions as the input — safe_mips == mips.
-        let safe_mips = mips;
 
-        if let Some(blit) = self.blit_pipeline {
-            builder.add_owned_pass(HiZBlitSubPass {
-                depth_buffer,
-                hiz_pyramid,
-                pipeline: blit,
-                src_size: [depth_desc.width, depth_desc.height],
-                dst_size: [hiz_desc.width, hiz_desc.height],
-            });
-        }
+        // Only run SPD if image has enough mip levels.
+        if hiz_desc.mip_levels < 6 { return; }
 
-        if let Some(reduce) = self.reduce_pipeline {
-            for mip in 0..(safe_mips.saturating_sub(1)) {
-                let src_w = (hiz_desc.width  >> mip).max(1);
-                let src_h = (hiz_desc.height >> mip).max(1);
-                let dst_w = ((src_w + 1) / 2).max(1);
-                let dst_h = ((src_h + 1) / 2).max(1);
-
-                builder.add_owned_pass(HiZReduceSubPass {
-                    hiz_pyramid,
-                    pipeline: reduce,
-                    src_mip:  mip,
-                    hiz_size: [hiz_desc.width, hiz_desc.height],
-                    dst_size: [dst_w, dst_h],
-                });
-            }
-        }
+        builder.add_owned_pass(HiZSpdSubPass {
+            hiz_pyramid,
+            pipeline,
+            mip0_size: [hiz_desc.width, hiz_desc.height],
+        });
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct HiZBlitSubPass {
-    depth_buffer: ImageHandle,
-    hiz_pyramid:  ImageHandle,
-    pipeline:     BackendPipeline,
-    src_size:     [u32; 2],
-    dst_size:     [u32; 2],
-}
-
-impl RenderPass for HiZBlitSubPass {
-    fn name(&self) -> &str { "HiZBlit" }
-
-    fn declare(&mut self, builder: &mut PassBuilder) {
-        builder.read_image(self.depth_buffer, ResourceUsage::SHADER_READ);
-        builder.write_image(self.hiz_pyramid, ResourceUsage::SHADER_WRITE);
-    }
-
-    fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
-        ctx.bind_pipeline_raw(self.pipeline);
-
-        let pc = HiZPushConstants {
-            src_size: self.src_size,
-            hiz_size: self.dst_size,
-            src_mip:  0,
-            _pad:     0,
-        };
-        ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
-
-        let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
-        ctx.bind_descriptor_set(2, bindless_set);
-
-        let descriptor_set = ctx.create_descriptor_set(
-            self.pipeline,
-            0,
-            &[
-                DescriptorWrite::sampled_image(
-                    0, 0,
-                    self.depth_buffer,
-                    DescriptorImageLayout::ShaderReadOnlyOptimal,
-                ),
-                DescriptorWrite::storage_image_mip(
-                    1, 0,
-                    self.hiz_pyramid,
-                    DescriptorImageLayout::General,
-                    0,
-                ),
-            ],
-        );
-        ctx.bind_descriptor_set(0, descriptor_set);
-
-        ctx.dispatch(div_ceil(self.dst_size[0], 8), div_ceil(self.dst_size[1], 8), 1);
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-struct HiZReduceSubPass {
+struct HiZSpdSubPass {
     hiz_pyramid: ImageHandle,
     pipeline:    BackendPipeline,
-    src_mip:     u32,
-    hiz_size:    [u32; 2],
-    dst_size:    [u32; 2],
+    mip0_size:   [u32; 2],
 }
 
-impl RenderPass for HiZReduceSubPass {
-    fn name(&self) -> &str { "HiZReduce" }
+impl RenderPass for HiZSpdSubPass {
+    fn name(&self) -> &str { "HiZSpd" }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
+        // Mip 0 was written by GBufferFillPass as COLOR_ATTACHMENT.
+        // We read it as SHADER_READ and write mips 1..5 as SHADER_WRITE.
         builder.read_image(self.hiz_pyramid,  ResourceUsage::SHADER_READ);
         builder.write_image(self.hiz_pyramid, ResourceUsage::SHADER_WRITE);
     }
@@ -215,18 +87,13 @@ impl RenderPass for HiZReduceSubPass {
     fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {
         ctx.bind_pipeline_raw(self.pipeline);
 
-        let pc = HiZPushConstants {
-            src_size: self.dst_size,
-            hiz_size: self.hiz_size,
-            src_mip:  self.src_mip,
-            _pad:     0,
-        };
+        let pc = HiZSpdPc { mip0_size: self.mip0_size };
         ctx.push_bytes(ShaderStageFlags::Compute, 0, bytemuck::bytes_of(&pc));
 
         let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
         ctx.bind_descriptor_set(2, bindless_set);
 
-        let descriptor_set = ctx.create_descriptor_set(
+        let ds = ctx.create_descriptor_set(
             self.pipeline,
             0,
             &[
@@ -234,19 +101,18 @@ impl RenderPass for HiZReduceSubPass {
                     0, 0,
                     self.hiz_pyramid,
                     DescriptorImageLayout::General,
-                    self.src_mip,
-                    1,
+                    0, 1,
                 ),
-                DescriptorWrite::storage_image_mip(
-                    1, 0,
-                    self.hiz_pyramid,
-                    DescriptorImageLayout::General,
-                    self.src_mip + 1,
-                ),
+                DescriptorWrite::storage_image_mip(1, 0, self.hiz_pyramid, DescriptorImageLayout::General, 1),
+                DescriptorWrite::storage_image_mip(2, 0, self.hiz_pyramid, DescriptorImageLayout::General, 2),
+                DescriptorWrite::storage_image_mip(3, 0, self.hiz_pyramid, DescriptorImageLayout::General, 3),
+                DescriptorWrite::storage_image_mip(4, 0, self.hiz_pyramid, DescriptorImageLayout::General, 4),
+                DescriptorWrite::storage_image_mip(5, 0, self.hiz_pyramid, DescriptorImageLayout::General, 5),
             ],
         );
-        ctx.bind_descriptor_set(0, descriptor_set);
+        ctx.bind_descriptor_set(0, ds);
 
-        ctx.dispatch(div_ceil(self.dst_size[0], 8), div_ceil(self.dst_size[1], 8), 1);
+        // Each group handles a 32×32 tile.
+        ctx.dispatch(div_ceil(self.mip0_size[0], 32), div_ceil(self.mip0_size[1], 32), 1);
     }
 }

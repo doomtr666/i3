@@ -13,6 +13,7 @@ members = [
     "crates/i3_renderer",
     "crates/i3_egui",
     "examples/viewer",
+    "examples/voxel",
     "examples/deferred_stress",
 ]
 resolver = "2"

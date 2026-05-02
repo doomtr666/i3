@@ -502,7 +502,7 @@ impl ExampleApp for DeferredGltfApp {
                 i3_renderer::render_graph::AoMode::Gtao => {
                     let gtao = &mut self.render_graph.gtao_group.gtao_pass;
                     ui.add(egui::Slider::new(&mut gtao.radius, 0.1_f32..=2.0).text("AO Radius"));
-                    ui.add(egui::Slider::new(&mut gtao.falloff, 0.5_f32..=4.0).text("AO Falloff"));
+                    ui.add(egui::Slider::new(&mut gtao.final_power, 0.5_f32..=4.0).text("AO Final Power"));
                     ui.add(egui::Slider::new(&mut gtao.slice_count, 1_u32..=4).text("AO Slices"));
                     ui.add(egui::Slider::new(&mut gtao.step_count, 2_u32..=8).text("AO Steps"));
                     let alpha = &mut self.render_graph.gtao_group.gtao_temporal_pass.alpha;
@@ -526,20 +526,23 @@ impl ExampleApp for DeferredGltfApp {
                 let ssr = &mut self.render_graph.sssr_sample_pass;
                 ui.checkbox(&mut ssr.enabled, "SSR");
                 if ssr.enabled {
-                    ui.add(egui::Slider::new(&mut ssr.num_samples, 1_u32..=16).text("SSR Samples"));
+                    ui.add(egui::Slider::new(&mut ssr.max_mip_level, 1_u32..=5).text("SSR Max Mip"));
                     ui.add(egui::Slider::new(&mut ssr.thickness, 0.01_f32..=1.0).text("SSR Thickness"));
-                    let temporal = &mut self.render_graph.sssr_temporal_pass;
-                    ui.add(egui::Slider::new(&mut temporal.alpha, 0.0_f32..=0.99).text("SSR Temporal Alpha"));
-                    ui.add(egui::Slider::new(&mut temporal.compression_factor, 0.0_f32..=1.0).text("SSR Compression"));
-                    ui.add(egui::Slider::new(&mut temporal.gamma, 0.5_f32..=4.0).text("SSR Variance Gamma"));
                     let intensity = &mut self.render_graph.sssr_composite_pass.intensity;
                     ui.add(egui::Slider::new(intensity, 0.0_f32..=2.0).text("SSR Intensity"));
 
-                    // Downsample factor: applies to sample, temporal and bilateral passes together.
+                    let dbg = &mut self.render_graph.sssr_sample_pass.debug_mode;
+                    ui.horizontal(|ui| {
+                        ui.label("SSR debug:");
+                        ui.selectable_value(dbg, 0, "Off");
+                        ui.selectable_value(dbg, 1, "R=hit G=iter B=thickness");
+                        ui.selectable_value(dbg, 2, "RG=hit_uv B=hit");
+                    });
+
+                    // Downsample factor: applies to sample and bilateral passes together.
                     let mut factor = self.render_graph.sssr_sample_pass.downsample_factor;
                     if ui.add(egui::Slider::new(&mut factor, 1_u32..=4).text("SSR Downsample")).changed() {
                         self.render_graph.sssr_sample_pass.downsample_factor = factor;
-                        self.render_graph.sssr_temporal_pass.downsample_factor = factor;
                         self.render_graph.sssr_bilateral_pass.downsample_factor = factor;
                     }
                 }
@@ -582,7 +585,6 @@ impl ExampleApp for DeferredGltfApp {
                     DebugChannel::Emissive => "Emissive",
                     DebugChannel::Depth => "Depth",
                     DebugChannel::AO => "AO (accumulated)",
-                    DebugChannel::SsrResolved => "SSR (resolved)",
                     DebugChannel::SsrRaw => "SSR (raw stochastic)",
                     DebugChannel::SsrUpsampled => "SSR (upsampled)",
                     DebugChannel::BloomBuffer => "Bloom buffer",
@@ -632,11 +634,6 @@ impl ExampleApp for DeferredGltfApp {
                             &mut self.render_graph.debug_channel,
                             DebugChannel::AO,
                             "AO (accumulated)",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::SsrResolved,
-                            "SSR (resolved)",
                         );
                         ui.selectable_value(
                             &mut self.render_graph.debug_channel,

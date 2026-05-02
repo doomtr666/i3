@@ -2640,6 +2640,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "voxel"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "examples_common",
+ "i3_baker",
+ "i3_egui",
+ "i3_gfx",
+ "i3_io",
+ "i3_renderer",
+ "i3_slang",
+ "i3_vulkan_backend",
+ "nalgebra-glm",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "vulkan_diagnostics"
 version = "0.1.0"
 dependencies = [

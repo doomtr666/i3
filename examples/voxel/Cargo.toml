@@ -1,0 +1,26 @@
+[package]
+name = "voxel"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[features]
+profiling = ["i3_renderer/profiling", "i3_vulkan_backend/profiling", "i3_gfx/profiling"]
+
+[dependencies]
+i3_gfx = { path = "../../crates/i3_gfx" }
+i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }
+i3_renderer = { path = "../../crates/i3_renderer" }
+i3_slang = { path = "../../crates/i3_slang" }
+i3_egui = { path = "../../crates/i3_egui" }
+i3_io = { path = "../../crates/i3_io" }
+examples_common = { path = "../common" }
+tracing = "0.1"
+nalgebra-glm = { workspace = true }
+bytemuck = { workspace = true }
+uuid = { workspace = true }
+
+[build-dependencies]
+i3_baker = { path = "../../crates/i3_baker" }

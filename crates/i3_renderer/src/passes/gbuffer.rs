@@ -27,6 +27,7 @@ pub struct GBufferFillPass {
     gbuffer_normal:         ImageHandle,
     gbuffer_roughmetal:     ImageHandle,
     gbuffer_emissive:       ImageHandle,
+    hiz_mip0:               ImageHandle,
 
     mesh_descriptor_buffer: BufferHandle,
     instance_buffer:        BufferHandle,
@@ -47,6 +48,7 @@ impl GBufferFillPass {
             gbuffer_normal:         ImageHandle::INVALID,
             gbuffer_roughmetal:     ImageHandle::INVALID,
             gbuffer_emissive:       ImageHandle::INVALID,
+            hiz_mip0:               ImageHandle::INVALID,
 
             mesh_descriptor_buffer: BufferHandle::INVALID,
             instance_buffer:        BufferHandle::INVALID,
@@ -85,6 +87,7 @@ impl RenderPass for GBufferFillPass {
         self.gbuffer_roughmetal = builder.resolve_image("GBuffer_RoughMetal");
         self.gbuffer_emissive   = builder.resolve_image("GBuffer_Emissive");
         self.depth_buffer       = builder.resolve_image("DepthBuffer");
+        self.hiz_mip0           = builder.resolve_image("HiZFinal");
 
         // Resolve buffer handles
         self.mesh_descriptor_buffer = builder.resolve_buffer("MeshDescriptorBuffer");
@@ -111,6 +114,7 @@ impl RenderPass for GBufferFillPass {
         builder.write_image(self.gbuffer_roughmetal, ResourceUsage::COLOR_ATTACHMENT);
         builder.write_image(self.gbuffer_emissive,   ResourceUsage::COLOR_ATTACHMENT);
         builder.write_image(self.depth_buffer,       ResourceUsage::DEPTH_STENCIL);
+        builder.write_image(self.hiz_mip0,           ResourceUsage::COLOR_ATTACHMENT);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &i3_gfx::graph::compiler::FrameBlackboard) {
@@ -184,6 +188,26 @@ impl RenderPass for GBufferPass {
         builder.declare_image_output("GBuffer_Normal",     ImageDesc::new(w, h, Format::R16G16_SFLOAT));
         builder.declare_image_output("GBuffer_RoughMetal", ImageDesc::new(w, h, Format::R8G8_UNORM));
         builder.declare_image_output("GBuffer_Emissive",   ImageDesc::new(w, h, Format::R11G11B10_UFLOAT));
+
+        // HiZFinal: declared here because GBufferFillPass writes mip 0 as MRT SV_Target4.
+        // HiZBuildPass (SPD) then generates mips 1..5 from mip 0.
+        // Exactly 6 mips: SPD only produces 0..5 (traceHiZ MAX_MIP=5); higher mips would
+        // be transient-aliased garbage every frame.
+        builder.declare_image_output("HiZFinal", ImageDesc {
+            width:        w,
+            height:       h,
+            depth:        1,
+            format:       Format::R32_SFLOAT,
+            mip_levels:   6,
+            array_layers: 1,
+            usage:        ImageUsageFlags::COLOR_ATTACHMENT
+                        | ImageUsageFlags::SAMPLED
+                        | ImageUsageFlags::STORAGE,
+            view_type:    ImageViewType::Type2D,
+            swizzle:      ComponentMapping::default(),
+            clear_value:  None,
+        });
+
         builder.declare_image_output("DepthBuffer", ImageDesc {
             width: w,
             height: h,

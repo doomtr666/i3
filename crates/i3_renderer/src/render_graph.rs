@@ -248,8 +248,8 @@ pub struct DefaultRenderGraph {
     pub blas_update_pass: crate::passes::accel_struct::BlasUpdatePass,
     pub tlas_rebuild_pass: crate::passes::accel_struct::TlasRebuildPass,
     pub hiz_build_final: crate::passes::hiz_build::HiZBuildPass,
+    pub hdr_mip_gen_pass: crate::passes::hdr_mip_gen::HdrMipGenPass,
     pub sssr_sample_pass: crate::passes::sssr::SssrSamplePass,
-    pub sssr_temporal_pass: crate::passes::sssr::SssrTemporalPass,
     pub sssr_bilateral_pass: crate::passes::sssr::SssrBilateralUpsamplePass,
     pub sssr_composite_pass: crate::passes::sssr::SssrCompositePass,
     pub bloom_pass: crate::passes::bloom::BloomPass,
@@ -450,9 +450,9 @@ impl DefaultRenderGraph {
         let blas_update_pass = crate::passes::accel_struct::BlasUpdatePass::new();
         let tlas_rebuild_pass = crate::passes::accel_struct::TlasRebuildPass::new();
         let hiz_build_final = crate::passes::hiz_build::HiZBuildPass::new_final();
+        let hdr_mip_gen_pass = crate::passes::hdr_mip_gen::HdrMipGenPass::new();
         let mut sssr_sample_pass = crate::passes::sssr::SssrSamplePass::new();
         sssr_sample_pass.blue_noise_index = blue_noise_index;
-        let sssr_temporal_pass = crate::passes::sssr::SssrTemporalPass::new();
         let sssr_bilateral_pass = crate::passes::sssr::SssrBilateralUpsamplePass::new();
         let sssr_composite_pass = crate::passes::sssr::SssrCompositePass::new();
         let bloom_pass = crate::passes::bloom::BloomPass::new();
@@ -475,7 +475,7 @@ impl DefaultRenderGraph {
             nearest_sampler,
             debug_channel: DebugChannel::Lit,
             fxaa_enabled: true,
-            ao_mode: AoMode::Rtao,
+            ao_mode: AoMode::Gtao,
             gtao_group,
             rtao_group: RtaoGroup::new(),
             ao_none_pass: AoNonePass::new(),
@@ -489,8 +489,8 @@ impl DefaultRenderGraph {
             blas_update_pass,
             tlas_rebuild_pass,
             hiz_build_final,
+            hdr_mip_gen_pass,
             sssr_sample_pass,
-            sssr_temporal_pass,
             sssr_bilateral_pass,
             sssr_composite_pass,
             bloom_pass,
@@ -651,6 +651,8 @@ impl DefaultRenderGraph {
         self.graph
             .init_pass_direct(&mut self.hiz_build_final, backend);
         self.graph
+            .init_pass_direct(&mut self.hdr_mip_gen_pass, backend);
+        self.graph
             .init_pass_direct(&mut self.draw_call_gen_pass, backend);
         self.graph.init_pass_direct(&mut self.sky_pass, backend);
         self.graph
@@ -662,8 +664,6 @@ impl DefaultRenderGraph {
         self.graph.init_pass_direct(&mut self.rtao_group, backend);
         self.graph
             .init_pass_direct(&mut self.sssr_sample_pass, backend);
-        self.graph
-            .init_pass_direct(&mut self.sssr_temporal_pass, backend);
         self.graph
             .init_pass_direct(&mut self.sssr_bilateral_pass, backend);
         self.graph
@@ -1187,7 +1187,6 @@ impl DefaultRenderGraph {
         self.gtao_group.tick();
         self.rtao_group.tick();
         self.sssr_sample_pass.tick();
-        self.sssr_temporal_pass.tick();
 
         // 5. Dirty-check sync passes against cached scene data — no declare() side effects.
         // Sync passes add/remove transient staging buffers when dirty, changing graph topology.
@@ -1455,7 +1454,6 @@ impl DefaultRenderGraph {
             if channel == DebugChannel::Lit
                 || channel == DebugChannel::LightDensity
                 || channel == DebugChannel::ClusterGrid
-                || channel == DebugChannel::SsrResolved
                 || channel == DebugChannel::SsrRaw
                 || channel == DebugChannel::SsrUpsampled
                 || channel == DebugChannel::BloomBuffer
@@ -1470,7 +1468,7 @@ impl DefaultRenderGraph {
                     // 5. Post Processing
                     self.record_post_process(builder);
                 } else {
-                    // SsrResolved / BloomBuffer: show buffer directly, skip tonemap.
+                    // SsrRaw / SsrUpsampled / BloomBuffer: show buffer directly, skip tonemap.
                     builder.add_pass(&mut self.debug_viz_pass);
                 }
             } else {
@@ -1494,9 +1492,10 @@ impl DefaultRenderGraph {
 
     fn record_lighting(&mut self, builder: &mut PassBuilder) -> ImageHandle {
         builder.add_pass(&mut self.deferred_resolve_pass);
+        // Generate HDR mip chain after deferred resolve, before SSR sampling.
+        builder.add_pass(&mut self.hdr_mip_gen_pass);
         builder.add_pass(&mut self.sssr_sample_pass);
-        builder.add_pass(&mut self.sssr_temporal_pass);
-        // Bilateral upsample: low-res SSR_Resolved → full-res SSR_Upsampled.
+        // Bilateral upsample: low-res SSR_Raw → full-res SSR_Upsampled (copy at factor=1).
         builder.add_pass(&mut self.sssr_bilateral_pass);
         // Composite SSR_Upsampled onto HDR_Target (in-place, mip 0).
         builder.add_pass(&mut self.sssr_composite_pass);

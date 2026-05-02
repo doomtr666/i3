@@ -33,10 +33,11 @@ struct VertexOutput
 
 struct GBufferOutput
 {
-    float4 albedo : SV_Target0;
-    float2 normal : SV_Target1;
+    float4 albedo    : SV_Target0;
+    float2 normal    : SV_Target1;
     float2 roughMetal : SV_Target2;
-    float3 emissive : SV_Target3;
+    float3 emissive  : SV_Target3;
+    float  hiz_depth : SV_Target4; // NDC depth → HiZ mip 0 for SPD
 };
 
 [shader("vertex")]
@@ -153,9 +154,10 @@ GBufferOutput fragmentMain(VertexOutput input)
     }
 
     GBufferOutput output;
-    output.albedo = float4(albedo.rgb, 1.0);
-    output.normal = encodeOctahedral(normal);
+    output.albedo     = float4(albedo.rgb, 1.0);
+    output.normal     = encodeOctahedral(normal);
     output.roughMetal = float2(roughness, metallic);
-    output.emissive = emissive;
+    output.emissive   = emissive;
+    output.hiz_depth  = input.clipPosition.z; // SV_Position.z = post-divide NDC depth
     return output;
 }

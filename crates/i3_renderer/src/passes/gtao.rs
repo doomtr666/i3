@@ -18,9 +18,9 @@ struct GtaoPushConstants {
     inv_projection:   [[f32; 4]; 4],
     view:             [[f32; 4]; 4],
     screen_size:      [f32; 2],
-    radius:           f32,
-    falloff:          f32,
-    slice_count:      u32,
+    radius:      f32,
+    final_power: f32, // visibility power curve (was "falloff")
+    slice_count: u32,
     step_count:       u32,
     frame_index:      u32,
     enabled:          u32,
@@ -39,10 +39,10 @@ struct GtaoPushConstants {
 /// (no occlusion) via the shader's early-out branch — the resource is still
 /// declared so that `DeferredResolvePass` can always find `AO_Raw`.
 pub struct GtaoPass {
-    pub enabled:          bool,
-    pub radius:           f32,
-    pub falloff:          f32,
-    pub slice_count:      u32,
+    pub enabled:      bool,
+    pub radius:       f32,
+    pub final_power:  f32,
+    pub slice_count:  u32,
     pub step_count:       u32,
     pub blue_noise_index: u32,
 
@@ -58,10 +58,10 @@ pub struct GtaoPass {
 impl GtaoPass {
     pub fn new() -> Self {
         Self {
-            enabled:          true,
-            radius:           0.5,
-            falloff:          2.0,
-            slice_count:      2,
+            enabled:      true,
+            radius:       0.5,
+            final_power:  2.0,
+            slice_count:  2,
             step_count:       5,
             blue_noise_index: 0,
             pipeline:         None,
@@ -140,8 +140,8 @@ impl RenderPass for GtaoPass {
             inv_projection: inv_proj,
             view,
             screen_size:    [width as f32, height as f32],
-            radius:         self.radius,
-            falloff:        self.falloff,
+            radius:      self.radius,
+            final_power: self.final_power,
             slice_count:    self.slice_count,
             step_count:     self.step_count,
             frame_index:      self.frame_index,

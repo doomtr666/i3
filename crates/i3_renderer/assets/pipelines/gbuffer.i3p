@@ -17,6 +17,7 @@ PipelineConfig(
             (format: R16G16_SFLOAT),        // Normal
             (format: R8G8_UNORM),           // RoughMetal
             (format: R11G11B10_UFLOAT),     // Emissive
+            (format: R32_SFLOAT),           // HiZ mip 0 (depth copy for SPD)
         ],
         vertex_layout: None,
     ))

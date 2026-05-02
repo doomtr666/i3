@@ -17,4 +17,5 @@ pub mod gtao;
 pub mod gtao_temporal;
 pub mod sssr;
 pub mod bloom;
+pub mod hdr_mip_gen;
 pub mod rtao;

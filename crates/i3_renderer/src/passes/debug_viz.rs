@@ -11,7 +11,6 @@ pub enum DebugChannel {
     Emissive = 4,
     Depth = 5,
     AO = 6,
-    SsrResolved = 7,
     BloomBuffer = 8,
     SsrRaw = 9,
     Lit = 10,
@@ -48,7 +47,6 @@ pub struct DebugVizPass {
     gbuffer_emissive: ImageHandle,
     gbuffer_depth: ImageHandle,
     ao_resolved:   ImageHandle,
-    ssr_resolved:  ImageHandle,
     ssr_raw:       ImageHandle,
     ssr_upsampled: ImageHandle,
     bloom_buf:     ImageHandle,
@@ -68,7 +66,6 @@ impl DebugVizPass {
             gbuffer_emissive: ImageHandle::INVALID,
             gbuffer_depth: ImageHandle::INVALID,
             ao_resolved:   ImageHandle::INVALID,
-            ssr_resolved:  ImageHandle::INVALID,
             ssr_raw:       ImageHandle::INVALID,
             ssr_upsampled: ImageHandle::INVALID,
             bloom_buf:     ImageHandle::INVALID,
@@ -110,11 +107,7 @@ impl RenderPass for DebugVizPass {
         self.ao_resolved = builder.resolve_image("AO_Resolved");
         self.backbuffer  = builder.resolve_image(&self.backbuffer_name);
 
-        // SSR_Resolved/SSR_Raw are only declared when the lighting path ran.
-        if self.channel == DebugChannel::SsrResolved {
-            self.ssr_resolved = builder.resolve_image("SSR_Resolved");
-            builder.read_image(self.ssr_resolved, ResourceUsage::SHADER_READ);
-        }
+        // SSR_Raw / SSR_Upsampled are only declared when the lighting path ran.
         if self.channel == DebugChannel::SsrRaw {
             self.ssr_raw = builder.resolve_image("SSR_Raw");
             builder.read_image(self.ssr_raw, ResourceUsage::SHADER_READ);
@@ -144,9 +137,7 @@ impl RenderPass for DebugVizPass {
 
         // Bindings 6 and 7 must always be written even if the shader won't read them.
         // Use ao_resolved as a harmless dummy when the channel is something else.
-        let ssr_handle = if self.channel == DebugChannel::SsrResolved {
-            self.ssr_resolved
-        } else if self.channel == DebugChannel::SsrRaw {
+        let ssr_handle = if self.channel == DebugChannel::SsrRaw {
             self.ssr_raw
         } else if self.channel == DebugChannel::SsrUpsampled {
             self.ssr_upsampled

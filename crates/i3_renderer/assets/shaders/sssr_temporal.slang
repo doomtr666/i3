@@ -107,7 +107,7 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     // Cold start: store the cleaned sample directly
     if (g_common.GetFrameIndex() == 0u)
     {
-        ssrResolved[int2(px)] = float4(current_hdr, 1.0f);
+        ssrResolved[int2(px)] = float4(current_hdr, current.a);
         return;
     }
 
@@ -120,7 +120,7 @@ void computeMain(uint3 id: SV_DispatchThreadID)
 
     if (any(prevUv < 0.0f) || any(prevUv > 1.0f))
     {
-        ssrResolved[int2(px)] = float4(current_hdr, 1.0f);
+        ssrResolved[int2(px)] = float4(current_hdr, current.a);
         return;
     }
 
@@ -138,5 +138,6 @@ void computeMain(uint3 id: SV_DispatchThreadID)
     float  effective_alpha = pc.alpha * saturate(history_s.a);
     float3 final_color    = Decompress(lerp(Compress(current_hdr, k), Compress(clipped_hdr, k), effective_alpha), k);
 
-    ssrResolved[int2(px)] = float4(final_color, 1.0f);
+    float final_a = lerp(current.a, history_s.a, effective_alpha);
+    ssrResolved[int2(px)] = float4(final_color, final_a);
 }

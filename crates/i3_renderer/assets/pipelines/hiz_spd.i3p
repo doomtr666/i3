@@ -1,0 +1,8 @@
+PipelineConfig(
+    name: "hiz_spd",
+    shader: Path("../shaders/hiz_spd.slang"),
+    graphics: None,
+    compute: Some(ComputeConfig(
+        entry_point: "computeMain",
+    )),
+)
