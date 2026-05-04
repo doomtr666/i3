@@ -190,6 +190,17 @@ impl DebugDrawPass {
         }
     }
 
+    /// Draw a small 3D cross at `pos` (6 line segments along world ±X/±Y/±Z).
+    /// Useful for visualising point clouds (e.g. dual-contouring vertices).
+    /// `half_size` is the half-length of each arm in world units.
+    pub fn push_cross(&mut self, pos: [f32; 3], half_size: f32, col: [f32; 4]) {
+        let [x, y, z] = pos;
+        let h = half_size;
+        self.push_line([x - h, y, z], [x + h, y, z], col);
+        self.push_line([x, y - h, z], [x, y + h, z], col);
+        self.push_line([x, y, z - h], [x, y, z + h], col);
+    }
+
     /// Draw the view frustum defined by `inv_vp` in world space (12 edges).
     /// Useful when the culling camera is decoupled from the render camera.
     pub fn push_frustum(&mut self, inv_vp: &nalgebra_glm::Mat4, col: [f32; 4]) {

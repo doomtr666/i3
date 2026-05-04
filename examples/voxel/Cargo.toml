@@ -18,6 +18,7 @@ i3_egui = { path = "../../crates/i3_egui" }
 i3_io = { path = "../../crates/i3_io" }
 examples_common = { path = "../common" }
 tracing = "0.1"
+nalgebra = { workspace = true}
 nalgebra-glm = { workspace = true }
 bytemuck = { workspace = true }
 uuid = { workspace = true }

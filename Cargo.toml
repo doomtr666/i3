@@ -35,6 +35,7 @@ thiserror = "1.0"
 ash = { version = "0.38", features = ["linked"] }
 sdl2 = { version = "0.37", default-features = false }
 vk-mem = "0.5.0"
+nalgebra = "0.34"
 nalgebra-glm = "0.19"
 memmap2 = "0.9"
 rayon = "1.10"
