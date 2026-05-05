@@ -1,5 +1,7 @@
 extern crate nalgebra as na;
-use crate::Sdf;
+use crate::SdfScene;
+use crate::sdf::{AABB, SdfNode};
+
 use na::{Matrix3, Point3, Vector3, point};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,7 +33,7 @@ impl Default for VoxelVertex {
 }
 
 pub struct VoxelBlock {
-    sdf: Arc<dyn Sdf>,
+    sdf: Arc<SdfScene>,
     px: i32,
     py: i32,
     pz: i32,
@@ -41,7 +43,7 @@ pub struct VoxelBlock {
 }
 
 impl VoxelBlock {
-    pub fn new(sdf: Arc<dyn Sdf>, px: i32, py: i32, pz: i32) -> Self {
+    pub fn new(sdf: Arc<SdfScene>, px: i32, py: i32, pz: i32) -> Self {
         Self {
             sdf,
             px,
@@ -51,6 +53,13 @@ impl VoxelBlock {
             packed_vertices: vec![VoxelVertex::default(); 0],
             packed_indices: vec![0; 0],
         }
+    }
+
+    pub fn world_aabb(&self) -> AABB {
+        AABB::new(
+            Point3::from(self.world_min()),
+            Point3::from(self.world_max()),
+        )
     }
 
     pub fn world_min(&self) -> [f32; 3] {
@@ -82,11 +91,17 @@ impl VoxelBlock {
     }
 
     pub fn compute_mesh(&mut self) {
-        self.compute_vertices();
-        self.compute_indices();
+        let sdf = self.sdf.clone();
+        let sdf_nodes = sdf.get_nodes(&self.world_aabb());
+        if sdf_nodes.is_empty() {
+            return;
+        }
+
+        self.compute_vertices(&sdf_nodes);
+        self.compute_indices(&sdf_nodes);
     }
 
-    fn compute_vertices(&mut self) {
+    fn compute_vertices(&mut self, sdf_nodes: &[&SdfNode]) {
         for z in -1..=(VOXEL_BLOCK_WIDTH as i32 - 1) {
             for y in -1..=(VOXEL_BLOCK_WIDTH as i32 - 1) {
                 for x in -1..=(VOXEL_BLOCK_WIDTH as i32 - 1) {
@@ -95,7 +110,7 @@ impl VoxelBlock {
                     for i in 0..8 {
                         let p = self.world_pos(x + (i & 1), y + ((i >> 1) & 1), z + ((i >> 2) & 1));
                         vertices[i as usize] = p;
-                        values[i as usize] = self.sdf.value(&p);
+                        values[i as usize] = SdfScene::value(sdf_nodes, &p);
                     }
 
                     if !self.check_intersection(&values) {
@@ -138,7 +153,7 @@ impl VoxelBlock {
                                 for _ in 0..8 {
                                     let mid = (lo + hi) * 0.5;
                                     let p = v1 + mid * (v2 - v1);
-                                    let fmid = self.sdf.value(&p);
+                                    let fmid = SdfScene::value(sdf_nodes, &p);
                                     if flo * fmid <= 0.0 {
                                         hi = mid;
                                     } else {
@@ -148,7 +163,7 @@ impl VoxelBlock {
                                 }
                                 v1 + ((lo + hi) * 0.5) * (v2 - v1)
                             };
-                            let n = self.sdf.normal(&q);
+                            let n = SdfScene::normal(sdf_nodes, &q);
                             mass_mat += n * n.transpose();
                             mass_vec += n * n.dot(&q.coords);
                             center_of_mass += q.coords;
@@ -198,8 +213,8 @@ impl VoxelBlock {
                     // off the actual zero-set.  Each step: p -= f(p)·∇f(p)/|∇f|²
                     // For a unit-gradient SDF (sphere, etc.) this converges in one step.
                     for _ in 0..3 {
-                        let f = self.sdf.value(&projected);
-                        let n = self.sdf.normal(&projected);
+                        let f = SdfScene::value(sdf_nodes, &projected);
+                        let n = SdfScene::normal(sdf_nodes, &projected);
                         projected = Point3::from(projected.coords - f * n);
                     }
 
@@ -210,7 +225,7 @@ impl VoxelBlock {
                         projected.z.clamp(local_min.z, local_max.z),
                     ]);
 
-                    let normal = self.sdf.normal(&position);
+                    let normal = SdfScene::normal(sdf_nodes, &position);
 
                     self.vertices[((x + 1)
                         + (y + 1) * VOXEL_BLOCK_PADDED_WIDTH
@@ -224,18 +239,18 @@ impl VoxelBlock {
         }
     }
 
-    fn compute_indices(&mut self) {
+    fn compute_indices(&mut self, sdf_nodes: &[&SdfNode]) {
         let mut vertex_map = HashMap::<[i32; 3], u32>::new();
 
         for z in 0..VOXEL_BLOCK_WIDTH as i32 {
             for y in 0..VOXEL_BLOCK_WIDTH as i32 {
                 for x in 0..VOXEL_BLOCK_WIDTH as i32 {
                     let start_pos = self.world_pos(x, y, z);
-                    let start_v = self.sdf.value(&start_pos);
+                    let start_v = SdfScene::value(sdf_nodes, &start_pos);
 
                     // x+ edge
                     let xp_pos = self.world_pos(x + 1, y, z);
-                    let xp_v = self.sdf.value(&xp_pos);
+                    let xp_v = SdfScene::value(sdf_nodes, &xp_pos);
 
                     if (start_v >= 0.0) != (xp_v >= 0.0) {
                         if let (Some(i0), Some(i1), Some(i2), Some(i3)) = (
@@ -250,7 +265,7 @@ impl VoxelBlock {
 
                     // y+ edge
                     let yp_pos = self.world_pos(x, y + 1, z);
-                    let yp_v = self.sdf.value(&yp_pos);
+                    let yp_v = SdfScene::value(sdf_nodes, &yp_pos);
 
                     if (start_v >= 0.0) != (yp_v >= 0.0) {
                         if let (Some(i0), Some(i1), Some(i2), Some(i3)) = (
@@ -265,7 +280,7 @@ impl VoxelBlock {
 
                     // z+ edge
                     let zp_pos = self.world_pos(x, y, z + 1);
-                    let zp_v = self.sdf.value(&zp_pos);
+                    let zp_v = SdfScene::value(sdf_nodes, &zp_pos);
 
                     if (start_v >= 0.0) != (zp_v >= 0.0) {
                         if let (Some(i0), Some(i1), Some(i2), Some(i3)) = (
@@ -323,12 +338,12 @@ impl VoxelBlock {
 }
 
 pub struct VoxelScene {
-    sdf: Arc<dyn Sdf>,
+    sdf: Arc<SdfScene>,
     blocks: Vec<VoxelBlock>,
 }
 
 impl VoxelScene {
-    pub fn new(sdf: Arc<dyn Sdf>) -> VoxelScene {
+    pub fn new(sdf: Arc<SdfScene>) -> VoxelScene {
         let mut blocks = Vec::<VoxelBlock>::new();
 
         for z in 0..VOXEL_SCENE_WIDTH {

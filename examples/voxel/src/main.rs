@@ -1,13 +1,10 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
-extern crate nalgebra as na;
-use na::{point, vector};
+extern crate nalgebra;
+use nalgebra::{UnitQuaternion, vector};
 
 mod sdf;
 mod voxel;
-
-use sdf::{BoxSdf, Sdf};
-use voxel::VoxelScene;
 
 use examples_common::basic_scene::BasicScene;
 use examples_common::camera_controller::CameraController;
@@ -22,6 +19,9 @@ use std::f32::consts::FRAC_PI_4;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
+use voxel::VoxelScene;
+
+use crate::sdf::{SdfPrimitive, SdfScene, Transform};
 
 struct VoxelApp {
     backend: VulkanBackend,
@@ -159,8 +159,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let _guard = init_tracing("voxel.log");
 
     let loader = Arc::new(AssetLoader::new(Arc::new(Vfs::new())));
-    let AppRenderer { backend, window, render_graph, ui } =
-        init_renderer("Voxel", 1280, 720, Some(loader))?;
+    let AppRenderer {
+        backend,
+        window,
+        render_graph,
+        ui,
+    } = init_renderer("Voxel", 1280, 720, Some(loader))?;
 
     let mut camera = CameraController::new();
     camera.position = glm::vec3(1.6, 5.0, 7.0);
@@ -169,11 +173,15 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     camera.move_speed = 3.0;
     camera.camera_locked = true; // start with GUI visible
 
-    //let sdf = SphereSdf::new(point![1.6, 1.6, 1.6], 1.0);
+    let mut sdf_scene = SdfScene::new();
+    sdf_scene.add(
+        &Transform::new(vector![1.6, 5.0, 7.0], UnitQuaternion::identity(), 1.0),
+        &SdfPrimitive::Box {
+            half_extents: vector![3.0, 1.33, 1.33],
+        },
+    );
 
-    let sdf = BoxSdf::new(point![5.0, 2.17, 1.57], vector![3.0, 1.33, 1.33]);
-
-    let mut voxel_scene = VoxelScene::new(Arc::new(sdf));
+    let mut voxel_scene = VoxelScene::new(Arc::new(sdf_scene));
     voxel_scene.compute_meshes();
 
     //let mut block = VoxelBlock::new(Arc::new(sdf), 0, 0, 0);

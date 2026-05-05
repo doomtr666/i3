@@ -1,19 +1,69 @@
-extern crate nalgebra as na;
-use na::{Isometry3, Matrix4, Point3, Vector3};
+extern crate nalgebra;
+use nalgebra::{Isometry3, Point3, UnitQuaternion, Vector3};
 
+#[derive(Clone, Copy)]
 pub struct Transform {
     isometry: Isometry3<f32>,
+    inv_isometry: Isometry3<f32>,
     scale: f32,
+    inv_scale: f32, // Precalculated to avoid divisions in the hot loop
 }
 
-impl From<&Transform> for Matrix4<f32> {
-    fn from(value: &Transform) -> Self {
-        // to_homogeneous() converts the Isometry (T * R) into a 4x4 matrix.
-        // Appending the scale results in the standard T * R * S matrix.
-        value
-            .isometry
-            .to_homogeneous()
-            .append_nonuniform_scaling(&Vector3::new(value.scale, value.scale, value.scale))
+impl Transform {
+    /// Creates a new Transform and precalculates all inverses
+    pub fn new(translation: Vector3<f32>, rotation: UnitQuaternion<f32>, scale: f32) -> Self {
+        let isometry = Isometry3::from_parts(translation.into(), rotation);
+
+        Self {
+            isometry,
+            inv_isometry: isometry.inverse(), // Extremely fast (quaternion conjugation)
+            scale,
+            inv_scale: 1.0 / scale, // Precalculated multiplication factor
+        }
+    }
+
+    pub fn identity() -> Self {
+        Self {
+            isometry: Isometry3::identity(),
+            inv_isometry: Isometry3::identity(),
+            scale: 1.0,
+            inv_scale: 1.0,
+        }
+    }
+
+    /// World to Local (Domain Warping for SDF evaluation)
+    #[inline]
+    pub fn inv_transform_point(&self, p: &Point3<f32>) -> Point3<f32> {
+        // 1. Un-translate and Un-rotate
+        let local_unscaled = self.inv_isometry * p;
+        // 2. Un-scale
+        Point3::from(local_unscaled.coords * self.inv_scale)
+    }
+
+    /// Local to World (Restoring normal orientation)
+    #[inline]
+    pub fn transform_normal(&self, n: &Vector3<f32>) -> Vector3<f32> {
+        // Uniform scale doesn't affect normal direction, only rotation does.
+        self.isometry.rotation * n
+    }
+
+    /// Local to World (Useful for instantiating mesh vertices)
+    #[inline]
+    pub fn transform_point(&self, p: &Point3<f32>) -> Point3<f32> {
+        // 1. Scale
+        let scaled_p = Point3::from(p.coords * self.scale);
+        // 2. Rotate and Translate
+        self.isometry * scaled_p
+    }
+
+    /// World to Local (Useful for projecting world normals back to primitives if needed)
+    #[inline]
+    pub fn inv_transform_normal(&self, n: &Vector3<f32>) -> Vector3<f32> {
+        self.inv_isometry.rotation * n
+    }
+
+    pub fn scale(&self) -> f32 {
+        self.scale
     }
 }
 
@@ -123,7 +173,16 @@ pub enum SdfPrimitive {
 
 impl SdfPrimitive {
     fn local_aabb(&self) -> AABB {
-        unimplemented!()
+        match self {
+            SdfPrimitive::Sphere { radius } => AABB::new(
+                Point3::new(-radius, -radius, -radius),
+                Point3::new(*radius, *radius, *radius),
+            ),
+            SdfPrimitive::Box { half_extents } => AABB::new(
+                Point3::new(-half_extents.x, -half_extents.y, -half_extents.z),
+                Point3::new(half_extents.x, half_extents.y, half_extents.z),
+            ),
+        }
     }
 
     fn local_value(&self, position: &Point3<f32>) -> f32 {
@@ -190,7 +249,7 @@ impl SdfPrimitive {
 pub struct SdfNode {
     primitive: SdfPrimitive,
     world_aabb: AABB,
-    inv_transform: Matrix4<f32>,
+    transform: Transform,
     substract: bool,
 }
 
@@ -199,7 +258,7 @@ impl SdfNode {
         SdfNode {
             primitive: primitive.clone(),
             world_aabb: AABB::transform(&primitive.local_aabb(), transform),
-            inv_transform: Matrix4::<f32>::from(transform).try_inverse().unwrap(),
+            transform: transform.clone(),
             substract,
         }
     }
@@ -236,103 +295,61 @@ impl SdfScene {
         result
     }
 
-    pub fn value(nodes: &Vec<&SdfNode>, position: &Point3<f32>) -> f32 {
-        unimplemented!()
-    }
+    pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
+        let mut solid_dist = f32::MAX;
+        let mut empty_dist = f32::MAX;
 
-    pub fn normal(nodes: &Vec<&SdfNode>, position: &Point3<f32>) -> Vector3<f32> {
-        unimplemented!()
-    }
-}
+        for node in nodes {
+            // 1. Warp point to local space
+            let local_p = node.transform.inv_transform_point(position);
 
-pub trait Sdf {
-    fn value(&self, p: &Point3<f32>) -> f32;
-    fn normal(&self, p: &Point3<f32>) -> Vector3<f32>;
-}
+            // 2. Evaluate and un-warp distance metric
+            let dist = node.primitive.local_value(&local_p) * node.transform.scale;
 
-pub struct SphereSdf {
-    center: Point3<f32>,
-    radius: f32,
-}
-
-impl SphereSdf {
-    pub fn new(center: Point3<f32>, radius: f32) -> Self {
-        Self { center, radius }
-    }
-}
-
-impl Sdf for SphereSdf {
-    fn value(&self, p: &Point3<f32>) -> f32 {
-        (p - self.center).norm() - self.radius
-    }
-
-    fn normal(&self, p: &Point3<f32>) -> Vector3<f32> {
-        (p - self.center).normalize()
-    }
-}
-
-pub struct BoxSdf {
-    center: Point3<f32>,
-    half_extents: Vector3<f32>,
-}
-
-impl BoxSdf {
-    pub fn new(center: Point3<f32>, half_extents: Vector3<f32>) -> Self {
-        Self {
-            center: center - Vector3::from([1e-5, 1e-5, 1e-5]),
-            half_extents,
-        }
-    }
-}
-
-impl Sdf for BoxSdf {
-    fn value(&self, p: &Point3<f32>) -> f32 {
-        let local_p = p - self.center;
-
-        let q = Vector3::new(
-            local_p.x.abs() - self.half_extents.x,
-            local_p.y.abs() - self.half_extents.y,
-            local_p.z.abs() - self.half_extents.z,
-        );
-
-        let outside_dist = Vector3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).norm();
-        let inside_dist = q.x.max(q.y).max(q.z).min(0.0);
-
-        outside_dist + inside_dist
-    }
-
-    fn normal(&self, p: &Point3<f32>) -> Vector3<f32> {
-        let local_p = p - self.center;
-        let d = Vector3::new(
-            local_p.x.abs() - self.half_extents.x,
-            local_p.y.abs() - self.half_extents.y,
-            local_p.z.abs() - self.half_extents.z,
-        );
-
-        let sign = Vector3::new(local_p.x.signum(), local_p.y.signum(), local_p.z.signum());
-
-        if d.x > 0.0 || d.y > 0.0 || d.z > 0.0 {
-            let mut n = Vector3::zeros();
-            if d.x > 0.0 {
-                n.x = d.x * sign.x;
-            }
-            if d.y > 0.0 {
-                n.y = d.y * sign.y;
-            }
-            if d.z > 0.0 {
-                n.z = d.z * sign.z;
-            }
-            n.normalize()
-        } else {
-            let mut n = Vector3::zeros();
-            if d.x > d.y && d.x > d.z {
-                n.x = sign.x;
-            } else if d.y > d.z {
-                n.y = sign.y;
+            if node.substract {
+                empty_dist = empty_dist.min(dist);
             } else {
-                n.z = sign.z;
+                solid_dist = solid_dist.min(dist);
             }
-            n
+        }
+
+        solid_dist.max(-empty_dist)
+    }
+
+    pub fn normal(nodes: &[&SdfNode], position: &Point3<f32>) -> Vector3<f32> {
+        let mut solid_dist = f32::MAX;
+        let mut solid_normal = Vector3::zeros();
+
+        let mut empty_dist = f32::MAX;
+        let mut empty_normal = Vector3::zeros();
+
+        for node in nodes {
+            let local_p = node.transform.inv_transform_point(position);
+            let dist = node.primitive.local_value(&local_p) * node.transform.scale();
+
+            if node.substract {
+                if dist < empty_dist {
+                    empty_dist = dist;
+                    // Rotate the local normal back to world space
+                    empty_normal = node
+                        .transform
+                        .transform_normal(&node.primitive.local_normal(&local_p));
+                }
+            } else {
+                if dist < solid_dist {
+                    solid_dist = dist;
+                    solid_normal = node
+                        .transform
+                        .transform_normal(&node.primitive.local_normal(&local_p));
+                }
+            }
+        }
+
+        // Inside the hole: invert the normal of the subtracting primitive
+        if -empty_dist > solid_dist {
+            -empty_normal
+        } else {
+            solid_normal
         }
     }
 }
