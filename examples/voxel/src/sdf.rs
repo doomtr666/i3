@@ -1,5 +1,60 @@
 extern crate nalgebra as na;
-use na::{Point3, Vector3};
+use na::{Isometry3, Point3, Vector3};
+
+pub struct AABB {
+    min: Point3<f32>,
+    max: Point3<f32>,
+}
+
+impl AABB {
+    pub fn new(min: Point3<f32>, max: Point3<f32>) -> AABB {
+        AABB { min, max }
+    }
+
+    pub fn infinite() -> AABB {
+        AABB {
+            min: Point3::from([f32::MIN, f32::MIN, f32::MIN]),
+            max: Point3::from([f32::MAX, f32::MAX, f32::MAX]),
+        }
+    }
+
+    pub fn invalid() -> AABB {
+        AABB {
+            min: Point3::from([f32::MAX, f32::MAX, f32::MAX]),
+            max: Point3::from([f32::MIN, f32::MIN, f32::MIN]),
+        }
+    }
+}
+
+pub struct Transform {
+    isometry: Isometry3<f32>,
+    scale: f32,
+}
+
+pub enum SdfPrimitive {
+    Sphere { radius: f32 },
+    Box { half_extents: Vector3<f32> },
+}
+
+pub struct SdfNode {
+    primitive: SdfPrimitive,
+    aaab: AABB,
+}
+
+pub struct SdfScene {
+    primitives: Vec<SdfNode>,
+}
+
+impl SdfScene {
+    pub fn new() -> SdfScene {
+        SdfScene {
+            primitives: Vec::<SdfNode>::new(),
+        }
+    }
+
+    pub fn add(&mut self, transform: &Transform, primitive: &SdfPrimitive) {}
+    pub fn sub(&mut self, transform: &Transform, primitive: &SdfPrimitive) {}
+}
 
 pub trait Sdf {
     fn value(&self, p: &Point3<f32>) -> f32;

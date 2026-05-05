@@ -1,8 +1,57 @@
 pub mod basic_scene;
 pub mod camera_controller;
 
+use i3_gfx::prelude::{RenderBackend, WindowDesc, WindowHandle};
+use i3_io::asset::AssetLoader;
+use i3_renderer::prelude::DefaultRenderGraph;
+use i3_renderer::render_graph::RenderConfig;
+use i3_vulkan_backend::backend::VulkanBackend;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
+
+// ─── Renderer bootstrap ──────────────────────────────────────────────────────
+
+pub struct AppRenderer {
+    pub backend:      VulkanBackend,
+    pub window:       WindowHandle,
+    pub render_graph: DefaultRenderGraph,
+    pub ui:           Arc<i3_egui::UiSystem>,
+}
+
+/// Initialise backend, window, render graph, and egui in one call.
+///
+/// The caller is responsible for creating the `AssetLoader` (with whatever VFS
+/// mounts it needs) and passing it in — this lets each example control its own
+/// asset pipeline while sharing the common setup boilerplate.
+pub fn init_renderer(
+    title: &str,
+    width: u32,
+    height: u32,
+    loader: Option<Arc<AssetLoader>>,
+) -> Result<AppRenderer, Box<dyn std::error::Error>> {
+    let mut backend = VulkanBackend::new()?;
+    maybe_list_gpus(&backend);
+    backend.initialize(get_gpu_index())?;
+
+    let window = backend.create_window(WindowDesc {
+        title: title.to_string(),
+        width,
+        height,
+    })?;
+
+    let config = RenderConfig { width, height };
+    let ui = Arc::new(i3_egui::UiSystem::new(width, height));
+
+    let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
+    render_graph.publish("UiSystem", ui.clone());
+    if let Some(l) = loader {
+        render_graph.publish("AssetLoader", l);
+    }
+    render_graph.init(&mut backend);
+
+    Ok(AppRenderer { backend, window, render_graph, ui })
+}
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 pub fn init_tracing(file_name: &str) -> tracing_appender::non_blocking::WorkerGuard {

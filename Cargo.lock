@@ -768,6 +768,7 @@ dependencies = [
 name = "examples_common"
 version = "0.1.0"
 dependencies = [
+ "i3_egui",
  "i3_gfx",
  "i3_io",
  "i3_renderer",

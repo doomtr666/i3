@@ -11,7 +11,7 @@ use voxel::VoxelScene;
 
 use examples_common::basic_scene::BasicScene;
 use examples_common::camera_controller::CameraController;
-use examples_common::{ExampleApp, init_tracing, main_loop};
+use examples_common::{AppRenderer, ExampleApp, init_renderer, init_tracing, main_loop};
 use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
 use i3_io::prelude::*;
@@ -158,32 +158,10 @@ impl ExampleApp for VoxelApp {
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let _guard = init_tracing("voxel.log");
 
-    let mut backend = VulkanBackend::new()?;
-    examples_common::maybe_list_gpus(&backend);
-    backend.initialize(examples_common::get_gpu_index())?;
+    let loader = Arc::new(AssetLoader::new(Arc::new(Vfs::new())));
+    let AppRenderer { backend, window, render_graph, ui } =
+        init_renderer("Voxel", 1280, 720, Some(loader))?;
 
-    let window = backend.create_window(WindowDesc {
-        title: "Voxel".to_string(),
-        width: 1280,
-        height: 720,
-    })?;
-
-    // Empty VFS — DefaultRenderGraph::init() mounts the system bundle automatically
-    let vfs = Arc::new(Vfs::new());
-    let loader = Arc::new(AssetLoader::new(vfs));
-
-    let config = RenderConfig {
-        width: 1280,
-        height: 720,
-    };
-    let ui = Arc::new(i3_egui::UiSystem::new(config.width, config.height));
-
-    let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
-    render_graph.publish("UiSystem", ui.clone());
-    render_graph.publish("AssetLoader", loader);
-    render_graph.init(&mut backend);
-
-    // Block center is [1.6, 1.6, 1.6]; position camera above-front, looking down at it
     let mut camera = CameraController::new();
     camera.position = glm::vec3(1.6, 5.0, 7.0);
     camera.yaw = -std::f32::consts::FRAC_PI_2;

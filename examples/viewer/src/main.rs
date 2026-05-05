@@ -1,7 +1,7 @@
 extern crate nalgebra_glm;
 
 use examples_common::basic_scene::BasicScene;
-use examples_common::{ExampleApp, init_tracing, main_loop};
+use examples_common::{AppRenderer, ExampleApp, init_renderer, init_tracing, main_loop};
 use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
 use i3_io::prelude::*;
@@ -775,19 +775,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let _guard = init_tracing("viewer.log");
     info!("Starting I3 viewer demo application");
 
-    // 1. Initialize Backend
-    let mut backend = VulkanBackend::new()?;
-    examples_common::maybe_list_gpus(&backend);
-    backend.initialize(examples_common::get_gpu_index())?;
-
-    // 2. Create Window
-    let window = backend.create_window(WindowDesc {
-        title: "Deferred glTF (Baked)".to_string(),
-        width: 1280,
-        height: 720,
-    })?;
-
-    // 3. Setup IO and VFS
+    // Setup IO and VFS (bundle-specific — stays here)
     let assets_dir = if let Ok(exe_path) = std::env::current_exe() {
         let exe_dir = exe_path.parent().unwrap();
         if exe_dir.join("viewer_scenes.i3b").exists() {
@@ -806,20 +794,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let bundle = BundleBackend::mount(&catalog_path, &blob_path)?;
     let vfs = Vfs::new();
     vfs.mount(Box::new(bundle));
-    let vfs = Arc::new(vfs);
-    let loader = AssetLoader::new(vfs);
-    let loader_arc = Arc::new(loader);
+    let loader_arc = Arc::new(AssetLoader::new(Arc::new(vfs)));
 
-    let config = RenderConfig {
-        width: 1280,
-        height: 720,
-    };
-
-    let ui = Arc::new(i3_egui::UiSystem::new(config.width, config.height));
-    let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
-    render_graph.publish("UiSystem", ui.clone());
-    render_graph.publish("AssetLoader", loader_arc.clone());
-    render_graph.init(&mut backend);
+    let AppRenderer { backend, window, render_graph, ui } =
+        init_renderer("Deferred glTF (Baked)", 1280, 720, Some(loader_arc.clone()))?;
 
     let scene_name = std::env::var("I3_SCENE").unwrap_or_else(|_| "Sponza_scene".to_string());
 

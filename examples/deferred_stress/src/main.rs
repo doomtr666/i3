@@ -1,9 +1,9 @@
 extern crate nalgebra_glm;
 
 use examples_common::basic_scene::BasicScene;
-use examples_common::{ExampleApp, init_tracing, main_loop};
+use examples_common::{AppRenderer, ExampleApp, init_renderer, init_tracing, main_loop};
 use i3_gfx::prelude::*;
-use i3_renderer::render_graph::{DefaultRenderGraph, RenderConfig};
+use i3_renderer::render_graph::DefaultRenderGraph;
 use i3_renderer::scene::{LightData, LightType, ObjectData};
 use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
@@ -93,19 +93,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _guard = init_tracing("deferred_stress.log");
     info!("Starting Deferred Stress Test");
 
-    // 1. Initialize Backend
-    let mut backend = VulkanBackend::new()?;
-    examples_common::maybe_list_gpus(&backend);
-    backend.initialize(examples_common::get_gpu_index())?;
+    let AppRenderer { mut backend, window, render_graph, .. } =
+        init_renderer("Deferred Stress Test", 1280, 720, None)?;
 
-    // 2. Create Window
-    let window = backend.create_window(WindowDesc {
-        title: "Deferred Stress Test".to_string(),
-        width: 1280,
-        height: 720,
-    })?;
-
-    // 3. Build scene
+    // Build scene
     let mut scene = BasicScene::new();
     let cube_mesh = scene.add_white_cube_mesh(&mut backend);
 
@@ -170,15 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         light_type: LightType::Directional,
     });
 
-    // 4. Create Render Graph
-    let config = RenderConfig {
-        width: 1280,
-        height: 720,
-    };
-    let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
-    render_graph.init(&mut backend);
-
-    // 6. Run
+    // Run
     let app = DeferredStressApp {
         backend,
         window,
