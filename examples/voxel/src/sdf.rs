@@ -1,6 +1,8 @@
 extern crate nalgebra;
 use nalgebra::{Isometry3, Point3, UnitQuaternion, Vector3};
 
+const SDF_EPSILON: f32 = 1e-4;
+
 #[derive(Clone, Copy)]
 pub struct Transform {
     isometry: Isometry3<f32>,
@@ -28,6 +30,20 @@ impl Transform {
             inv_isometry: Isometry3::identity(),
             scale: 1.0,
             inv_scale: 1.0,
+        }
+    }
+
+    /// Returns a new Transform with an added local translation offset.
+    /// This is a generic math operation.
+    pub fn with_translation_offset(&self, offset: Vector3<f32>) -> Self {
+        let new_translation = self.isometry.translation.vector + offset;
+        let new_isometry = Isometry3::from_parts(new_translation.into(), self.isometry.rotation);
+
+        Self {
+            isometry: new_isometry,
+            inv_isometry: new_isometry.inverse(),
+            scale: self.scale,
+            inv_scale: self.inv_scale,
         }
     }
 
@@ -255,10 +271,13 @@ pub struct SdfNode {
 
 impl SdfNode {
     pub fn new(transform: &Transform, primitive: &SdfPrimitive, substract: bool) -> SdfNode {
+        let jittered_transform =
+            transform.with_translation_offset(Vector3::new(SDF_EPSILON, SDF_EPSILON, SDF_EPSILON));
+
         SdfNode {
             primitive: primitive.clone(),
-            world_aabb: AABB::transform(&primitive.local_aabb(), transform),
-            transform: transform.clone(),
+            world_aabb: AABB::transform(&primitive.local_aabb(), &jittered_transform),
+            transform: jittered_transform,
             substract,
         }
     }

@@ -22,6 +22,24 @@ use tracing::warn;
 use voxel::VoxelScene;
 
 use crate::sdf::{SdfPrimitive, SdfScene, Transform};
+use i3_io::mesh::BoundingBox;
+use i3_renderer::scene::ObjectData;
+use voxel::VoxelVertex;
+
+fn voxel_to_gbuffer(v: &VoxelVertex) -> [f32; 12] {
+    [
+        v.position.x, v.position.y, v.position.z,
+        v.normal.x,   v.normal.y,   v.normal.z,
+        0.0, 0.0,           // uv — pas de texturing pour l'instant
+        0.0, 0.0, 0.0, 1.0, // tangent
+    ]
+}
+
+fn quads_to_tris(indices: &[u32]) -> Vec<u32> {
+    indices.chunks(4)
+        .flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]])
+        .collect()
+}
 
 struct VoxelApp {
     backend: VulkanBackend,
@@ -32,6 +50,7 @@ struct VoxelApp {
     scene: BasicScene,
     voxel_scene: VoxelScene,
     dt: f32,
+    show_debug_draw: bool,
 }
 
 impl ExampleApp for VoxelApp {
@@ -56,6 +75,8 @@ impl ExampleApp for VoxelApp {
                 self.voxel_scene.voxel_width(),
             ));
             ui.separator();
+            ui.checkbox(&mut self.show_debug_draw, "Debug draw (AABB + normals + wireframe)");
+            ui.separator();
             if self.camera.camera_locked {
                 ui.label("Camera: LOCKED  (Tab to unlock)");
             } else {
@@ -73,57 +94,47 @@ impl ExampleApp for VoxelApp {
 
         self.render_graph.debug_draw_pass.clear();
 
-        for block in &self.voxel_scene {
-            self.render_graph.debug_draw_pass.push_aabb(
-                block.world_min(),
-                block.world_max(),
-                [0.2, 0.85, 1.0, 1.0],
-            );
+        if self.show_debug_draw {
+            for block in &self.voxel_scene {
+                self.render_graph.debug_draw_pass.push_aabb(
+                    block.world_min(),
+                    block.world_max(),
+                    [0.2, 0.85, 1.0, 1.0],
+                );
 
-            // debug draw voxel vertices and normals
-            let block_vertices = block.get_vertices();
-
-            for vertex in block_vertices {
-                match vertex {
-                    Some(v) => {
-                        self.render_graph.debug_draw_pass.push_cross(
-                            [v.position.x, v.position.y, v.position.z],
-                            0.02,
-                            [1.0, 0.8, 0.1, 1.0],
-                        );
-
-                        let n_end = v.position + 0.05 * v.normal;
-
-                        self.render_graph.debug_draw_pass.push_line(
-                            [v.position.x, v.position.y, v.position.z],
-                            [n_end.x, n_end.y, n_end.z],
-                            [1.0, 0.0, 1.0, 1.0],
-                        );
+                let block_vertices = block.get_vertices();
+                for vertex in block_vertices {
+                    match vertex {
+                        Some(v) => {
+                            self.render_graph.debug_draw_pass.push_cross(
+                                [v.position.x, v.position.y, v.position.z],
+                                0.02,
+                                [1.0, 0.8, 0.1, 1.0],
+                            );
+                            let n_end = v.position + 0.05 * v.normal;
+                            self.render_graph.debug_draw_pass.push_line(
+                                [v.position.x, v.position.y, v.position.z],
+                                [n_end.x, n_end.y, n_end.z],
+                                [1.0, 0.0, 1.0, 1.0],
+                            );
+                        }
+                        _ => continue,
                     }
-                    _ => continue,
                 }
-            }
 
-            let verts = block.get_packed_vertices();
-            let col = [0.2_f32, 1.0, 0.2, 1.0];
-            for quad in block.get_packed_indices().chunks(4) {
-                let [i0, i1, i2, i3] = [quad[0], quad[1], quad[2], quad[3]];
-                let p = |i: u32| {
-                    let v = &verts[i as usize].position;
-                    [v.x, v.y, v.z]
-                };
-                self.render_graph
-                    .debug_draw_pass
-                    .push_line(p(i0), p(i1), col);
-                self.render_graph
-                    .debug_draw_pass
-                    .push_line(p(i1), p(i2), col);
-                self.render_graph
-                    .debug_draw_pass
-                    .push_line(p(i2), p(i3), col);
-                self.render_graph
-                    .debug_draw_pass
-                    .push_line(p(i3), p(i0), col);
+                let verts = block.get_packed_vertices();
+                let col = [0.2_f32, 1.0, 0.2, 1.0];
+                for quad in block.get_packed_indices().chunks(4) {
+                    let [i0, i1, i2, i3] = [quad[0], quad[1], quad[2], quad[3]];
+                    let p = |i: u32| {
+                        let v = &verts[i as usize].position;
+                        [v.x, v.y, v.z]
+                    };
+                    self.render_graph.debug_draw_pass.push_line(p(i0), p(i1), col);
+                    self.render_graph.debug_draw_pass.push_line(p(i1), p(i2), col);
+                    self.render_graph.debug_draw_pass.push_line(p(i2), p(i3), col);
+                    self.render_graph.debug_draw_pass.push_line(p(i3), p(i0), col);
+                }
             }
         }
 
@@ -160,7 +171,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let loader = Arc::new(AssetLoader::new(Arc::new(Vfs::new())));
     let AppRenderer {
-        backend,
+        mut backend,
         window,
         render_graph,
         ui,
@@ -177,15 +188,41 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     sdf_scene.add(
         &Transform::new(vector![1.6, 5.0, 7.0], UnitQuaternion::identity(), 1.0),
         &SdfPrimitive::Box {
-            half_extents: vector![3.0, 1.33, 1.33],
+            half_extents: vector![1.33, 1.33, 1.33],
         },
+    );
+    sdf_scene.add(
+        &Transform::new(vector![2.0, 3.0, 7.0], UnitQuaternion::identity(), 1.0),
+        &SdfPrimitive::Sphere { radius: 2.0 },
     );
 
     let mut voxel_scene = VoxelScene::new(Arc::new(sdf_scene));
     voxel_scene.compute_meshes();
 
-    //let mut block = VoxelBlock::new(Arc::new(sdf), 0, 0, 0);
-    //block.compute_mesh();
+    let mut scene = BasicScene::new();
+    for block in &voxel_scene {
+        let verts = block.get_packed_vertices();
+        let inds = block.get_packed_indices();
+        if verts.is_empty() || inds.is_empty() {
+            continue;
+        }
+        let gb_verts: Vec<[f32; 12]> = verts.iter().map(voxel_to_gbuffer).collect();
+        let vb_bytes = bytemuck::cast_slice(&gb_verts);
+        let tri_indices = quads_to_tris(inds);
+        let aabb = BoundingBox {
+            min: block.world_min(),
+            max: block.world_max(),
+        };
+        let mesh_id = scene.add_mesh_u32(&mut backend, vb_bytes, verts.len() as u32, &tri_indices, aabb);
+        scene.add_object(ObjectData {
+            world_transform: glm::identity(),
+            prev_transform: glm::identity(),
+            mesh_id,
+            material_id: 0,
+            flags: 0,
+            _pad: 0,
+        });
+    }
 
     main_loop(VoxelApp {
         backend,
@@ -193,9 +230,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         render_graph,
         ui,
         camera,
-        scene: BasicScene::new(),
+        scene,
         voxel_scene,
         dt: 0.016,
+        show_debug_draw: false,
     });
 
     Ok(())

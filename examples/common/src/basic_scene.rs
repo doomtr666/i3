@@ -171,6 +171,59 @@ impl BasicScene {
         &self.meshes
     }
 
+    /// Uploads a mesh with u32 indices to the GPU and returns its ID.
+    ///
+    /// Accepts any vertex layout as raw bytes — the caller is responsible for
+    /// ensuring the data matches `stride` (default 48 bytes = GBufferVertex).
+    /// Buffers are GpuOnly with BLAS-build flags so the render graph auto-builds BLAS.
+    pub fn add_mesh_u32(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        vertices: &[u8],
+        vertex_count: u32,
+        indices: &[u32],
+        aabb: BoundingBox,
+    ) -> u32 {
+        let ib_bytes = unsafe {
+            std::slice::from_raw_parts(
+                indices.as_ptr() as *const u8,
+                indices.len() * std::mem::size_of::<u32>(),
+            )
+        };
+
+        let vb = backend.create_buffer(&BufferDesc {
+            size: vertices.len() as u64,
+            usage: BufferUsageFlags::VERTEX_BUFFER
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            memory: MemoryType::GpuOnly,
+        });
+        backend.upload_buffer(vb, vertices, 0).expect("vb upload");
+
+        let ib = backend.create_buffer(&BufferDesc {
+            size: ib_bytes.len() as u64,
+            usage: BufferUsageFlags::INDEX_BUFFER
+                | BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | BufferUsageFlags::TRANSFER_DST
+                | BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            memory: MemoryType::GpuOnly,
+        });
+        backend.upload_buffer(ib, ib_bytes, 0).expect("ib upload");
+
+        let id = self.meshes.len() as u32;
+        self.meshes.push(Mesh {
+            vertex_buffer: vb,
+            index_buffer: ib,
+            index_count: indices.len() as u32,
+            vertex_count,
+            index_type: IndexType::Uint32,
+            stride: 48,
+        });
+        self.mesh_aabbs.push(aabb);
+        id
+    }
+
     /// Convenience: creates a unit cube mesh and returns its MeshId.
     pub fn add_cube_mesh(&mut self, backend: &mut dyn RenderBackend) -> u32 {
         let (vertices, indices) = generate_cube();
