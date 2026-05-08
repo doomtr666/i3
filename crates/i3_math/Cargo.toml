@@ -1,0 +1,10 @@
+[package]
+name = "i3_math"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nalgebra = { workspace = true }

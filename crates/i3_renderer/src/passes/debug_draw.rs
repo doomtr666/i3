@@ -38,7 +38,7 @@ struct DebugDrawPushConstants {
 
 // ─── Pass ────────────────────────────────────────────────────────────────────
 
-const MAX_DEBUG_VERTICES: usize = 200_000; // 100 K line segments
+const MAX_DEBUG_VERTICES: usize = 4_000_000; // 2 M line segments
 
 pub struct DebugDrawPass {
     // Persistent GPU buffer (GpuOnly, STORAGE_BUFFER + TRANSFER_DST)
@@ -50,6 +50,7 @@ pub struct DebugDrawPass {
     // Resolved handles (valid only during declare → execute)
     vertex_buffer: BufferHandle,
     backbuffer:    ImageHandle,
+    depth_buffer:  ImageHandle,
 
     pipeline: Option<BackendPipeline>,
 }
@@ -61,6 +62,7 @@ impl DebugDrawPass {
             lines:          Vec::new(),
             vertex_buffer:  BufferHandle::INVALID,
             backbuffer:     ImageHandle::INVALID,
+            depth_buffer:   ImageHandle::INVALID,
             pipeline:       None,
         }
     }
@@ -284,6 +286,10 @@ impl RenderPass for DebugDrawPass {
         // Render to the backbuffer (after all post-processing)
         self.backbuffer = builder.resolve_image("Backbuffer");
         builder.write_image(self.backbuffer, ResourceUsage::COLOR_ATTACHMENT);
+
+        // Read-only depth test against the scene depth buffer (reverse-Z, no write)
+        self.depth_buffer = builder.resolve_image("DepthBuffer");
+        builder.write_image(self.depth_buffer, ResourceUsage::DEPTH_STENCIL);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard) {

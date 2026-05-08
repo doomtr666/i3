@@ -1,0 +1,11 @@
+[package]
+name = "i3_voxel"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+i3_math = { path = "../i3_math" }
+nalgebra = { workspace = true }

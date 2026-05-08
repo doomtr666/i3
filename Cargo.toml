@@ -5,6 +5,8 @@ members = [
     "crates/i3_null_backend",
     "crates/i3_slang",
     "crates/i3_bundle",
+    "crates/i3_math",
+    "crates/i3_voxel",
     "examples/draw_triangle",
     "examples/common",
     "examples/compute_mandelbrot",

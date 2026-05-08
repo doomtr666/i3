@@ -5,12 +5,16 @@ PipelineConfig(
         topology: LineList,
         rasterization: (
             cull_mode: None,
+            depth_bias_enable: true,
+            depth_bias_constant_factor: 1000.0,
+            depth_bias_slope_factor: 1.0,
         ),
         depth_stencil: (
-            depth_test_enable: false,
+            depth_test_enable: true,
             depth_write_enable: false,
+            depth_compare_op: GreaterOrEqual,
         ),
-        depth_stencil_format: None,
+        depth_stencil_format: Some(D32_FLOAT),
         targets: [
             (
                 format: B8G8R8A8_SRGB,

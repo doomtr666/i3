@@ -1,8 +1,9 @@
-extern crate nalgebra as na;
-use crate::SdfScene;
-use crate::sdf::{AABB, SdfNode};
+#![allow(dead_code)]
 
-use na::{Matrix3, Point3, Vector3, point};
+use crate::sdf::{SdfNode, SdfScene};
+use i3_math::AABB;
+
+use nalgebra::{Matrix3, Point3, Vector3, point};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -12,10 +13,11 @@ const VOXEL_BLOCK_PADDED_WIDTH2: i32 = VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PA
 const VOXEL_BLOCK_PADDED_SIZE: i32 =
     VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH;
 
-const VOXEL_SCENE_WIDTH: i32 = 4;
+const VOXEL_SCENE_WIDTH: i32 = 8;
 
-const VOXEL_DIST: f32 = 0.1;
+pub const VOXEL_DIST: f32 = 0.05;
 const TOLERANCE_SVD: f32 = 1e-4;
+const SHARP_NORMAL_THRESHOLD: f32 = 0.866; // ≈ cos(30°)
 
 #[derive(Clone)]
 pub struct VoxelVertex {
@@ -50,8 +52,8 @@ impl VoxelBlock {
             py,
             pz,
             vertices: vec![None; VOXEL_BLOCK_PADDED_SIZE as usize],
-            packed_vertices: vec![VoxelVertex::default(); 0],
-            packed_indices: vec![0; 0],
+            packed_vertices: Vec::new(),
+            packed_indices: Vec::new(),
         }
     }
 
@@ -99,6 +101,7 @@ impl VoxelBlock {
 
         self.compute_vertices(&sdf_nodes);
         self.compute_indices(&sdf_nodes);
+        self.merge_smooth_normals(&sdf_nodes, SHARP_NORMAL_THRESHOLD);
     }
 
     fn compute_vertices(&mut self, sdf_nodes: &[&SdfNode]) {
@@ -117,7 +120,6 @@ impl VoxelBlock {
                         continue;
                     }
 
-                    // solve intersection point
                     let edge_indices = [
                         (0, 1),
                         (1, 3),
@@ -145,8 +147,6 @@ impl VoxelBlock {
                         let fb = values[b];
 
                         if (fa >= 0.0) != (fb >= 0.0) {
-                            // Bisection refinement — linear lerp is inaccurate for
-                            // curved SDFs; 8 steps give sub-millimetre precision here.
                             let q = {
                                 let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
                                 let mut flo = fa;
@@ -177,62 +177,46 @@ impl VoxelBlock {
 
                     center_of_mass /= intersect_count;
 
-                    // add a small random value to stabilize the matrix
-                    let epsilon_matrice = 1e-6;
-                    mass_mat[(0, 0)] += epsilon_matrice;
-                    mass_mat[(1, 1)] += epsilon_matrice;
-                    mass_mat[(2, 2)] += epsilon_matrice;
+                    let rebase = center_of_mass;
+                    let mass_vec_r = mass_vec - mass_mat * rebase;
 
                     let svd = mass_mat.svd(true, true);
                     let qef_result = match svd.pseudo_inverse(TOLERANCE_SVD) {
-                        Ok(pseudo_inv) => Point3::from(pseudo_inv * mass_vec),
+                        Ok(pseudo_inv) => Point3::from(rebase + pseudo_inv * mass_vec_r),
                         Err(_) => Point3::from(center_of_mass),
                     };
 
                     let mut projected = qef_result;
 
-                    // Clamp to cell bounds (DC topology requirement).
-                    let local_min = self.world_pos(x, y, z);
-                    let local_max = self.world_pos(x + 1, y + 1, z + 1);
+                    let voxel_min = self.world_pos(x, y, z);
+                    let voxel_max = self.world_pos(x + 1, y + 1, z + 1);
 
-                    if qef_result.x < local_min.x
-                        || qef_result.x > local_max.x
-                        || qef_result.y < local_min.y
-                        || qef_result.y > local_max.y
-                        || qef_result.z < local_min.z
-                        || qef_result.z > local_max.z
-                    {
-                        // If the QEF pushes the point outside the voxel, applying a component-wise
-                        // clamp crushes the geometry. Falling back to the center of mass of the
-                        // intersections is much more reliable.
+                    // 2. Créer l'AABB de la cellule avec une petite tolérance pour les angles vifs
+                    //let margin = VOXEL_DIST * 0.25;
+                    let voxel_aabb = AABB::new(
+                        Point3::from(voxel_min.coords),
+                        Point3::from(voxel_max.coords),
+                    );
+                    //.expand(margin);
+
+                    if !voxel_aabb.contains(&qef_result) {
                         projected = Point3::from(center_of_mass);
                     }
 
-                    // Newton-project onto the isosurface: for non-linear SDFs the QEF
-                    // minimizer satisfies the linearised constraints but may sit slightly
-                    // off the actual zero-set.  Each step: p -= f(p)·∇f(p)/|∇f|²
-                    // For a unit-gradient SDF (sphere, etc.) this converges in one step.
-                    for _ in 0..3 {
+                    for _ in 0..2 {
                         let f = SdfScene::value(sdf_nodes, &projected);
                         let n = SdfScene::normal(sdf_nodes, &projected);
-                        projected = Point3::from(projected.coords - f * n);
+                        projected = Point3::from(projected.coords - f * n * 0.5);
                     }
 
-                    // final clamp
-                    let position = Point3::from([
-                        projected.x.clamp(local_min.x, local_max.x),
-                        projected.y.clamp(local_min.y, local_max.y),
-                        projected.z.clamp(local_min.z, local_max.z),
-                    ]);
-
-                    let normal = SdfScene::normal(sdf_nodes, &position);
+                    let position = voxel_aabb.clamp(&projected);
 
                     self.vertices[((x + 1)
                         + (y + 1) * VOXEL_BLOCK_PADDED_WIDTH
                         + (z + 1) * VOXEL_BLOCK_PADDED_WIDTH2)
                         as usize] = Some(VoxelVertex {
-                        position: position,
-                        normal: normal,
+                        position,
+                        normal: Vector3::zeros(),
                     });
                 }
             }
@@ -247,6 +231,7 @@ impl VoxelBlock {
                 for x in 0..VOXEL_BLOCK_WIDTH as i32 {
                     let start_pos = self.world_pos(x, y, z);
                     let start_v = SdfScene::value(sdf_nodes, &start_pos);
+                    let ccw = start_v >= 0.0;
 
                     // x+ edge
                     let xp_pos = self.world_pos(x + 1, y, z);
@@ -259,7 +244,11 @@ impl VoxelBlock {
                             self.create_or_add_vertex(&mut vertex_map, x, y - 1, z - 1),
                             self.create_or_add_vertex(&mut vertex_map, x, y - 1, z),
                         ) {
-                            self.packed_indices.extend([i0, i1, i2, i3]);
+                            if ccw {
+                                self.packed_indices.extend([i0, i3, i2, i1]);
+                            } else {
+                                self.packed_indices.extend([i0, i1, i2, i3]);
+                            }
                         }
                     }
 
@@ -274,7 +263,11 @@ impl VoxelBlock {
                             self.create_or_add_vertex(&mut vertex_map, x - 1, y, z - 1),
                             self.create_or_add_vertex(&mut vertex_map, x, y, z - 1),
                         ) {
-                            self.packed_indices.extend([i0, i1, i2, i3]);
+                            if ccw {
+                                self.packed_indices.extend([i0, i3, i2, i1]);
+                            } else {
+                                self.packed_indices.extend([i0, i1, i2, i3]);
+                            }
                         }
                     }
 
@@ -289,18 +282,16 @@ impl VoxelBlock {
                             self.create_or_add_vertex(&mut vertex_map, x - 1, y - 1, z),
                             self.create_or_add_vertex(&mut vertex_map, x - 1, y, z),
                         ) {
-                            self.packed_indices.extend([i0, i1, i2, i3]);
+                            if ccw {
+                                self.packed_indices.extend([i0, i3, i2, i1]);
+                            } else {
+                                self.packed_indices.extend([i0, i1, i2, i3]);
+                            }
                         }
                     }
                 }
             }
         }
-
-        println!(
-            "vertices: {}, indices: {}",
-            self.packed_vertices.len(),
-            self.packed_indices.len()
-        );
     }
 
     fn create_or_add_vertex(
@@ -323,6 +314,121 @@ impl VoxelBlock {
         Some(index)
     }
 
+    fn merge_smooth_normals(&mut self, sdf_nodes: &[&SdfNode], smooth_threshold: f32) {
+        let old_verts = self.packed_vertices.clone();
+        let old_indices = self.packed_indices.clone();
+        let n_quads = old_indices.len() / 4;
+
+        // Pass 1 — geometric face normal per quad, hemisphere-corrected via SDF probe.
+        let face_ns: Vec<Vector3<f32>> = old_indices
+            .chunks(4)
+            .map(|q| {
+                let [i0, i1, i2, i3] = [q[0] as usize, q[1] as usize, q[2] as usize, q[3] as usize];
+                let geom_n = (old_verts[i3].position - old_verts[i0].position)
+                    .cross(&(old_verts[i1].position - old_verts[i0].position));
+                match geom_n.try_normalize(1e-6) {
+                    Some(n) => {
+                        let face_center = Point3::from(
+                            (old_verts[i0].position.coords
+                                + old_verts[i1].position.coords
+                                + old_verts[i2].position.coords
+                                + old_verts[i3].position.coords)
+                                * 0.25,
+                        );
+                        let probe = SdfScene::value(
+                            sdf_nodes,
+                            &Point3::from(face_center.coords + n * VOXEL_DIST),
+                        );
+                        if probe >= 0.0 { n } else { -n }
+                    }
+                    None => Vector3::y(),
+                }
+            })
+            .collect();
+
+        // Pass 2 — one unshared vertex per quad-slot, each with its quad's face_n.
+        let mut new_verts: Vec<VoxelVertex> = Vec::with_capacity(old_indices.len());
+        let mut slots: Vec<[u32; 4]> = Vec::with_capacity(n_quads);
+        for (qi, q) in old_indices.chunks(4).enumerate() {
+            let face_n = face_ns[qi];
+            let mut slot = [0u32; 4];
+            for (k, &vi) in q.iter().enumerate() {
+                let nidx = new_verts.len() as u32;
+                let mut v = old_verts[vi as usize].clone();
+                v.normal = face_n;
+                new_verts.push(v);
+                slot[k] = nidx;
+            }
+            slots.push(slot);
+        }
+
+        // Pass 3 — original vertex → list of (quad_idx, local_k) that use it.
+        let mut orig_to_slots: HashMap<u32, Vec<(usize, usize)>> = HashMap::new();
+        for (qi, q) in old_indices.chunks(4).enumerate() {
+            for (k, &vi) in q.iter().enumerate() {
+                orig_to_slots.entry(vi).or_default().push((qi, k));
+            }
+        }
+
+        // Pass 4 — merge compatible slots at each original vertex.
+        // A slot joins a group only if it is compatible with ALL existing group members
+        // (avoids transitive merges like A~B, B~C where A≁C).
+        let mut remap: HashMap<u32, u32> = HashMap::new();
+
+        for slot_list in orig_to_slots.values() {
+            if slot_list.len() <= 1 {
+                continue;
+            }
+
+            let mut groups: Vec<Vec<usize>> = Vec::new(); // indices into slot_list
+            'outer: for (si, &(qi, _)) in slot_list.iter().enumerate() {
+                let fn_i = face_ns[qi];
+                for group in &mut groups {
+                    let all_compat = group.iter().all(|&gi| {
+                        let (rep_qi, _) = slot_list[gi];
+                        fn_i.dot(&face_ns[rep_qi]) >= smooth_threshold
+                    });
+                    if all_compat {
+                        group.push(si);
+                        continue 'outer;
+                    }
+                }
+                groups.push(vec![si]);
+            }
+
+            for group in &groups {
+                if group.len() <= 1 {
+                    continue;
+                }
+                // Average the face_n vectors → smooth vertex normal.
+                let avg_n = group
+                    .iter()
+                    .map(|&si| face_ns[slot_list[si].0])
+                    .fold(Vector3::zeros(), |a, n| a + n)
+                    .try_normalize(1e-6)
+                    .unwrap_or(Vector3::y());
+
+                let (qi0, k0) = slot_list[group[0]];
+                let canon = slots[qi0][k0];
+                new_verts[canon as usize].normal = avg_n;
+
+                for &si in &group[1..] {
+                    let (qi, k) = slot_list[si];
+                    remap.insert(slots[qi][k], canon);
+                }
+            }
+        }
+
+        // Pass 5 — emit final index buffer with remap applied.
+        let new_indices: Vec<u32> = slots
+            .iter()
+            .flat_map(|s| s.iter().map(|&ni| *remap.get(&ni).unwrap_or(&ni)))
+            .collect();
+
+        self.packed_vertices = new_verts;
+        self.packed_indices = new_indices;
+    }
+
     fn check_intersection(&self, v: &[f32; 8]) -> bool {
         let sign = v[0] > 0.0;
         (1..8).any(|i| (v[i] > 0.0) != sign)
@@ -330,27 +436,27 @@ impl VoxelBlock {
 
     fn world_pos(&self, x: i32, y: i32, z: i32) -> Point3<f32> {
         point![
-            (self.px as i32 * VOXEL_BLOCK_WIDTH as i32 + x) as f32 * VOXEL_DIST,
-            (self.py as i32 * VOXEL_BLOCK_WIDTH as i32 + y) as f32 * VOXEL_DIST,
-            (self.pz as i32 * VOXEL_BLOCK_WIDTH as i32 + z) as f32 * VOXEL_DIST,
+            (self.px * VOXEL_BLOCK_WIDTH + x) as f32 * VOXEL_DIST,
+            (self.py * VOXEL_BLOCK_WIDTH + y) as f32 * VOXEL_DIST,
+            (self.pz * VOXEL_BLOCK_WIDTH + z) as f32 * VOXEL_DIST,
         ]
     }
 }
 
 pub struct VoxelScene {
+    #[allow(dead_code)]
     sdf: Arc<SdfScene>,
     blocks: Vec<VoxelBlock>,
 }
 
 impl VoxelScene {
     pub fn new(sdf: Arc<SdfScene>) -> VoxelScene {
-        let mut blocks = Vec::<VoxelBlock>::new();
+        let mut blocks = Vec::new();
 
         for z in 0..VOXEL_SCENE_WIDTH {
             for y in 0..VOXEL_SCENE_WIDTH {
                 for x in 0..VOXEL_SCENE_WIDTH {
-                    let block = VoxelBlock::new(Arc::clone(&sdf), x, y, z);
-                    blocks.push(block);
+                    blocks.push(VoxelBlock::new(Arc::clone(&sdf), x, y, z));
                 }
             }
         }

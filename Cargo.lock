@@ -1188,6 +1188,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "i3_math"
+version = "0.1.0"
+dependencies = [
+ "nalgebra 0.34.2",
+]
+
+[[package]]
 name = "i3_null_backend"
 version = "0.1.0"
 dependencies = [
@@ -1218,6 +1225,14 @@ dependencies = [
  "i3_gfx",
  "shader-slang",
  "tracing",
+]
+
+[[package]]
+name = "i3_voxel"
+version = "0.1.0"
+dependencies = [
+ "i3_math",
+ "nalgebra 0.34.2",
 ]
 
 [[package]]
@@ -2803,8 +2818,10 @@ dependencies = [
  "i3_egui",
  "i3_gfx",
  "i3_io",
+ "i3_math",
  "i3_renderer",
  "i3_slang",
+ "i3_voxel",
  "i3_vulkan_backend",
  "nalgebra 0.34.2",
  "nalgebra-glm",
