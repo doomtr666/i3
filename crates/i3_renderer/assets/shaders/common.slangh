@@ -281,25 +281,6 @@ float2 dirToEquirect(float3 d)
     return float2(u, v);
 }
 
-float3 decodeHemiOcta(float2 uv)
-{
-    float sign_y = uv.y < 0.5 ? 1.0 : -1.0;
-    float v = uv.y < 0.5 ? uv.y * 2.0 : (uv.y - 0.5) * 2.0;
-    float2 f = float2(uv.x * 2.0 - 1.0, v * 2.0 - 1.0);
-    float3 n = float3(f.x, 1.0 - abs(f.x) - abs(f.y), f.y);
-    n.y *= sign_y;
-    return normalize(n);
-}
-
-float2 encodeHemiOcta(float3 n)
-{
-    float l1 = abs(n.x) + abs(n.y) + abs(n.z);
-    float2 uv = n.xz / l1;
-    uv = uv * 0.5 + 0.5;
-    float v = n.y >= 0.0 ? uv.y * 0.5 : 0.5 + uv.y * 0.5;
-    return float2(uv.x, v);
-}
-
 // https://backend.orbit.dtu.dk/ws/files/126824972/onb_frisvad_jgt2012_v2.pdf
 void buildBasis(float3 N, out float3 T, out float3 B)
 {
@@ -322,7 +303,7 @@ static const float3 FRESNEL_F0_DIELECTRIC = float3(0.04f, 0.04f, 0.04f);
 // Suitable for both current-frame and temporal reprojection.
 float3 worldPosFromDepth(float2 uv, float depth, float4x4 invViewProj)
 {
-    float x =  uv.x * 2.0f - 1.0f;
+    float x = uv.x * 2.0f - 1.0f;
     float y = (1.0f - uv.y) * 2.0f - 1.0f;
     float4 wp = mul(invViewProj, float4(x, y, depth, 1.0f));
     return wp.xyz / wp.w;
@@ -332,7 +313,7 @@ float3 worldPosFromDepth(float2 uv, float depth, float4x4 invViewProj)
 float3 viewSpacePosFromUV(float2 uv, float depth, float4x4 invProjection)
 {
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float4 vh  = mul(invProjection, float4(ndc, depth, 1.0f));
+    float4 vh = mul(invProjection, float4(ndc, depth, 1.0f));
     return vh.xyz / vh.w;
 }
 

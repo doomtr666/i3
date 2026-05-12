@@ -159,9 +159,7 @@ pub fn bake_irradiance(
         .into_par_iter()
         .flat_map(|iy| {
             (0..out_size).into_par_iter().map(move |ix| {
-                let u = (ix as f32 + 0.5) / out_size as f32;
-                let v = (iy as f32 + 0.5) / out_size as f32;
-                let n = hemi_octa_decode(u, v);
+                let n = equirect_to_dir(ix, iy, out_size, out_size);
 
                 let mut irr = [0.0f32; 3];
 
@@ -195,7 +193,7 @@ pub fn bake_irradiance(
     data
 }
 
-/// Bake Pre-filtered hemi-octa (CPU, importance sampling GGX).
+/// Bake Pre-filtered equirectangular (CPU, importance sampling GGX).
 pub fn bake_prefiltered(
     pixels_rgb: &[[f32; 3]],
     src_width: u32,
@@ -216,9 +214,7 @@ pub fn bake_prefiltered(
             .into_par_iter()
             .flat_map(|iy| {
                 (0..mip_size).into_par_iter().map(move |ix| {
-                    let u = (ix as f32 + 0.5) / mip_size as f32;
-                    let v = (iy as f32 + 0.5) / mip_size as f32;
-                    let r = hemi_octa_decode(u, v);
+                    let r = equirect_to_dir(ix, iy, mip_size, mip_size);
                     let n = r;
                     let v_dir = r;
 

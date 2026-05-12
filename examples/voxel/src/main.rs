@@ -22,7 +22,11 @@ use tracing::warn;
 fn voxel_to_gbuffer(v: &VoxelVertex) -> [f32; 12] {
     let n = v.normal;
     // Build a tangent perpendicular to n using the "avoid parallel" trick.
-    let up = if n.z.abs() < 0.9 { nalgebra::Vector3::z() } else { nalgebra::Vector3::x() };
+    let up = if n.z.abs() < 0.9 {
+        nalgebra::Vector3::z()
+    } else {
+        nalgebra::Vector3::x()
+    };
     let t = up.cross(&n).normalize();
     [
         v.position.x,
@@ -38,13 +42,6 @@ fn voxel_to_gbuffer(v: &VoxelVertex) -> [f32; 12] {
         t.z,
         1.0, // tangent w = handedness
     ]
-}
-
-fn quads_to_tris(indices: &[u32]) -> Vec<u32> {
-    indices
-        .chunks(4)
-        .flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]])
-        .collect()
 }
 
 struct VoxelApp {
@@ -115,8 +112,8 @@ impl ExampleApp for VoxelApp {
 
                 let verts = block.get_packed_vertices();
                 let col_wire = [0.2_f32, 1.0, 0.2, 1.0];
-                for quad in block.get_packed_indices().chunks(4) {
-                    let [i0, i1, i2, i3] = [quad[0], quad[1], quad[2], quad[3]];
+                for quad in block.get_packed_indices().chunks(3) {
+                    let [i0, i1, i2] = [quad[0], quad[1], quad[2]];
                     let p = |i: u32| {
                         let v = &verts[i as usize].position;
                         [v.x, v.y, v.z]
@@ -129,10 +126,7 @@ impl ExampleApp for VoxelApp {
                         .push_line(p(i1), p(i2), col_wire);
                     self.render_graph
                         .debug_draw_pass
-                        .push_line(p(i2), p(i3), col_wire);
-                    self.render_graph
-                        .debug_draw_pass
-                        .push_line(p(i3), p(i0), col_wire);
+                        .push_line(p(i2), p(i0), col_wire);
                 }
 
                 if self.show_debug_normals {
@@ -225,18 +219,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         let gb_verts: Vec<[f32; 12]> = verts.iter().map(voxel_to_gbuffer).collect();
         let vb_bytes = bytemuck::cast_slice(&gb_verts);
-        let tri_indices = quads_to_tris(inds);
+        //let tri_indices = quads_to_tris(inds);
         let aabb = BoundingBox {
             min: block.world_min(),
             max: block.world_max(),
         };
-        let mesh_id = scene.add_mesh_u32(
-            &mut backend,
-            vb_bytes,
-            verts.len() as u32,
-            &tri_indices,
-            aabb,
-        );
+        let mesh_id = scene.add_mesh_u32(&mut backend, vb_bytes, verts.len() as u32, &inds, aabb);
         scene.add_object(ObjectData {
             world_transform: glm::identity(),
             prev_transform: glm::identity(),

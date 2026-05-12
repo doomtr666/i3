@@ -92,7 +92,7 @@ void computeMain(uint3 id: SV_DispatchThreadID)
         float3 R_mirror = reflect(-V, N);
         float mip = alpha * 5.0f;
         float3 prefiltered = bindlessTextures[g_common.GetIblPrefIndex()]
-                                 .SampleLevel(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(R_mirror), mip)
+                                 .SampleLevel(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(R_mirror), mip)
                                  .rgb;
         float2 brdf = bindlessTextures[g_common.GetIblLutIndex()]
                           .SampleLevel(bindlessSamplers[SAMPLER_LINEAR], float2(NdotV, roughness), 0)

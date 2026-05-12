@@ -20,9 +20,11 @@ pub fn hemi_octa_encode(d: [f32; 3]) -> (f32, f32) {
     let ox = x / l;
     let oz = z / l;
     let u = ox * 0.5 + 0.5;
-    // Replie selon hémisphère
     let v_local = oz * 0.5 + 0.5;
-    let v = if y >= 0.0 { v_local * 0.5 } else { 0.5 + v_local * 0.5 };
+    // y==0 with z>0: use lower section (v→1.0) — upper would give v=0.5
+    // (the seam where decode returns (0,0,-1) instead of (0,0,+1)).
+    let lower = y < 0.0 || (y == 0.0 && z > 0.0);
+    let v = if lower { 0.5 + v_local * 0.5 } else { v_local * 0.5 };
     (u, v)
 }
 

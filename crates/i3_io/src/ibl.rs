@@ -24,13 +24,13 @@ pub struct IblHeader {
     pub lut_format: u32,       // TextureFormat::R16G16_SFLOAT as u32 = 10
     pub lut_data_size: u32,
 
-    // Irradiance hemi-octa : R11G11B10_UFLOAT, 64x64, 1 mip
+    // Irradiance equirectangular : R11G11B10_UFLOAT, 128x64, 1 mip
     pub irr_width: u32,
     pub irr_height: u32,
     pub irr_format: u32,       // TextureFormat::R11G11B10_UFLOAT as u32 = 11
     pub irr_data_size: u32,
 
-    // Pre-filtered hemi-octa : R11G11B10_UFLOAT, 256x256, 6 mips
+    // Pre-filtered equirectangular : R11G11B10_UFLOAT, 512x256, 6 mips
     pub pref_width: u32,
     pub pref_height: u32,
     pub pref_format: u32,      // TextureFormat::R11G11B10_UFLOAT as u32 = 11

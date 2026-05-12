@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::sdf::{SdfNode, SdfScene};
 use i3_math::AABB;
 
@@ -17,7 +15,6 @@ const VOXEL_SCENE_WIDTH: i32 = 8;
 
 pub const VOXEL_DIST: f32 = 0.05;
 const TOLERANCE_SVD: f32 = 1e-4;
-const SHARP_NORMAL_THRESHOLD: f32 = 0.866; // ≈ cos(30°)
 
 #[derive(Clone)]
 pub struct VoxelVertex {
@@ -101,7 +98,6 @@ impl VoxelBlock {
 
         self.compute_vertices(&sdf_nodes);
         self.compute_indices(&sdf_nodes);
-        self.merge_smooth_normals(&sdf_nodes, SHARP_NORMAL_THRESHOLD);
     }
 
     fn compute_vertices(&mut self, sdf_nodes: &[&SdfNode]) {
@@ -211,12 +207,14 @@ impl VoxelBlock {
 
                     let position = voxel_aabb.clamp(&projected);
 
+                    let final_normal = SdfScene::normal(sdf_nodes, &position);
+
                     self.vertices[((x + 1)
                         + (y + 1) * VOXEL_BLOCK_PADDED_WIDTH
                         + (z + 1) * VOXEL_BLOCK_PADDED_WIDTH2)
                         as usize] = Some(VoxelVertex {
                         position,
-                        normal: Vector3::zeros(),
+                        normal: final_normal,
                     });
                 }
             }
@@ -245,9 +243,9 @@ impl VoxelBlock {
                             self.create_or_add_vertex(&mut vertex_map, x, y - 1, z),
                         ) {
                             if ccw {
-                                self.packed_indices.extend([i0, i3, i2, i1]);
+                                self.packed_indices.extend([i0, i3, i2, i0, i2, i1]);
                             } else {
-                                self.packed_indices.extend([i0, i1, i2, i3]);
+                                self.packed_indices.extend([i0, i1, i2, i0, i2, i3]);
                             }
                         }
                     }
@@ -264,9 +262,9 @@ impl VoxelBlock {
                             self.create_or_add_vertex(&mut vertex_map, x, y, z - 1),
                         ) {
                             if ccw {
-                                self.packed_indices.extend([i0, i3, i2, i1]);
+                                self.packed_indices.extend([i0, i3, i2, i0, i2, i1]);
                             } else {
-                                self.packed_indices.extend([i0, i1, i2, i3]);
+                                self.packed_indices.extend([i0, i1, i2, i0, i2, i3]);
                             }
                         }
                     }
@@ -283,9 +281,9 @@ impl VoxelBlock {
                             self.create_or_add_vertex(&mut vertex_map, x - 1, y, z),
                         ) {
                             if ccw {
-                                self.packed_indices.extend([i0, i3, i2, i1]);
+                                self.packed_indices.extend([i0, i3, i2, i0, i2, i1]);
                             } else {
-                                self.packed_indices.extend([i0, i1, i2, i3]);
+                                self.packed_indices.extend([i0, i1, i2, i0, i2, i3]);
                             }
                         }
                     }
@@ -312,121 +310,6 @@ impl VoxelBlock {
         self.packed_vertices.push(vertex.clone());
         vertex_map.insert([x, y, z], index);
         Some(index)
-    }
-
-    fn merge_smooth_normals(&mut self, sdf_nodes: &[&SdfNode], smooth_threshold: f32) {
-        let old_verts = self.packed_vertices.clone();
-        let old_indices = self.packed_indices.clone();
-        let n_quads = old_indices.len() / 4;
-
-        // Pass 1 — geometric face normal per quad, hemisphere-corrected via SDF probe.
-        let face_ns: Vec<Vector3<f32>> = old_indices
-            .chunks(4)
-            .map(|q| {
-                let [i0, i1, i2, i3] = [q[0] as usize, q[1] as usize, q[2] as usize, q[3] as usize];
-                let geom_n = (old_verts[i3].position - old_verts[i0].position)
-                    .cross(&(old_verts[i1].position - old_verts[i0].position));
-                match geom_n.try_normalize(1e-6) {
-                    Some(n) => {
-                        let face_center = Point3::from(
-                            (old_verts[i0].position.coords
-                                + old_verts[i1].position.coords
-                                + old_verts[i2].position.coords
-                                + old_verts[i3].position.coords)
-                                * 0.25,
-                        );
-                        let probe = SdfScene::value(
-                            sdf_nodes,
-                            &Point3::from(face_center.coords + n * VOXEL_DIST),
-                        );
-                        if probe >= 0.0 { n } else { -n }
-                    }
-                    None => Vector3::y(),
-                }
-            })
-            .collect();
-
-        // Pass 2 — one unshared vertex per quad-slot, each with its quad's face_n.
-        let mut new_verts: Vec<VoxelVertex> = Vec::with_capacity(old_indices.len());
-        let mut slots: Vec<[u32; 4]> = Vec::with_capacity(n_quads);
-        for (qi, q) in old_indices.chunks(4).enumerate() {
-            let face_n = face_ns[qi];
-            let mut slot = [0u32; 4];
-            for (k, &vi) in q.iter().enumerate() {
-                let nidx = new_verts.len() as u32;
-                let mut v = old_verts[vi as usize].clone();
-                v.normal = face_n;
-                new_verts.push(v);
-                slot[k] = nidx;
-            }
-            slots.push(slot);
-        }
-
-        // Pass 3 — original vertex → list of (quad_idx, local_k) that use it.
-        let mut orig_to_slots: HashMap<u32, Vec<(usize, usize)>> = HashMap::new();
-        for (qi, q) in old_indices.chunks(4).enumerate() {
-            for (k, &vi) in q.iter().enumerate() {
-                orig_to_slots.entry(vi).or_default().push((qi, k));
-            }
-        }
-
-        // Pass 4 — merge compatible slots at each original vertex.
-        // A slot joins a group only if it is compatible with ALL existing group members
-        // (avoids transitive merges like A~B, B~C where A≁C).
-        let mut remap: HashMap<u32, u32> = HashMap::new();
-
-        for slot_list in orig_to_slots.values() {
-            if slot_list.len() <= 1 {
-                continue;
-            }
-
-            let mut groups: Vec<Vec<usize>> = Vec::new(); // indices into slot_list
-            'outer: for (si, &(qi, _)) in slot_list.iter().enumerate() {
-                let fn_i = face_ns[qi];
-                for group in &mut groups {
-                    let all_compat = group.iter().all(|&gi| {
-                        let (rep_qi, _) = slot_list[gi];
-                        fn_i.dot(&face_ns[rep_qi]) >= smooth_threshold
-                    });
-                    if all_compat {
-                        group.push(si);
-                        continue 'outer;
-                    }
-                }
-                groups.push(vec![si]);
-            }
-
-            for group in &groups {
-                if group.len() <= 1 {
-                    continue;
-                }
-                // Average the face_n vectors → smooth vertex normal.
-                let avg_n = group
-                    .iter()
-                    .map(|&si| face_ns[slot_list[si].0])
-                    .fold(Vector3::zeros(), |a, n| a + n)
-                    .try_normalize(1e-6)
-                    .unwrap_or(Vector3::y());
-
-                let (qi0, k0) = slot_list[group[0]];
-                let canon = slots[qi0][k0];
-                new_verts[canon as usize].normal = avg_n;
-
-                for &si in &group[1..] {
-                    let (qi, k) = slot_list[si];
-                    remap.insert(slots[qi][k], canon);
-                }
-            }
-        }
-
-        // Pass 5 — emit final index buffer with remap applied.
-        let new_indices: Vec<u32> = slots
-            .iter()
-            .flat_map(|s| s.iter().map(|&ni| *remap.get(&ni).unwrap_or(&ni)))
-            .collect();
-
-        self.packed_vertices = new_verts;
-        self.packed_indices = new_indices;
     }
 
     fn check_intersection(&self, v: &[f32; 8]) -> bool {

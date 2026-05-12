@@ -7,6 +7,8 @@ struct PushConstants
     float ao_strength; // 0.0 = no AO, 1.0 = full AO
 };
 
+#define USE_RAY_QUERY
+
 [[vk::push_constant]]
 PushConstants pc;
 
@@ -112,11 +114,13 @@ float4 fragmentMain(VertexOutput input) : SV_Target
     float3 irradiance = float3(0.0);
     if (g_common.GetIblIrrIndex() != 0)
     {
-        irradiance = bindlessTextures[g_common.GetIblIrrIndex()].Sample(bindlessSamplers[SAMPLER_LINEAR], encodeHemiOcta(normal)).rgb;
+        irradiance = bindlessTextures[g_common.GetIblIrrIndex()].Sample(bindlessSamplers[SAMPLER_LINEAR], dirToEquirect(normal)).rgb;
     }
+
     float3 diffuse_ambient = kD * albedo * irradiance;
 
     float ao = lerp(1.0f, aoTexture.Sample(bindlessSamplers[SAMPLER_NEAREST], uv).r, pc.ao_strength);
+
     float3 color = emissive + diffuse_ambient * g_common.GetIblIntensity() * ao;
 
     for (uint i = 0; i < grid_item.count; ++i)
@@ -132,6 +136,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
 
         if (light.light_type == 1) // directional
         {
+#ifdef USE_RAY_QUERY
             L = normalize(-light.direction);
 
             // visibility test
@@ -141,12 +146,14 @@ float4 fragmentMain(VertexOutput input) : SV_Target
             rd.TMin = 0.001f;
             rd.TMax = 1e6;
             if (!traceShadow(tlas, rd))
+#endif
             {
                 radiance = light.color * light.intensity;
             }
         }
         else // point light
         {
+#ifdef USE_RAY_QUERY
             // visibility test
             RayDesc rd;
             rd.Origin = world_pos;
@@ -155,6 +162,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target
             rd.TMax = distance;
 
             if (!traceShadow(tlas, rd))
+#endif
             {
                 float attenuation = 1.0 / max(distance * distance, 0.01);
                 float r = distance / light.radius;

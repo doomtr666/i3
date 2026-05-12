@@ -3,9 +3,8 @@
 use i3_math::{AABB, Transform};
 use nalgebra::{Point3, Vector2, Vector3};
 
-use crate::voxel::VOXEL_DIST;
-
 const SDF_EPSILON: f32 = 1e-4;
+const SDF_NORMAL_EPS: f32 = 0.001;
 
 #[derive(Clone)]
 pub enum SdfPrimitive {
@@ -129,114 +128,6 @@ impl SdfPrimitive {
             }
         }
     }
-    pub(crate) fn local_normal(&self, position: &Point3<f32>) -> Vector3<f32> {
-        match self {
-            SdfPrimitive::Sphere { .. } => position.coords.normalize(),
-            &SdfPrimitive::Box { half_extents } => {
-                let local_p = position.coords;
-                let d = Vector3::new(
-                    local_p.x.abs() - half_extents.x,
-                    local_p.y.abs() - half_extents.y,
-                    local_p.z.abs() - half_extents.z,
-                );
-                let sign = Vector3::new(local_p.x.signum(), local_p.y.signum(), local_p.z.signum());
-                if d.x > 0.0 || d.y > 0.0 || d.z > 0.0 {
-                    let mut n = Vector3::zeros();
-                    if d.x > 0.0 {
-                        n.x = d.x * sign.x;
-                    }
-                    if d.y > 0.0 {
-                        n.y = d.y * sign.y;
-                    }
-                    if d.z > 0.0 {
-                        n.z = d.z * sign.z;
-                    }
-                    n.normalize()
-                } else {
-                    let mut n = Vector3::zeros();
-                    if d.x > d.y && d.x > d.z {
-                        n.x = sign.x;
-                    } else if d.y > d.z {
-                        n.y = sign.y;
-                    } else {
-                        n.z = sign.z;
-                    }
-                    n
-                }
-            }
-            SdfPrimitive::Capsule {
-                half_height,
-                radius: _,
-            } => {
-                // Le vecteur normalisé depuis le point le plus proche sur le segment Y
-                let clamped_y = position.y.clamp(-*half_height, *half_height);
-                let closest_point = Point3::new(0.0, clamped_y, 0.0);
-
-                // Gérer le cas extrême où p est exactement sur le centre
-                let diff = position - closest_point;
-                if diff.norm_squared() < 1e-6 {
-                    Vector3::y()
-                } else {
-                    diff.normalize()
-                }
-            }
-
-            SdfPrimitive::Cylinder {
-                half_height,
-                radius,
-            } => {
-                let p_xz = Vector3::new(position.x, 0.0, position.z);
-                let length_xz = p_xz.norm();
-
-                let d_x = length_xz - radius;
-                let d_y = position.y.abs() - half_height;
-
-                let sign_y = position.y.signum();
-                let dir_xz = if length_xz > 1e-6 {
-                    p_xz / length_xz
-                } else {
-                    Vector3::x()
-                };
-
-                if d_x > 0.0 && d_y > 0.0 {
-                    // À l'extérieur, dans la diagonale du coin (arête vive)
-                    let corner_vec = Vector3::new(dir_xz.x * d_x, d_y * sign_y, dir_xz.z * d_x);
-                    corner_vec.normalize()
-                } else if d_y > d_x {
-                    // Plus proche des "bouchons" haut/bas (que ce soit à l'intérieur ou à l'extérieur)
-                    Vector3::new(0.0, sign_y, 0.0)
-                } else {
-                    // Plus proche du mur cylindrique (que ce soit à l'intérieur ou à l'extérieur)
-                    dir_xz
-                }
-            }
-
-            SdfPrimitive::Torus {
-                major_radius,
-                minor_radius: _,
-            } => {
-                let p_xz = Vector3::new(position.x, 0.0, position.z);
-                let length_xz = p_xz.norm();
-
-                // Vecteur directeur depuis l'origine sur le plan XZ
-                let dir_xz = if length_xz > 1e-6 {
-                    p_xz / length_xz
-                } else {
-                    Vector3::x()
-                };
-
-                // Le point le plus proche sur "l'âme" (le grand cercle) du tore
-                let ring_point = dir_xz * *major_radius;
-
-                let diff = position - ring_point;
-                if diff.coords.norm_squared() < 1e-6 {
-                    Vector3::y()
-                } else {
-                    diff.coords.normalize()
-                }
-            }
-        }
-    }
 }
 
 pub struct SdfNode {
@@ -284,6 +175,54 @@ impl SdfScene {
             .collect()
     }
 
+    // Polynomial Smooth Minimum (CORRIGÉ)
+    #[inline]
+    pub fn smin(a: f32, b: f32, k: f32) -> f32 {
+        let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
+        // C'est b qui prend (1.0 - h) pour garantir le minimum
+        b * (1.0 - h) + a * h - k * h * (1.0 - h)
+    }
+
+    // Polynomial Smooth Maximum
+    #[inline]
+    pub fn smax(a: f32, b: f32, k: f32) -> f32 {
+        let h = (0.5 + 0.5 * (a - b) / k).clamp(0.0, 1.0);
+        a * h + b * (1.0 - h) + k * h * (1.0 - h)
+    }
+
+    /*
+        pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
+            let mut solid_dist = f32::MAX;
+            let mut empty_dist = f32::MAX;
+            let k = SDF_SMOOTH_RADIUS; // Smooth radius
+
+            for node in nodes {
+                let local_p = node.transform.inv_transform_point(position);
+                let dist = node.primitive.local_value(&local_p) * node.transform.scale();
+
+                if node.substract {
+                    if empty_dist == f32::MAX {
+                        empty_dist = dist;
+                    } else {
+                        empty_dist = Self::smin(empty_dist, dist, k);
+                    }
+                } else {
+                    if solid_dist == f32::MAX {
+                        solid_dist = dist;
+                    } else {
+                        solid_dist = Self::smin(solid_dist, dist, k);
+                    }
+                }
+            }
+
+            if empty_dist != f32::MAX {
+                Self::smax(solid_dist, -empty_dist, k)
+            } else {
+                solid_dist
+            }
+        }
+    */
+
     pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
         let mut solid_dist = f32::MAX;
         let mut empty_dist = f32::MAX;
@@ -303,73 +242,20 @@ impl SdfScene {
     }
 
     pub fn normal(nodes: &[&SdfNode], position: &Point3<f32>) -> Vector3<f32> {
-        let mut solid_dist = f32::MAX;
-        let mut solid_normal = Vector3::zeros();
-        let mut empty_dist = f32::MAX;
-        let mut empty_normal = Vector3::zeros();
+        let k0 = Vector3::new(1.0, -1.0, -1.0);
+        let k1 = Vector3::new(-1.0, -1.0, 1.0);
+        let k2 = Vector3::new(-1.0, 1.0, -1.0);
+        let k3 = Vector3::new(1.0, 1.0, 1.0);
 
-        for node in nodes {
-            let local_p = node.transform.inv_transform_point(position);
-            let dist = node.primitive.local_value(&local_p) * node.transform.scale();
+        let p = position.coords;
 
-            if node.substract {
-                if dist < empty_dist {
-                    empty_dist = dist;
-                    // Rotate the local normal back to world space
-                    empty_normal = node
-                        .transform
-                        .transform_normal(&node.primitive.local_normal(&local_p));
-                }
-            } else {
-                if dist < solid_dist {
-                    solid_dist = dist;
-                    solid_normal = node
-                        .transform
-                        .transform_normal(&node.primitive.local_normal(&local_p));
-                }
-            }
-        }
+        let f0 = Self::value(nodes, &Point3::from(p + k0 * SDF_NORMAL_EPS));
+        let f1 = Self::value(nodes, &Point3::from(p + k1 * SDF_NORMAL_EPS));
+        let f2 = Self::value(nodes, &Point3::from(p + k2 * SDF_NORMAL_EPS));
+        let f3 = Self::value(nodes, &Point3::from(p + k3 * SDF_NORMAL_EPS));
 
-        if -empty_dist > solid_dist {
-            -empty_normal
-        } else {
-            solid_normal
-        }
-    }
+        let n = k0 * f0 + k1 * f1 + k2 * f2 + k3 * f3;
 
-    pub fn normal_fd(nodes: &[&SdfNode], position: &Point3<f32>) -> Vector3<f32> {
-        // Analytical normals are mathematically invalid inside a smoothed zone.
-        // Finite differences evaluate the true gradient of the blended distance field.
-        const EPS: f32 = VOXEL_DIST * 0.25;
-
-        let v_x1 = Self::value(
-            nodes,
-            &Point3::new(position.x + EPS, position.y, position.z),
-        );
-        let v_x2 = Self::value(
-            nodes,
-            &Point3::new(position.x - EPS, position.y, position.z),
-        );
-
-        let v_y1 = Self::value(
-            nodes,
-            &Point3::new(position.x, position.y + EPS, position.z),
-        );
-        let v_y2 = Self::value(
-            nodes,
-            &Point3::new(position.x, position.y - EPS, position.z),
-        );
-
-        let v_z1 = Self::value(
-            nodes,
-            &Point3::new(position.x, position.y, position.z + EPS),
-        );
-        let v_z2 = Self::value(
-            nodes,
-            &Point3::new(position.x, position.y, position.z - EPS),
-        );
-
-        let n = Vector3::new(v_x1 - v_x2, v_y1 - v_y2, v_z1 - v_z2);
         n.try_normalize(1e-6).unwrap_or_else(|| Vector3::y())
     }
 }
