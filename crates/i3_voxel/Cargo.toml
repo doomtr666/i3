@@ -9,3 +9,5 @@ workspace = true
 [dependencies]
 i3_math = { path = "../i3_math" }
 nalgebra = { workspace = true }
+libnoise = { workspace = true }
+rayon = { workspace = true }

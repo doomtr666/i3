@@ -1,9 +1,8 @@
-#![allow(dead_code)]
-
 use i3_math::{AABB, Transform};
+use libnoise::Generator;
 use nalgebra::{Point3, Vector2, Vector3};
+use std::sync::Arc;
 
-const SDF_EPSILON: f32 = 1e-4;
 const SDF_NORMAL_EPS: f32 = 0.001;
 
 #[derive(Clone)]
@@ -25,6 +24,11 @@ pub enum SdfPrimitive {
     Torus {
         major_radius: f32,
         minor_radius: f32,
+    },
+    TerrainBox {
+        half_extents: Vector3<f32>,
+        amplitude: f32,
+        sampler: Arc<dyn Fn(f32, f32) -> f32 + Send + Sync>,
     },
 }
 
@@ -68,6 +72,10 @@ impl SdfPrimitive {
                     major_radius + minor_radius,
                 ),
             ),
+            SdfPrimitive::TerrainBox { half_extents, .. } => AABB::new(
+                Point3::new(-half_extents.x, -half_extents.y, -half_extents.z),
+                Point3::new(half_extents.x, half_extents.y, half_extents.z),
+            ),
         }
     }
 
@@ -92,7 +100,6 @@ impl SdfPrimitive {
                 half_height,
                 radius,
             } => {
-                // On projette le point sur le segment central de l'axe Y
                 let clamped_y = position.y.clamp(-*half_height, *half_height);
                 let closest_point = Point3::new(0.0, clamped_y, 0.0);
 
@@ -103,12 +110,9 @@ impl SdfPrimitive {
                 half_height,
                 radius,
             } => {
-                // Distance sur le plan XZ (le disque)
                 let d_xz = Vector3::new(position.x, 0.0, position.z).norm() - radius;
-                // Distance sur l'axe Y (la hauteur)
                 let d_y = position.y.abs() - half_height;
 
-                // Combinaison euclidienne exacte pour les coins extérieurs et intérieurs
                 let outside_dist = Vector2::new(d_xz.max(0.0), d_y.max(0.0)).norm();
                 let inside_dist = d_xz.max(d_y).min(0.0);
 
@@ -119,13 +123,55 @@ impl SdfPrimitive {
                 major_radius,
                 minor_radius,
             } => {
-                // 1. Distance au grand cercle sur le plan XZ
                 let q_x = Vector3::new(position.x, 0.0, position.z).norm() - major_radius;
-                // 2. Distance euclidienne finale en combinant avec l'axe Y
                 let q = Vector2::new(q_x, position.y);
 
                 q.norm() - minor_radius
             }
+
+            SdfPrimitive::TerrainBox {
+                half_extents,
+                amplitude,
+                sampler,
+            } => {
+                let q = Vector3::new(
+                    position.x.abs() - half_extents.x,
+                    position.y.abs() - half_extents.y,
+                    position.z.abs() - half_extents.z,
+                );
+                let box_d = Vector3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).norm()
+                    + q.x.max(q.y).max(q.z).min(0.0);
+
+                let nx = (position.x / half_extents.x + 1.0) * 0.5;
+                let nz = (position.z / half_extents.z + 1.0) * 0.5;
+
+                // Divide by |∇f| = sqrt(1 + (∂h/∂x)² + (∂h/∂z)²) to keep the SDF
+                // Lipschitz-1 on steep slopes, which is required for correct DC output.
+                const G: f32 = 1e-3;
+                let h   = sampler(nx,     nz    ) * amplitude;
+                let h_x = sampler(nx + G, nz    ) * amplitude;
+                let h_z = sampler(nx,     nz + G) * amplitude;
+                let dh_dx = (h_x - h) / (G * half_extents.x * 2.0);
+                let dh_dz = (h_z - h) / (G * half_extents.z * 2.0);
+                let terrain_d = (position.y - h)
+                    / (1.0_f32 + dh_dx * dh_dx + dh_dz * dh_dz).sqrt();
+
+                terrain_d.max(box_d)
+            }
+        }
+    }
+}
+
+impl SdfPrimitive {
+    pub fn terrain_box(
+        half_extents: Vector3<f32>,
+        amplitude: f32,
+        generator: impl Generator<2> + Send + Sync + 'static,
+    ) -> Self {
+        SdfPrimitive::TerrainBox {
+            half_extents,
+            amplitude,
+            sampler: Arc::new(move |x: f32, z: f32| generator.sample([x as f64, z as f64]) as f32),
         }
     }
 }
@@ -134,19 +180,16 @@ pub struct SdfNode {
     pub(crate) primitive: SdfPrimitive,
     pub(crate) world_aabb: AABB,
     pub(crate) transform: Transform,
-    pub(crate) substract: bool,
+    pub(crate) subtract: bool,
 }
 
 impl SdfNode {
-    pub fn new(transform: &Transform, primitive: &SdfPrimitive, substract: bool) -> SdfNode {
-        let jittered_transform =
-            transform.with_translation_offset(Vector3::new(SDF_EPSILON, SDF_EPSILON, SDF_EPSILON));
-
+    pub fn new(transform: &Transform, primitive: &SdfPrimitive, subtract: bool) -> SdfNode {
         SdfNode {
             primitive: primitive.clone(),
-            world_aabb: AABB::transform(&primitive.local_aabb(), &jittered_transform),
-            transform: jittered_transform,
-            substract,
+            world_aabb: AABB::transform(&primitive.local_aabb(), transform),
+            transform: *transform,
+            subtract,
         }
     }
 }
@@ -175,54 +218,6 @@ impl SdfScene {
             .collect()
     }
 
-    // Polynomial Smooth Minimum (CORRIGÉ)
-    #[inline]
-    pub fn smin(a: f32, b: f32, k: f32) -> f32 {
-        let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
-        // C'est b qui prend (1.0 - h) pour garantir le minimum
-        b * (1.0 - h) + a * h - k * h * (1.0 - h)
-    }
-
-    // Polynomial Smooth Maximum
-    #[inline]
-    pub fn smax(a: f32, b: f32, k: f32) -> f32 {
-        let h = (0.5 + 0.5 * (a - b) / k).clamp(0.0, 1.0);
-        a * h + b * (1.0 - h) + k * h * (1.0 - h)
-    }
-
-    /*
-        pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
-            let mut solid_dist = f32::MAX;
-            let mut empty_dist = f32::MAX;
-            let k = SDF_SMOOTH_RADIUS; // Smooth radius
-
-            for node in nodes {
-                let local_p = node.transform.inv_transform_point(position);
-                let dist = node.primitive.local_value(&local_p) * node.transform.scale();
-
-                if node.substract {
-                    if empty_dist == f32::MAX {
-                        empty_dist = dist;
-                    } else {
-                        empty_dist = Self::smin(empty_dist, dist, k);
-                    }
-                } else {
-                    if solid_dist == f32::MAX {
-                        solid_dist = dist;
-                    } else {
-                        solid_dist = Self::smin(solid_dist, dist, k);
-                    }
-                }
-            }
-
-            if empty_dist != f32::MAX {
-                Self::smax(solid_dist, -empty_dist, k)
-            } else {
-                solid_dist
-            }
-        }
-    */
-
     pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
         let mut solid_dist = f32::MAX;
         let mut empty_dist = f32::MAX;
@@ -231,7 +226,7 @@ impl SdfScene {
             let local_p = node.transform.inv_transform_point(position);
             let dist = node.primitive.local_value(&local_p) * node.transform.scale();
 
-            if node.substract {
+            if node.subtract {
                 empty_dist = empty_dist.min(dist);
             } else {
                 solid_dist = solid_dist.min(dist);

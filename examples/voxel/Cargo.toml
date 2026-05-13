@@ -19,6 +19,7 @@ i3_io = { path = "../../crates/i3_io" }
 i3_math = { path = "../../crates/i3_math" }
 i3_voxel = { path = "../../crates/i3_voxel" }
 examples_common = { path = "../common" }
+libnoise = { workspace = true }
 tracing = "0.1"
 nalgebra = { workspace = true}
 nalgebra-glm = { workspace = true }

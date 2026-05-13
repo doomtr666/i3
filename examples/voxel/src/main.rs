@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
+use libnoise::prelude::*;
 use nalgebra::{UnitQuaternion, vector};
 
 use examples_common::basic_scene::BasicScene;
@@ -189,22 +190,38 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     } = init_renderer("Voxel", 1280, 720, Some(loader))?;
 
     let mut camera = CameraController::new();
-    camera.position = glm::vec3(1.6, 5.0, 7.0);
+    // Scene world extent: VOXEL_SCENE_WIDTH(8) × VOXEL_BLOCK_WIDTH(31) × VOXEL_DIST(0.05) = 12.4m
+    let scene_size = 8.0 * 31.0 * 0.05_f32;
+    let half = scene_size * 0.5; // 6.2m
+
+    camera.position = glm::vec3(half, 12.0, scene_size + 3.0);
     camera.yaw = -std::f32::consts::FRAC_PI_2;
-    camera.pitch = -0.56;
-    camera.move_speed = 3.0;
-    camera.camera_locked = true; // start with GUI visible
+    camera.pitch = -0.45;
+    camera.move_speed = 5.0;
+    camera.camera_locked = true;
+
+    let generator = Source::perlin(42).fbm(7, 0.8, 2.0, 0.5);
 
     let mut sdf_scene = SdfScene::new();
     sdf_scene.add(
-        &Transform::new(vector![1.6, 5.0, 7.0], UnitQuaternion::identity(), 1.0),
-        &SdfPrimitive::Box {
-            half_extents: vector![1.33, 1.33, 1.33],
-        },
+        // Centré au milieu de la scène XZ, terrain à Y≈4m
+        &Transform::new(vector![half, 4.0, half], UnitQuaternion::identity(), 1.0),
+        &SdfPrimitive::terrain_box(
+            // half_extents XZ > scene_half → murs hors de la grille, pas d'artefacts DC au bord
+            vector![half + 1.0, 7.0, half + 1.0],
+            12.0,
+            generator,
+        ),
     );
-    sdf_scene.add(
-        &Transform::new(vector![2.0, 3.0, 7.0], UnitQuaternion::identity(), 1.0),
+
+    sdf_scene.sub(
+        &Transform::new(vector![half, 2.5, half], UnitQuaternion::identity(), 1.0),
         &SdfPrimitive::Sphere { radius: 2.0 },
+    );
+
+    sdf_scene.sub(
+        &Transform::new(vector![half, 4.0, half], UnitQuaternion::identity(), 1.0),
+        &SdfPrimitive::Sphere { radius: 1.5 },
     );
 
     let mut voxel_scene = VoxelScene::new(Arc::new(sdf_scene));
