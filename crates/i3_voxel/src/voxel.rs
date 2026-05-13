@@ -1,9 +1,9 @@
 use crate::sdf::{SdfNode, SdfScene};
 use i3_math::AABB;
 
-use nalgebra::{Matrix3, Point3, Vector3, point};
+use nalgebra::{Point3, Vector3, point};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 const VOXEL_BLOCK_WIDTH: i32 = 31;
@@ -12,12 +12,31 @@ const VOXEL_BLOCK_PADDED_WIDTH2: i32 = VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PA
 const VOXEL_BLOCK_PADDED_SIZE: i32 =
     VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH;
 
+// SDF cache covers [-1, BLOCK_WIDTH] per axis = BLOCK_WIDTH+2 points per axis.
+const VOXEL_SDF_CACHE_WIDTH: i32 = VOXEL_BLOCK_WIDTH + 2;
+const VOXEL_SDF_CACHE_SIZE: usize =
+    (VOXEL_SDF_CACHE_WIDTH * VOXEL_SDF_CACHE_WIDTH * VOXEL_SDF_CACHE_WIDTH) as usize;
+
 const VOXEL_SCENE_WIDTH: i32 = 8;
 
 pub const VOXEL_DIST: f32 = 0.05;
-//const TOLERANCE_SVD: f32 = 1e-4;
 const BISECTION_STEPS: usize = 8;
-//const NEWTON_STEPS: usize = 2;
+
+// u32::MAX = absent (sentinel for the flat vertex-map lookup table).
+const VERTEX_MAP_EMPTY: u32 = u32::MAX;
+
+thread_local! {
+    static SDF_SCRATCH: RefCell<Vec<f32>> =
+        RefCell::new(vec![0.0_f32; VOXEL_SDF_CACHE_SIZE]);
+    static VERTEX_SCRATCH: RefCell<(Vec<VoxelVertex>, Vec<bool>)> =
+        RefCell::new((
+            vec![VoxelVertex::default(); VOXEL_BLOCK_PADDED_SIZE as usize],
+            vec![false; VOXEL_BLOCK_PADDED_SIZE as usize],
+        ));
+    // Flat lookup replacing HashMap<[i32;3], u32> — indexed by vertex_idx, no heap allocation.
+    static VERTEX_MAP_SCRATCH: RefCell<Vec<u32>> =
+        RefCell::new(vec![VERTEX_MAP_EMPTY; VOXEL_BLOCK_PADDED_SIZE as usize]);
+}
 
 #[derive(Clone)]
 pub struct VoxelVertex {
@@ -39,7 +58,6 @@ pub struct VoxelBlock {
     px: i32,
     py: i32,
     pz: i32,
-    vertices: Vec<Option<VoxelVertex>>,
     packed_vertices: Vec<VoxelVertex>,
     packed_indices: Vec<u32>,
 }
@@ -49,6 +67,13 @@ fn vertex_idx(x: i32, y: i32, z: i32) -> usize {
     ((x + 1) + (y + 1) * VOXEL_BLOCK_PADDED_WIDTH + (z + 1) * VOXEL_BLOCK_PADDED_WIDTH2) as usize
 }
 
+#[inline]
+fn sdf_cache_idx(x: i32, y: i32, z: i32) -> usize {
+    ((x + 1)
+        + (y + 1) * VOXEL_SDF_CACHE_WIDTH
+        + (z + 1) * VOXEL_SDF_CACHE_WIDTH * VOXEL_SDF_CACHE_WIDTH) as usize
+}
+
 impl VoxelBlock {
     pub fn new(sdf: Arc<SdfScene>, px: i32, py: i32, pz: i32) -> Self {
         Self {
@@ -56,7 +81,6 @@ impl VoxelBlock {
             px,
             py,
             pz,
-            vertices: vec![None; VOXEL_BLOCK_PADDED_SIZE as usize],
             packed_vertices: Vec::new(),
             packed_indices: Vec::new(),
         }
@@ -64,8 +88,6 @@ impl VoxelBlock {
 
     #[inline(always)]
     fn is_solid(sdf_value: f32) -> bool {
-        // Defines the absolute boundary.
-        // < 0.0 is solid matter, >= 0.0 is empty air.
         sdf_value < 0.0
     }
 
@@ -92,10 +114,6 @@ impl VoxelBlock {
         ]
     }
 
-    pub fn get_vertices(&self) -> &[Option<VoxelVertex>] {
-        &self.vertices
-    }
-
     pub fn get_packed_vertices(&self) -> &[VoxelVertex] {
         &self.packed_vertices
     }
@@ -106,31 +124,61 @@ impl VoxelBlock {
 
     pub fn compute_mesh(&mut self) {
         let sdf = Arc::clone(&self.sdf);
-
         let local_aabb = self.world_aabb().expand(2.0 * VOXEL_DIST);
-
         let sdf_nodes = sdf.get_nodes(&local_aabb);
         if sdf_nodes.is_empty() {
             return;
         }
 
-        self.compute_vertices(&sdf_nodes);
-        self.compute_indices(&sdf_nodes);
+        SDF_SCRATCH.with(|sc| {
+            VERTEX_SCRATCH.with(|vc| {
+                VERTEX_MAP_SCRATCH.with(|vm| {
+                    let mut sdf_cache = sc.borrow_mut();
+                    let mut vc_ref = vc.borrow_mut();
+                    let (verts, valid) = &mut *vc_ref;
+                    let mut vertex_map = vm.borrow_mut();
+                    valid.fill(false);
+                    vertex_map.fill(VERTEX_MAP_EMPTY);
+                    self.fill_sdf_cache(&sdf_nodes, &mut sdf_cache);
+                    self.compute_vertices_cached(&sdf_nodes, &sdf_cache, verts, valid);
+                    self.compute_indices_cached(&sdf_cache, verts, valid, &mut vertex_map);
+                });
+            });
+        });
     }
 
-    fn compute_vertices(&mut self, sdf_nodes: &[&SdfNode]) {
-        for z in -1..=(VOXEL_BLOCK_WIDTH as i32 - 1) {
-            for y in -1..=(VOXEL_BLOCK_WIDTH as i32 - 1) {
-                for x in -1..=(VOXEL_BLOCK_WIDTH as i32 - 1) {
+    fn fill_sdf_cache(&self, sdf_nodes: &[&SdfNode], cache: &mut Vec<f32>) {
+        for z in -1..=VOXEL_BLOCK_WIDTH {
+            for y in -1..=VOXEL_BLOCK_WIDTH {
+                for x in -1..=VOXEL_BLOCK_WIDTH {
+                    cache[sdf_cache_idx(x, y, z)] =
+                        SdfScene::value(sdf_nodes, &self.world_pos(x, y, z));
+                }
+            }
+        }
+    }
+
+    fn compute_vertices_cached(
+        &self,
+        sdf_nodes: &[&SdfNode],
+        sdf_cache: &[f32],
+        verts: &mut Vec<VoxelVertex>,
+        valid: &mut Vec<bool>,
+    ) {
+        for z in -1..=(VOXEL_BLOCK_WIDTH - 1) {
+            for y in -1..=(VOXEL_BLOCK_WIDTH - 1) {
+                for x in -1..=(VOXEL_BLOCK_WIDTH - 1) {
                     let mut vertices = [Point3::origin(); 8];
                     let mut values = [0.0f32; 8];
                     for i in 0..8 {
-                        let p = self.world_pos(x + (i & 1), y + ((i >> 1) & 1), z + ((i >> 2) & 1));
-                        vertices[i as usize] = p;
-                        values[i as usize] = SdfScene::value(sdf_nodes, &p);
+                        let ix = (i & 1) as i32;
+                        let iy = ((i >> 1) & 1) as i32;
+                        let iz = ((i >> 2) & 1) as i32;
+                        vertices[i] = self.world_pos(x + ix, y + iy, z + iz);
+                        values[i] = sdf_cache[sdf_cache_idx(x + ix, y + iy, z + iz)];
                     }
 
-                    if !self.check_intersection(&values) {
+                    if !Self::check_intersection(&values) {
                         continue;
                     }
 
@@ -149,10 +197,9 @@ impl VoxelBlock {
                         (3, 7),
                     ];
 
-                    let mut mass_mat = Matrix3::<f32>::zeros();
-                    let mut mass_vec = Vector3::<f32>::zeros();
                     let mut center_of_mass = Vector3::<f32>::zeros();
                     let mut intersect_count = 0.0f32;
+                    let mut accumulated_normal = Vector3::<f32>::zeros();
 
                     for (a, b) in edge_indices {
                         let v1 = vertices[a];
@@ -178,8 +225,7 @@ impl VoxelBlock {
                                 v1 + ((lo + hi) * 0.5) * (v2 - v1)
                             };
                             let n = SdfScene::normal(sdf_nodes, &q);
-                            mass_mat += n * n.transpose();
-                            mass_vec += n * n.dot(&q.coords);
+                            accumulated_normal += n;
                             center_of_mass += q.coords;
                             intersect_count += 1.0;
                         }
@@ -189,78 +235,44 @@ impl VoxelBlock {
                         continue;
                     }
 
-                    center_of_mass /= intersect_count;
+                    let position = Point3::from(center_of_mass / intersect_count);
+                    let final_normal = accumulated_normal
+                        .try_normalize(1e-6)
+                        .unwrap_or_else(Vector3::y);
 
-                    /*
-
-                    let rebase = center_of_mass;
-                    let mass_vec_r = mass_vec - mass_mat * rebase;
-
-                    let svd = mass_mat.svd(true, true);
-                    let qef_result = match svd.pseudo_inverse(TOLERANCE_SVD) {
-                        Ok(pseudo_inv) => Point3::from(rebase + pseudo_inv * mass_vec_r),
-                        Err(_) => Point3::from(center_of_mass),
+                    let idx = vertex_idx(x, y, z);
+                    verts[idx] = VoxelVertex {
+                        position,
+                        normal: final_normal,
                     };
-
-                    let mut projected = qef_result;
-
-                    let voxel_min = self.world_pos(x, y, z);
-                    let voxel_max = self.world_pos(x + 1, y + 1, z + 1);
-
-                    let voxel_aabb = AABB::new(
-                        Point3::from(voxel_min.coords),
-                        Point3::from(voxel_max.coords),
-                    );
-
-                    if !voxel_aabb.contains(&qef_result) {
-                        projected = Point3::from(center_of_mass);
-                    }
-
-                    for _ in 0..NEWTON_STEPS {
-                        let f = SdfScene::value(sdf_nodes, &projected);
-                        let n = SdfScene::normal(sdf_nodes, &projected);
-                        projected = Point3::from(projected.coords - f * n * 0.5);
-                    }
-
-                    let position = voxel_aabb.clamp(&projected);
-                    let final_normal = SdfScene::normal(sdf_nodes, &position);
-
-                    self.vertices[vertex_idx(x, y, z)] = Some(VoxelVertex {
-                        position,
-                        normal: final_normal,
-                    });
-                    */
-
-                    let position = center_of_mass.into();
-                    let final_normal = SdfScene::normal(sdf_nodes, &position);
-
-                    self.vertices[vertex_idx(x, y, z)] = Some(VoxelVertex {
-                        position,
-                        normal: final_normal,
-                    });
+                    valid[idx] = true;
                 }
             }
         }
     }
 
-    fn compute_indices(&mut self, sdf_nodes: &[&SdfNode]) {
-        let mut vertex_map = HashMap::<[i32; 3], u32>::new();
-
-        for z in 0..VOXEL_BLOCK_WIDTH as i32 {
-            for y in 0..VOXEL_BLOCK_WIDTH as i32 {
-                for x in 0..VOXEL_BLOCK_WIDTH as i32 {
-                    let sv = SdfScene::value(sdf_nodes, &self.world_pos(x, y, z));
+    fn compute_indices_cached(
+        &mut self,
+        sdf_cache: &[f32],
+        verts: &[VoxelVertex],
+        valid: &[bool],
+        vertex_map: &mut Vec<u32>,
+    ) {
+        for z in 0..VOXEL_BLOCK_WIDTH {
+            for y in 0..VOXEL_BLOCK_WIDTH {
+                for x in 0..VOXEL_BLOCK_WIDTH {
+                    let sv = sdf_cache[sdf_cache_idx(x, y, z)];
+                    let xp_v = sdf_cache[sdf_cache_idx(x + 1, y, z)];
+                    let yp_v = sdf_cache[sdf_cache_idx(x, y + 1, z)];
+                    let zp_v = sdf_cache[sdf_cache_idx(x, y, z + 1)];
                     let ccw = !Self::is_solid(sv);
 
-                    let xp_v = SdfScene::value(sdf_nodes, &self.world_pos(x + 1, y, z));
-                    let yp_v = SdfScene::value(sdf_nodes, &self.world_pos(x, y + 1, z));
-                    let zp_v = SdfScene::value(sdf_nodes, &self.world_pos(x, y, z + 1));
-
                     Self::emit_quad(
-                        &self.vertices,
+                        verts,
+                        valid,
+                        vertex_map,
                         &mut self.packed_vertices,
                         &mut self.packed_indices,
-                        &mut vertex_map,
                         sv,
                         xp_v,
                         ccw,
@@ -270,10 +282,11 @@ impl VoxelBlock {
                         [x, y - 1, z],
                     );
                     Self::emit_quad(
-                        &self.vertices,
+                        verts,
+                        valid,
+                        vertex_map,
                         &mut self.packed_vertices,
                         &mut self.packed_indices,
-                        &mut vertex_map,
                         sv,
                         yp_v,
                         ccw,
@@ -283,10 +296,11 @@ impl VoxelBlock {
                         [x, y, z - 1],
                     );
                     Self::emit_quad(
-                        &self.vertices,
+                        verts,
+                        valid,
+                        vertex_map,
                         &mut self.packed_vertices,
                         &mut self.packed_indices,
-                        &mut vertex_map,
                         sv,
                         zp_v,
                         ccw,
@@ -300,11 +314,13 @@ impl VoxelBlock {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_quad(
-        vertices: &[Option<VoxelVertex>],
+        verts: &[VoxelVertex],
+        valid: &[bool],
+        vertex_map: &mut Vec<u32>,
         packed_vertices: &mut Vec<VoxelVertex>,
         packed_indices: &mut Vec<u32>,
-        vertex_map: &mut HashMap<[i32; 3], u32>,
         start_v: f32,
         neighbor_v: f32,
         ccw: bool,
@@ -317,17 +333,20 @@ impl VoxelBlock {
             return;
         }
 
-        // Phase 1: resolve indices — closure is dropped at block end, releasing the &mut borrow
         let indices = {
             let mut get_or_add = |coords: [i32; 3]| -> Option<u32> {
-                if let Some(&idx) = vertex_map.get(&coords) {
-                    return Some(idx);
-                }
                 let [x, y, z] = coords;
-                let vertex = vertices[vertex_idx(x, y, z)].as_ref()?;
+                let vi = vertex_idx(x, y, z);
+                if !valid[vi] {
+                    return None;
+                }
+                let slot = &mut vertex_map[vi];
+                if *slot != VERTEX_MAP_EMPTY {
+                    return Some(*slot);
+                }
                 let idx = packed_vertices.len() as u32;
-                packed_vertices.push(vertex.clone());
-                vertex_map.insert(coords, idx);
+                packed_vertices.push(verts[vi].clone());
+                *slot = idx;
                 Some(idx)
             };
             (
@@ -338,7 +357,6 @@ impl VoxelBlock {
             )
         };
 
-        // Phase 2: choose shorter diagonal, then emit two triangles with correct winding
         if let (Some(i0), Some(i1), Some(i2), Some(i3)) = indices {
             let p = |i: u32| packed_vertices[i as usize].position;
             let d02 = (p(i2) - p(i0)).norm_squared();
@@ -350,17 +368,15 @@ impl VoxelBlock {
                 } else {
                     packed_indices.extend([i0, i1, i2, i0, i2, i3]);
                 }
+            } else if ccw {
+                packed_indices.extend([i0, i3, i1, i3, i2, i1]);
             } else {
-                if ccw {
-                    packed_indices.extend([i0, i3, i1, i3, i2, i1]);
-                } else {
-                    packed_indices.extend([i0, i1, i3, i1, i2, i3]);
-                }
+                packed_indices.extend([i0, i1, i3, i1, i2, i3]);
             }
         }
     }
 
-    fn check_intersection(&self, v: &[f32; 8]) -> bool {
+    fn check_intersection(v: &[f32; 8]) -> bool {
         let base_solid = Self::is_solid(v[0]);
         (1..8).any(|i| Self::is_solid(v[i]) != base_solid)
     }
