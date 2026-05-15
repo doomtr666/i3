@@ -276,8 +276,8 @@ float3 decodeOctahedral(float2 e)
 
 float2 dirToEquirect(float3 d)
 {
-    float u = atan2(d.z, d.x) / (2.0 * PI) + 0.5;
-    float v = acos(d.y) / PI;
+    float u = (d.x == 0.0 && d.z == 0.0) ? 0.0 : atan2(d.z, d.x) / (2.0 * PI) + 0.5;
+    float v = acos(clamp(d.y, -1.0, 1.0)) / PI;
     return float2(u, v);
 }
 

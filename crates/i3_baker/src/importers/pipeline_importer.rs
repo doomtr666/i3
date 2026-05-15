@@ -376,15 +376,29 @@ impl Importer for PipelineImporter {
 }
 
 fn scan_includes(base_path: &Path, content: &str) -> Vec<PathBuf> {
-    let mut deps = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(base_path.to_path_buf());
+    scan_includes_recursive(base_path, content, &mut visited)
+}
+
+fn scan_includes_recursive(
+    base_path: &Path,
+    content: &str,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> Vec<PathBuf> {
     let re = Regex::new(r#"(?m)^\s*#include\s+["<]([^">]+)[">]"#).unwrap();
-    let dir = base_path.parent().unwrap();
+    let dir = base_path.parent().unwrap_or(Path::new(""));
+    let mut deps = Vec::new();
 
     for cap in re.captures_iter(content) {
-        let include_path = &cap[1];
-        let full_path = dir.join(include_path);
-        if full_path.exists() {
-            deps.push(full_path);
+        let full_path = dir.join(&cap[1]);
+        if !full_path.exists() || visited.contains(&full_path) {
+            continue;
+        }
+        visited.insert(full_path.clone());
+        deps.push(full_path.clone());
+        if let Ok(child_content) = std::fs::read_to_string(&full_path) {
+            deps.extend(scan_includes_recursive(&full_path, &child_content, visited));
         }
     }
     deps

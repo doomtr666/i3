@@ -207,19 +207,24 @@ pub fn create_blas(
     };
 
     let id = backend.accel_structs.insert(physical);
+    tracing::debug!(target: "blas_dbg", "create  arena={id:#018x}  addr={address:#018x}");
     BackendAccelerationStructure(id)
 }
 
 pub fn destroy_blas(backend: &mut VulkanBackend, handle: BackendAccelerationStructure) {
     if let Some(pas) = backend.accel_structs.remove(handle.0) {
+        tracing::debug!(target: "blas_dbg", "destroy arena={:#018x}  addr={:#018x}", handle.0, pas.address);
         if let Some(alloc) = pas.allocation {
-            backend.dead_accel_structs.push((
-                backend.frame_count,
-                pas.handle,
-                pas.buffer,
+            let threshold = backend.graphics.as_ref().map(|g| g.cpu_timeline).unwrap_or(0);
+            backend.pending_deletes.push(crate::backend::PendingDelete::AccelStruct {
+                threshold,
+                handle: pas.handle,
+                buffer: pas.buffer,
                 alloc,
-            ));
+            });
         }
+    } else {
+        tracing::warn!(target: "blas_dbg", "destroy arena={:#018x} — handle not found in arena (double-free?)", handle.0);
     }
 }
 
@@ -352,6 +357,13 @@ pub fn build_blas(ctx: &mut VulkanPassContext, handle: BackendAccelerationStruct
             ctx.backend().get_buffer_address(geo.vertex_buffer) + geo.vertex_offset;
         let index_address = ctx.backend().get_buffer_address(geo.index_buffer) + geo.index_offset;
 
+        if vertex_address == 0 || index_address == 0 {
+            tracing::error!(target: "blas_dbg",
+                "build_blas: null buffer address for BLAS {:?} (vertex={:#x} index={:#x}) — skipping",
+                handle, vertex_address, index_address);
+            return;
+        }
+
         let tri_data = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
             .vertex_format(crate::convert::convert_format(geo.vertex_format))
             .vertex_data(vk::DeviceOrHostAddressConstKHR {
@@ -475,15 +487,45 @@ pub fn build_tlas(
     };
 
     // 1. Convert instances to Vulkan layout
-    let vk_instances: Vec<vk::AccelerationStructureInstanceKHR> = instances
+    // First pass: resolve BLAS addresses (short borrow on accel_structs).
+    let blas_info: Vec<(vk::AccelerationStructureKHR, u64)> = instances
         .iter()
         .map(|inst| {
-            let blas_pas = ctx
+            let pas = ctx
                 .backend()
                 .accel_structs
                 .get(inst.blas.0)
-                .expect("BLAS not found");
-            let vk_inst = vk::AccelerationStructureInstanceKHR {
+                .expect("BLAS not found in build_tlas");
+            (pas.handle, pas.address)
+        })
+        .collect();
+
+    // Debug: verify none of the referenced BLASes are already queued for deletion.
+    // If this fires, a BLAS is being used in the TLAS in the same frame it is destroyed —
+    // the eviction logic in sync() has a bug.
+    #[cfg(debug_assertions)]
+    {
+        use crate::backend::PendingDelete;
+        for (i, (vk_handle, addr)) in blas_info.iter().enumerate() {
+            let in_pending = ctx.backend().pending_deletes.iter().any(|pd| {
+                matches!(pd, PendingDelete::AccelStruct { handle, .. } if handle == vk_handle)
+            });
+            if in_pending {
+                tracing::error!(
+                    target: "blas_dbg",
+                    "build_tlas BUG: instance[{i}] arena={:#018x} addr={addr:#018x} \
+                     is already in pending_deletes — BLAS destroyed and referenced in same frame!",
+                    instances[i].blas.0,
+                );
+            }
+        }
+    }
+
+    let vk_instances: Vec<vk::AccelerationStructureInstanceKHR> = instances
+        .iter()
+        .zip(blas_info.iter())
+        .map(|(inst, (_vk_handle, address))| {
+            vk::AccelerationStructureInstanceKHR {
                 transform: vk::TransformMatrixKHR {
                     matrix: inst.transform,
                 },
@@ -493,10 +535,8 @@ pub fn build_tlas(
                     inst.flags,
                 ),
                 // Safety: AccelerationStructureReferenceKHR is a union.
-                // We use transmute to move the device address into the union.
-                acceleration_structure_reference: unsafe { std::mem::transmute(blas_pas.address) },
-            };
-            vk_inst
+                acceleration_structure_reference: unsafe { std::mem::transmute(*address) },
+            }
         })
         .collect();
 

@@ -168,9 +168,13 @@ pub fn destroy_image(backend: &mut VulkanBackend, handle: BackendImage) {
                     views.push(*view);
                 }
             }
-            backend
-                .dead_images
-                .push((backend.frame_count, img.image, views, alloc));
+            let threshold = backend.graphics.as_ref().map(|g| g.cpu_timeline).unwrap_or(0);
+            backend.pending_deletes.push(crate::backend::PendingDelete::Image {
+                threshold,
+                image: img.image,
+                views,
+                alloc,
+            });
         }
     }
 }
@@ -257,9 +261,12 @@ pub fn create_buffer(backend: &mut VulkanBackend, desc: &BufferDesc) -> BackendB
 pub fn destroy_buffer(backend: &mut VulkanBackend, handle: BackendBuffer) {
     if let Some(buf) = backend.buffers.remove(handle.0) {
         if let Some(alloc) = buf.allocation {
-            backend
-                .dead_buffers
-                .push((backend.frame_count, buf.buffer, alloc));
+            let threshold = backend.graphics.as_ref().map(|g| g.cpu_timeline).unwrap_or(0);
+            backend.pending_deletes.push(crate::backend::PendingDelete::Buffer {
+                threshold,
+                buffer: buf.buffer,
+                alloc,
+            });
         }
     }
 }
@@ -324,7 +331,8 @@ pub fn create_sampler(backend: &mut VulkanBackend, desc: &SamplerDesc) -> Sample
 
 pub fn destroy_sampler(backend: &mut VulkanBackend, handle: SamplerHandle) {
     if let Some(sampler) = backend.samplers.remove(handle.0) {
-        backend.dead_samplers.push((backend.frame_count, sampler));
+        let threshold = backend.graphics.as_ref().map(|g| g.cpu_timeline).unwrap_or(0);
+        backend.pending_deletes.push(crate::backend::PendingDelete::Sampler { threshold, sampler });
     }
 }
 
@@ -444,8 +452,8 @@ pub fn upload_buffer(
         let barrier = vk::BufferMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
             .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_GRAPHICS | vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::INDEX_READ | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_GRAPHICS | vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::INDEX_READ | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR)
             .buffer(buffer)
             .offset(offset)
             .size(data.len() as u64);

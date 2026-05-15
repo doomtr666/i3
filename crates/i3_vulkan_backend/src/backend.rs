@@ -21,6 +21,35 @@ pub(crate) use crate::commands::{
 
 use crate::sync;
 
+/// A GPU resource queued for deferred destruction.
+///
+/// Resources are pushed here when logically destroyed and freed only once
+/// `vkGetSemaphoreCounterValue` confirms the GPU has completed past `threshold`.
+/// This replaces the old frame_count-4 heuristic with an exact timeline query.
+pub enum PendingDelete {
+    Buffer {
+        threshold: u64,
+        buffer: vk::Buffer,
+        alloc: vk_mem::Allocation,
+    },
+    Image {
+        threshold: u64,
+        image: vk::Image,
+        views: Vec<vk::ImageView>,
+        alloc: vk_mem::Allocation,
+    },
+    AccelStruct {
+        threshold: u64,
+        handle: vk::AccelerationStructureKHR,
+        buffer: vk::Buffer,
+        alloc: vk_mem::Allocation,
+    },
+    Sampler {
+        threshold: u64,
+        sampler: vk::Sampler,
+    },
+}
+
 /// Per-queue context for managing execution, synchronization and command pools.
 pub struct QueueContext {
     pub(crate) queue: vk::Queue,
@@ -61,18 +90,10 @@ pub struct VulkanBackend {
     pub external_as_to_physical: HashMap<u64, u64>,     // Virtual AccelStructID -> Physical ID
 
     pub frame_count: u64,
-    pub dead_images: Vec<(u64, vk::Image, Vec<vk::ImageView>, vk_mem::Allocation)>, // Frame, Image, Views, Alloc
-    pub dead_buffers: Vec<(u64, vk::Buffer, vk_mem::Allocation)>,
-    pub dead_semaphores: Vec<(u64, u64, vk::Semaphore)>, // Frame, ID, Handle
+    pub pending_deletes: Vec<PendingDelete>,
     pub recycled_semaphores: Vec<vk::Semaphore>,
 
     pub accel_structs: ResourceArena<PhysicalAccelerationStructure>,
-    pub dead_accel_structs: Vec<(
-        u64,
-        vk::AccelerationStructureKHR,
-        vk::Buffer,
-        vk_mem::Allocation,
-    )>,
 
     // Transient Pools
     pub(crate) transient_image_pool: HashMap<ImageDesc, Vec<u64>>,
@@ -80,7 +101,6 @@ pub struct VulkanBackend {
 
     // Resources
     pub samplers: ResourceArena<vk::Sampler>,
-    pub dead_samplers: Vec<(u64, vk::Sampler)>, // Frame, Handle
     pub semaphores: ResourceArena<vk::Semaphore>,
     pub next_semaphore_id: u64,
 
@@ -163,10 +183,7 @@ impl VulkanBackend {
             samplers: ResourceArena::new(),
             next_semaphore_id: 1,
             frame_count: 0,
-            dead_images: Vec::new(),
-            dead_buffers: Vec::new(),
-            dead_semaphores: Vec::new(),
-            dead_samplers: Vec::new(),
+            pending_deletes: Vec::new(),
             recycled_semaphores: Vec::new(),
             graphics_family: 0,
             compute_family: 0,
@@ -196,7 +213,6 @@ impl VulkanBackend {
             bindless_set_layout: vk::DescriptorSetLayout::null(),
             bindless_set_handle: 0,
             accel_structs: ResourceArena::new(),
-            dead_accel_structs: Vec::new(),
         })
     }
 
@@ -811,92 +827,68 @@ impl RenderBackend for VulkanBackend {
         if self.device.is_none() {
             return;
         }
-        let safe_frame = self.frame_count.saturating_sub(4);
-        let device = self.get_device().clone();
+        let Some(gfx) = self.graphics.as_ref() else { return; };
+        // Query the GPU's actual completed timeline value — no fixed-frame heuristic.
+        let gpu_done = unsafe {
+            self.get_device()
+                .handle
+                .get_semaphore_counter_value(gfx.timeline_sem)
+                .unwrap_or(0)
+        };
 
-        // 1. Buffers
-        if !self.dead_buffers.is_empty() {
-            let allocator = device.allocator.lock().unwrap();
-            let mut i = 0;
-            while i < self.dead_buffers.len() {
-                if self.dead_buffers[i].0 <= safe_frame {
-                    let (_, buffer, mut alloc) = self.dead_buffers.remove(i);
-                    unsafe {
-                        allocator.destroy_buffer(buffer, &mut alloc);
-                    }
-                } else {
-                    i += 1;
-                }
+        // Debug: collect all VkAS handles still alive in the arena so we can assert
+        // that gc() never destroys a handle whose arena slot is still occupied.
+        #[cfg(debug_assertions)]
+        let live_vk_as_handles: std::collections::HashSet<ash::vk::AccelerationStructureKHR> =
+            self.accel_structs.iter().map(|(_, pas)| pas.handle).collect();
+
+        let device  = self.get_device().clone();
+        let as_ext  = self.accel_struct.clone();
+        let allocator = device.allocator.lock().unwrap();
+
+        self.pending_deletes.retain_mut(|item| {
+            let threshold = match item {
+                PendingDelete::Buffer      { threshold, .. }
+                | PendingDelete::Image     { threshold, .. }
+                | PendingDelete::AccelStruct { threshold, .. }
+                | PendingDelete::Sampler   { threshold, .. } => *threshold,
+            };
+            if threshold > gpu_done {
+                return true; // GPU hasn't reached this point yet — keep
             }
-        }
-
-        // 2. Images
-        if !self.dead_images.is_empty() {
-            let allocator = device.allocator.lock().unwrap();
-            let mut i = 0;
-            while i < self.dead_images.len() {
-                if self.dead_images[i].0 <= safe_frame {
-                    let (_, image, views, mut alloc) = self.dead_images.remove(i);
-                    unsafe {
-                        for view in views {
-                            device.handle.destroy_image_view(view, None);
+            match item {
+                PendingDelete::Buffer { buffer, alloc, .. } => unsafe {
+                    allocator.destroy_buffer(*buffer, alloc);
+                },
+                PendingDelete::Image { image, views, alloc, .. } => unsafe {
+                    for &v in views.iter() {
+                        device.handle.destroy_image_view(v, None);
+                    }
+                    allocator.destroy_image(*image, alloc);
+                },
+                PendingDelete::AccelStruct { handle, buffer, alloc, .. } => unsafe {
+                    if let Some(ext) = &as_ext {
+                        // INVARIANT: by the time gc() frees a VkAS, destroy_blas() must have
+                        // already removed it from the arena (generation bumped). If this fires,
+                        // something called vkDestroyAccelerationStructure without going through
+                        // destroy_blas — the root cause of the VUID-12281 validation error.
+                        #[cfg(debug_assertions)]
+                        if live_vk_as_handles.contains(handle) {
+                            tracing::error!(
+                                "blas_dbg gc BUG: freeing VkAS {handle:?} but its arena slot is still occupied! \
+                                 This VkAS will remain referenced in the TLAS — VUID-12281 incoming."
+                            );
                         }
-                        allocator.destroy_image(image, &mut alloc);
+                        ext.destroy_acceleration_structure(*handle, None);
                     }
-                } else {
-                    i += 1;
-                }
+                    allocator.destroy_buffer(*buffer, alloc);
+                },
+                PendingDelete::Sampler { sampler, .. } => unsafe {
+                    device.handle.destroy_sampler(*sampler, None);
+                },
             }
-        }
-
-        // 3. Acceleration Structures
-        if !self.dead_accel_structs.is_empty() {
-            if let Some(as_loader) = &self.accel_struct {
-                let allocator = device.allocator.lock().unwrap();
-                let mut i = 0;
-                while i < self.dead_accel_structs.len() {
-                    if self.dead_accel_structs[i].0 <= safe_frame {
-                        let (_, handle, buffer, mut alloc) = self.dead_accel_structs.remove(i);
-                        unsafe {
-                            as_loader.destroy_acceleration_structure(handle, None);
-                            allocator.destroy_buffer(buffer, &mut alloc);
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-        }
-
-        // 4. Samplers
-        if !self.dead_samplers.is_empty() {
-            let mut i = 0;
-            while i < self.dead_samplers.len() {
-                if self.dead_samplers[i].0 <= safe_frame {
-                    let (_, sampler) = self.dead_samplers.remove(i);
-                    unsafe {
-                        device.handle.destroy_sampler(sampler, None);
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-        }
-
-        // 5. Semaphores
-        if !self.dead_semaphores.is_empty() {
-            let mut i = 0;
-            while i < self.dead_semaphores.len() {
-                if self.dead_semaphores[i].0 <= safe_frame {
-                    let (_, _id, sem) = self.dead_semaphores.remove(i);
-                    unsafe {
-                        device.handle.destroy_semaphore(sem, None);
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-        }
+            false // consumed — remove from vec
+        });
     }
 
     // --- Resource Resolution ---
@@ -1405,31 +1397,34 @@ impl Drop for VulkanBackend {
                         }
                     }
 
-                    debug!("Destroying dead resources...");
-                    for (_, buffer, mut alloc) in self.dead_buffers.drain(..) {
-                        allocator.destroy_buffer(buffer, &mut alloc);
-                    }
-                    for (_, image, views, mut alloc) in self.dead_images.drain(..) {
-                        for view in views {
-                            device.handle.destroy_image_view(view, None);
-                        }
-                        allocator.destroy_image(image, &mut alloc);
-                    }
-                    if let Some(as_ext) = &self.accel_struct {
-                        for (_, handle, buffer, mut alloc) in self.dead_accel_structs.drain(..) {
-                            if handle != vk::AccelerationStructureKHR::null() {
-                                as_ext.destroy_acceleration_structure(handle, None);
-                            }
-                            allocator.destroy_buffer(buffer, &mut alloc);
+                    debug!("Destroying pending-delete resources...");
+                    let as_ext = self.accel_struct.clone();
+                    for item in self.pending_deletes.drain(..) {
+                        match item {
+                            PendingDelete::Buffer { buffer, mut alloc, .. } => {
+                                allocator.destroy_buffer(buffer, &mut alloc);
+                            },
+                            PendingDelete::Image { image, views, mut alloc, .. } => {
+                                for view in views {
+                                    device.handle.destroy_image_view(view, None);
+                                }
+                                allocator.destroy_image(image, &mut alloc);
+                            },
+                            PendingDelete::AccelStruct { handle, buffer, mut alloc, .. } => {
+                                if let Some(ext) = &as_ext {
+                                    ext.destroy_acceleration_structure(handle, None);
+                                }
+                                allocator.destroy_buffer(buffer, &mut alloc);
+                            },
+                            PendingDelete::Sampler { sampler, .. } => {
+                                device.handle.destroy_sampler(sampler, None);
+                            },
                         }
                     }
                 }
 
                 debug!("Destroying samplers...");
                 for (_, &sampler) in self.samplers.iter() {
-                    device.handle.destroy_sampler(sampler, None);
-                }
-                for (_, sampler) in self.dead_samplers.drain(..) {
                     device.handle.destroy_sampler(sampler, None);
                 }
 
@@ -1439,9 +1434,6 @@ impl Drop for VulkanBackend {
                 }
                 for &sem in &self.recycled_semaphores {
                     device.handle.destroy_semaphore(sem, None);
-                }
-                for (_, _, sem_handle) in self.dead_semaphores.drain(..) {
-                    device.handle.destroy_semaphore(sem_handle, None);
                 }
 
                 debug!("Destroying descriptor pools...");

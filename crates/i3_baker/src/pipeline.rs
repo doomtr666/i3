@@ -476,6 +476,19 @@ impl BundleBaker {
             })?;
         }
 
+        // Also watch all transitive include dependencies so that changing a
+        // shared .slangh header triggers a Cargo rebuild (and cache invalidation).
+        for asset in &self.assets {
+            if asset.importer.source_extensions().is_empty() {
+                continue;
+            }
+            if let Ok(deps) = asset.importer.get_dependencies(&asset.source_path) {
+                for dep in &deps {
+                    println!("cargo:rerun-if-changed={}", dep.display());
+                }
+            }
+        }
+
         let force = std::env::var("FORCE_BAKE").is_ok();
 
         // ── Per-asset incremental path ────────────────────────────────────────

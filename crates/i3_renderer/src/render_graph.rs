@@ -907,9 +907,36 @@ impl DefaultRenderGraph {
                 }));
             }
 
-            // 2. Manage BLAS lifecycle — create new BLAS for any mesh not yet in cache
+            // 2a. Evict BLAS for tombstoned or removed mesh slots.
+            //     A slot is alive only if it has a valid vertex buffer AND non-zero index count.
+            //     backend.destroy_blas defers physical destruction until the GPU is done.
+            {
+                let live: std::collections::HashSet<u32> = self
+                    .scene_mesh_descriptors
+                    .iter()
+                    .filter(|(_, desc)| desc.vertex_buffer_address != 0 && desc.index_count >= 3)
+                    .map(|(id, _)| *id)
+                    .collect();
+                let stale: Vec<u32> = self
+                    .accel_struct_system
+                    .blas_cache
+                    .keys()
+                    .filter(|id| !live.contains(*id))
+                    .copied()
+                    .collect();
+                for id in stale {
+                    if let Some(blas) = self.accel_struct_system.blas_cache.remove(&id) {
+                        tracing::debug!(target: "blas_dbg",
+                            "sync evict  mesh_id={id:>6}  arena={:#018x}", blas.0);
+                        backend.destroy_blas(blas);
+                    }
+                }
+            }
+
+            // 2b. Create new BLAS for any live mesh not yet in cache.
             let mut builds = Vec::new();
-            for (id, _) in &self.scene_mesh_descriptors {
+            for (id, desc) in &self.scene_mesh_descriptors {
+                if desc.vertex_buffer_address == 0 || desc.index_count < 3 { continue; } // tombstoned or degenerate
                 if !self.accel_struct_system.blas_cache.contains_key(id) {
                     let mesh = scene.mesh(*id);
                     let blas = backend.create_blas(&BlasCreateInfo {
@@ -926,16 +953,32 @@ impl DefaultRenderGraph {
                         }],
                         flags: AccelStructBuildFlags::PREFER_FAST_TRACE,
                     });
+                    tracing::debug!(target: "blas_dbg",
+                        "sync create mesh_id={id:>6}  arena={:#018x}  idx={} tri={}",
+                        blas.0, mesh.vertex_count, mesh.index_count / 3);
                     self.accel_struct_system.blas_cache.insert(*id, blas);
                     builds.push(blas);
                 }
             }
             self.blas_update_pass.builds = builds;
 
-            // 3. Build TLAS instance list and push to the pass
+            // 3. Build TLAS instance list and push to the pass.
+            // BlasUpdatePass (added before TlasRebuildPass in the graph) records all BLAS build
+            // commands in the same GPU submission.  The barrier inside build_tlas() covers those
+            // writes, so the TLAS build sees every BLAS — including ones created this frame —
+            // as already built within the same submission.  No one-frame delay needed.
+            let cache_changed = !self.blas_update_pass.builds.is_empty()
+                || self.accel_struct_system.blas_cache.len()
+                    != self.tlas_rebuild_pass.instances.len();
             let mut tlas_instances = Vec::new();
             for inst in scene.iter_instances() {
                 if let Some(&blas) = self.accel_struct_system.blas_cache.get(&inst.mesh_idx) {
+                    let tlas_idx = tlas_instances.len();
+                    if cache_changed {
+                        tracing::debug!(target: "blas_dbg",
+                            "sync tlas[{tlas_idx:>3}]  mesh_id={:>6}  arena={:#018x}",
+                            inst.mesh_idx, blas.0);
+                    }
                     let mut transform = [0.0f32; 12];
                     for i in 0..3 {
                         for j in 0..4 {
@@ -944,7 +987,7 @@ impl DefaultRenderGraph {
                     }
                     tlas_instances.push(TlasInstanceDesc {
                         transform,
-                        instance_id: tlas_instances.len() as u32,
+                        instance_id: tlas_idx as u32,
                         mask: 0xFF,
                         sbt_offset: 0,
                         flags: 0,

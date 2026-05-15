@@ -160,6 +160,34 @@ impl BasicScene {
         }
     }
 
+    /// Removes an object from the scene by ID.
+    pub fn remove_object(&mut self, id: ObjectId) {
+        self.objects.retain(|(oid, _)| *oid != id);
+        self.dirty_objects.remove(&id);
+    }
+
+    /// Removes a mesh and its associated GPU buffers.
+    ///
+    /// The caller must ensure the GPU is no longer using these buffers
+    /// (i.e. handle deferred deletion at a higher level if needed).
+    pub fn remove_mesh(&mut self, backend: &mut dyn RenderBackend, mesh_id: u32) {
+        let id = mesh_id as usize;
+        if id < self.meshes.len() {
+            let mesh = &self.meshes[id];
+            backend.destroy_buffer(mesh.vertex_buffer);
+            backend.destroy_buffer(mesh.index_buffer);
+            // Tombstone so existing mesh IDs remain stable
+            self.meshes[id] = Mesh {
+                vertex_buffer: BackendBuffer::INVALID,
+                index_buffer: BackendBuffer::INVALID,
+                index_count: 0,
+                vertex_count: 0,
+                index_type: IndexType::Uint32,
+                stride: 48,
+            };
+        }
+    }
+
     /// Clears the dirty set. Call after the renderer has consumed the deltas.
     pub fn clear_dirty(&mut self) {
         self.dirty_objects.clear();
@@ -606,21 +634,26 @@ impl SceneProvider for BasicScene {
         &'a self,
         backend: &'a dyn RenderBackend,
     ) -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + 'a> {
-        Box::new(self.meshes.iter().enumerate().map(|(i, m)| {
-            let desc = GpuMeshDescriptor {
-                vertex_buffer_address: backend.get_buffer_address(m.vertex_buffer),
-                index_buffer_address: backend.get_buffer_address(m.index_buffer),
-                index_count: m.index_count,
-                vertex_stride: m.stride,
-                first_index: 0,
-                vertex_offset: 0,
-                aabb_min: self.mesh_aabbs[i].min,
-                index_stride: 4,
-                aabb_max: self.mesh_aabbs[i].max,
-                _pad1: 0.0,
-            };
-            (i as u32, desc)
-        }))
+        Box::new(
+            self.meshes
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    let desc = GpuMeshDescriptor {
+                        vertex_buffer_address: backend.get_buffer_address(m.vertex_buffer),
+                        index_buffer_address: backend.get_buffer_address(m.index_buffer),
+                        index_count: m.index_count,
+                        vertex_stride: m.stride,
+                        first_index: 0,
+                        vertex_offset: 0,
+                        aabb_min: self.mesh_aabbs[i].min,
+                        index_stride: 4,
+                        aabb_max: self.mesh_aabbs[i].max,
+                        _pad1: 0.0,
+                    };
+                    (i as u32, desc)
+                }),
+        )
     }
 
     fn iter_dirty_mesh_descriptors<'a>(
