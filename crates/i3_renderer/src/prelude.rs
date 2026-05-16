@@ -3,5 +3,5 @@
 //! Commonly used types for the default i3 renderer.
 
 pub use crate::groups::{ClusteringGroup, PostProcessGroup, sync::SyncGroup};
-pub use crate::render_graph::{CommonData, DefaultRenderGraph, RenderConfig};
+pub use crate::render_graph::{AoMode, CommonData, DefaultRenderGraph, RenderConfig};
 pub use crate::scene::{LightData, LightId, LightType, Mesh, ObjectData, ObjectId, SceneProvider};

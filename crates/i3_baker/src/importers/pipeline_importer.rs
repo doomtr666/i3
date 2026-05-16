@@ -29,6 +29,9 @@ pub struct PipelineConfig {
     pub shader: ShaderSource,
     pub graphics: Option<GraphicsConfig>,
     pub compute: Option<ComputeConfig>,
+    /// Extra Slang include search paths, relative to the .i3p file's directory.
+    #[serde(default)]
+    pub search_paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -265,6 +268,12 @@ impl Importer for PipelineImporter {
             .map_err(|e| crate::error::BakerError::Pipeline(e))?;
         compiler.debug_info = self.debug_info;
 
+        // Resolve extra search paths relative to the .i3p file's directory.
+        let i3p_dir = source_path.parent().unwrap();
+        let extra_search: Vec<String> = config.search_paths.iter()
+            .map(|sp| i3p_dir.join(sp).to_string_lossy().into_owned())
+            .collect();
+
         let shader_module = if let Some(compute) = &config.compute {
             let rel_path = match &config.shader {
                 ShaderSource::Path(p) => p,
@@ -272,19 +281,22 @@ impl Importer for PipelineImporter {
             };
             let shader_full_path = source_path.parent().unwrap().join(rel_path);
             let module_name = shader_full_path.file_stem().expect("Invalid shader path").to_str().unwrap();
-            let shader_dir = shader_full_path.parent().unwrap().to_str().unwrap();
+            let shader_dir = shader_full_path.parent().unwrap().to_str().unwrap().to_owned();
+            let mut search: Vec<&str> = vec![&shader_dir];
+            search.extend(extra_search.iter().map(|s| s.as_str()));
 
-            compiler.compile_entry_point(module_name, &compute.entry_point, ShaderTarget::Spirv, &[shader_dir])
+            compiler.compile_entry_point(module_name, &compute.entry_point, ShaderTarget::Spirv, &search)
                 .map_err(|e| crate::error::BakerError::Pipeline(e))?
         } else {
             match &config.shader {
                 ShaderSource::Path(rel_path) => {
                     let shader_full_path = source_path.parent().unwrap().join(rel_path);
-                    
                     let module_name = shader_full_path.file_stem().expect("Invalid shader path").to_str().unwrap();
-                    let shader_dir = shader_full_path.parent().unwrap().to_str().unwrap();
+                    let shader_dir = shader_full_path.parent().unwrap().to_str().unwrap().to_owned();
+                    let mut search: Vec<&str> = vec![&shader_dir];
+                    search.extend(extra_search.iter().map(|s| s.as_str()));
 
-                    compiler.compile_file(module_name, ShaderTarget::Spirv, &[shader_dir])
+                    compiler.compile_file(module_name, ShaderTarget::Spirv, &search)
                         .map_err(|e| crate::error::BakerError::Pipeline(e))?
                 }
                 ShaderSource::Inline { code, virtual_path } => {

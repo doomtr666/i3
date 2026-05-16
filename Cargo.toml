@@ -17,6 +17,7 @@ members = [
     "examples/viewer",
     "examples/voxel",
     "examples/deferred_stress",
+    "examples/sdf",
 ]
 resolver = "2"
 

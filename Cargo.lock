@@ -594,6 +594,7 @@ name = "deferred_stress"
 version = "0.1.0"
 dependencies = [
  "examples_common",
+ "i3_egui",
  "i3_gfx",
  "i3_renderer",
  "i3_slang",
@@ -2311,6 +2312,23 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sdf"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "examples_common",
+ "i3_baker",
+ "i3_egui",
+ "i3_gfx",
+ "i3_io",
+ "i3_math",
+ "i3_renderer",
+ "i3_vulkan_backend",
+ "nalgebra-glm",
+ "tracing",
+]
 
 [[package]]
 name = "sdl2"

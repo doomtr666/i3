@@ -1,5 +1,8 @@
 pub mod basic_scene;
 pub mod camera_controller;
+pub mod debug_gui;
+
+pub use debug_gui::RendererDebugGui;
 
 use i3_gfx::prelude::{RenderBackend, WindowDesc, WindowHandle};
 use i3_io::asset::AssetLoader;

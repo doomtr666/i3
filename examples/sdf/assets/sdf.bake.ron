@@ -1,0 +1,6 @@
+BakeManifest(
+    bundle_name: "sdf",
+    pipelines_dirs: [
+        "pipelines",
+    ],
+)

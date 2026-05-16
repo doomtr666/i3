@@ -1,0 +1,27 @@
+PipelineConfig(
+    name: "sdf_gbuffer",
+    shader: Path("../shaders/sdf_gbuffer.slang"),
+    search_paths: [
+        "../../../../crates/i3_renderer/assets/shaders",
+    ],
+    graphics: Some(GraphicsConfig(
+        rasterization: (
+            cull_mode: None,
+        ),
+        depth_stencil: (
+            depth_test_enable: true,
+            depth_write_enable: true,
+            depth_compare_op: Always,
+        ),
+        depth_stencil_format: Some(D32_FLOAT),
+        topology: TriangleList,
+        targets: [
+            (format: R8G8B8A8_SRGB),       // Albedo
+            (format: R16G16_SFLOAT),         // Normal octahedral
+            (format: R8G8_UNORM),            // RoughMetal
+            (format: R11G11B10_UFLOAT),      // Emissive
+            (format: R32_SFLOAT),            // HiZ mip 0
+        ],
+        vertex_layout: None,
+    ))
+)

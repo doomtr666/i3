@@ -1,15 +1,13 @@
 extern crate nalgebra_glm;
 
 use examples_common::basic_scene::BasicScene;
-use examples_common::{AppRenderer, ExampleApp, init_renderer, init_tracing, main_loop};
+use examples_common::{AppRenderer, ExampleApp, RendererDebugGui, init_renderer, init_tracing, main_loop};
 use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
 use i3_io::prelude::*;
-use i3_renderer::passes::debug_viz::DebugChannel;
 use i3_renderer::prelude::*;
 use i3_vulkan_backend::prelude::*;
 use nalgebra_glm as glm;
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -66,12 +64,7 @@ struct DeferredGltfApp {
     is_fullscreen: bool,
     current_scene: String,
     available_scenes: Vec<String>,
-    frame_time_history: VecDeque<f32>,
-    show_perf_graph: bool,
-    sample_accum_time: f32,
-    sample_max_dt: f32,
-    show_culling_debug: bool,
-    culling_show_ids: bool,
+    debug_gui: RendererDebugGui,
 }
 
 impl DeferredGltfApp {
@@ -245,187 +238,6 @@ impl DeferredGltfApp {
         );
     }
 
-    fn draw_performance_graph(&self, ui: &mut egui::Ui) {
-        use egui::{Color32, Pos2, RichText, Stroke};
-
-        let graph_height = 80.0;
-        let graph_width = 320.0;
-        let max_samples = 256;
-
-        if self.frame_time_history.is_empty() {
-            return;
-        }
-
-        // --- 1. Frame Time Graph (ms) ---
-        ui.label(
-            RichText::new("Frame Time (ms)")
-                .strong()
-                .color(Color32::LIGHT_BLUE),
-        );
-        let (rect_ms, _) =
-            ui.allocate_at_least(egui::vec2(graph_width, graph_height), egui::Sense::hover());
-        let painter = ui.painter();
-        painter.rect_filled(rect_ms, 2.0, Color32::from_black_alpha(180));
-
-        let mut actual_max_ms: f32 = 0.1;
-        let mut min_ms: f32 = 1000.0;
-        for &dt in &self.frame_time_history {
-            let ms = dt * 1000.0;
-            actual_max_ms = actual_max_ms.max(ms);
-            min_ms = min_ms.min(ms);
-        }
-
-        // Round max_ms to a "nice" number for stable Y-axis
-        let max_ms = if actual_max_ms < 1.0 {
-            1.0
-        } else if actual_max_ms < 2.0 {
-            2.0
-        } else if actual_max_ms < 5.0 {
-            5.0
-        } else if actual_max_ms < 10.0 {
-            10.0
-        } else if actual_max_ms < 20.0 {
-            20.0
-        } else if actual_max_ms < 50.0 {
-            50.0
-        } else {
-            (actual_max_ms / 10.0).ceil() * 10.0
-        };
-
-        let draw_line_ms = |ms: f32, color: Color32, label: &str| {
-            let y = rect_ms.bottom() - (ms / max_ms) * graph_height;
-            if y > rect_ms.top() && y <= rect_ms.bottom() {
-                painter.line_segment(
-                    [Pos2::new(rect_ms.left(), y), Pos2::new(rect_ms.right(), y)],
-                    Stroke::new(1.0, color.linear_multiply(0.5)),
-                );
-                painter.text(
-                    Pos2::new(rect_ms.right() - 5.0, y - 2.0),
-                    egui::Align2::RIGHT_BOTTOM,
-                    label,
-                    egui::FontId::monospace(9.0),
-                    color,
-                );
-            }
-        };
-
-        draw_line_ms(16.6, Color32::GREEN, "16.6ms");
-        draw_line_ms(33.3, Color32::GOLD, "33.3ms");
-        if max_ms < 5.0 {
-            draw_line_ms(1.0, Color32::from_rgb(100, 100, 255), "1.0ms");
-            draw_line_ms(0.5, Color32::from_rgb(150, 150, 255), "0.5ms");
-        }
-
-        let mut points_ms = Vec::with_capacity(self.frame_time_history.len());
-        for (i, &dt) in self.frame_time_history.iter().enumerate() {
-            let x = rect_ms.left() + (i as f32 / (max_samples - 1) as f32) * graph_width;
-            let y = rect_ms.bottom() - (dt * 1000.0 / max_ms) * graph_height;
-            points_ms.push(Pos2::new(x, y.clamp(rect_ms.top(), rect_ms.bottom())));
-        }
-        if points_ms.len() > 1 {
-            painter.add(egui::Shape::line(
-                points_ms,
-                Stroke::new(1.0, Color32::LIGHT_BLUE),
-            ));
-        }
-        painter.text(
-            Pos2::new(rect_ms.left() + 5.0, rect_ms.top() + 5.0),
-            egui::Align2::LEFT_TOP,
-            format!("max: {:.2}ms", actual_max_ms),
-            egui::FontId::monospace(10.0),
-            Color32::WHITE,
-        );
-
-        ui.add_space(8.0);
-
-        // --- 2. FPS Graph ---
-        ui.label(RichText::new("FPS").strong().color(Color32::LIGHT_YELLOW));
-        let (rect_fps, _) =
-            ui.allocate_at_least(egui::vec2(graph_width, graph_height), egui::Sense::hover());
-        let painter = ui.painter();
-        painter.rect_filled(rect_fps, 2.0, Color32::from_black_alpha(180));
-
-        let mut actual_max_fps: f32 = 60.0;
-        for &dt in &self.frame_time_history {
-            if dt > 0.0 {
-                actual_max_fps = actual_max_fps.max(1.0 / dt);
-            }
-        }
-
-        // Stable FPS scale
-        let max_fps = if actual_max_fps < 150.0 {
-            150.0
-        } else if actual_max_fps < 300.0 {
-            300.0
-        } else if actual_max_fps < 1000.0 {
-            1000.0
-        } else if actual_max_fps < 2000.0 {
-            2000.0
-        } else if actual_max_fps < 5000.0 {
-            5000.0
-        } else {
-            (actual_max_fps / 1000.0).ceil() * 1000.0
-        };
-
-        let draw_line_fps = |fps: f32, color: Color32, label: &str| {
-            let y = rect_fps.bottom() - (fps / max_fps) * graph_height;
-            if y > rect_fps.top() && y <= rect_fps.bottom() {
-                painter.line_segment(
-                    [
-                        Pos2::new(rect_fps.left(), y),
-                        Pos2::new(rect_fps.right(), y),
-                    ],
-                    Stroke::new(1.0, color.linear_multiply(0.5)),
-                );
-                painter.text(
-                    Pos2::new(rect_fps.right() - 5.0, y - 2.0),
-                    egui::Align2::RIGHT_BOTTOM,
-                    label,
-                    egui::FontId::monospace(9.0),
-                    color,
-                );
-            }
-        };
-
-        draw_line_fps(60.0, Color32::GREEN, "60");
-        draw_line_fps(144.0, Color32::from_rgb(0, 200, 200), "144");
-        if max_fps > 1000.0 {
-            draw_line_fps(1000.0, Color32::from_rgb(200, 200, 0), "1k");
-        }
-        if max_fps > 2500.0 {
-            draw_line_fps(2500.0, Color32::from_rgb(200, 100, 0), "2.5k");
-        }
-
-        let mut points_fps = Vec::with_capacity(self.frame_time_history.len());
-        for (i, &dt) in self.frame_time_history.iter().enumerate() {
-            let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-            let x = rect_fps.left() + (i as f32 / (max_samples - 1) as f32) * graph_width;
-            let y = rect_fps.bottom() - (fps / max_fps) * graph_height;
-            points_fps.push(Pos2::new(x, y.clamp(rect_fps.top(), rect_fps.bottom())));
-        }
-        if points_fps.len() > 1 {
-            painter.add(egui::Shape::line(
-                points_fps,
-                Stroke::new(1.0, Color32::LIGHT_YELLOW),
-            ));
-        }
-        painter.text(
-            Pos2::new(rect_fps.left() + 5.0, rect_fps.top() + 5.0),
-            egui::Align2::LEFT_TOP,
-            format!("max: {:.0} FPS", actual_max_fps),
-            egui::FontId::monospace(10.0),
-            Color32::WHITE,
-        );
-
-        ui.add_space(4.0);
-        if let Some(&last) = self.frame_time_history.back() {
-            ui.label(format!(
-                "current: {:.2}ms ({:.0} FPS)",
-                last * 1000.0,
-                1.0 / last
-            ));
-        }
-    }
 }
 
 impl ExampleApp for DeferredGltfApp {
@@ -433,243 +245,38 @@ impl ExampleApp for DeferredGltfApp {
         self.dt = delta.as_secs_f32();
         self.smoothed_dt = smoothed_delta.as_secs_f32();
         self.time += self.dt;
-
-        // Accumulate for temporal graph stability (declare max dt over 20ms interval)
-        self.sample_accum_time += self.dt;
-        self.sample_max_dt = self.sample_max_dt.max(self.dt);
-
-        if self.sample_accum_time >= 0.020 {
-            // 50Hz sampling = ~5s history for 256 samples
-            self.frame_time_history.push_back(self.sample_max_dt);
-            if self.frame_time_history.len() > 256 {
-                self.frame_time_history.pop_front();
-            }
-            self.sample_accum_time = 0.0;
-            self.sample_max_dt = 0.0;
-        }
-
+        self.debug_gui.update(self.dt);
         self.camera.update(delta);
     }
 
     fn render(&mut self) {
-        // --- Egui UI Definition ---
         self.ui.begin_frame();
         let egui_ctx = self.ui.context().clone();
 
         let mut scene_to_load: Option<String> = None;
+        let current_scene   = &self.current_scene;
+        let available_scenes = &self.available_scenes;
+        let scene_to_load_ref = &mut scene_to_load;
 
-        egui::Window::new("Engine Debug").show(&egui_ctx, |ui| {
-            ui.heading("Renderer");
-            ui.label(format!(
-                "Frame time: {:.2}ms ({:.1} FPS)",
-                self.smoothed_dt * 1000.0,
-                1.0 / self.smoothed_dt
-            ));
-            ui.checkbox(&mut self.show_perf_graph, "Show Performance Graph");
-            ui.separator();
-
-            if self.camera.camera_locked {
-                ui.label("📷 Camera: LOCKED (Tab to unlock)");
-            } else {
-                ui.label("📷 Camera: FREE (Tab to lock)");
-            }
-            ui.separator();
-
-            ui.label("Scene:");
-            egui::ComboBox::from_label("Select Scene")
-                .selected_text(&self.current_scene)
-                .show_ui(ui, |ui| {
-                    for scene in &self.available_scenes {
-                        if ui
-                            .selectable_label(self.current_scene == *scene, scene)
-                            .clicked()
-                        {
-                            scene_to_load = Some(scene.clone());
-                        }
-                    }
-                });
-
-            ui.separator();
-            ui.checkbox(&mut self.render_graph.fxaa_enabled, "FXAA");
-            ui.horizontal(|ui| {
-                use i3_renderer::render_graph::AoMode;
-                ui.label("AO:");
-                ui.radio_value(&mut self.render_graph.ao_mode, AoMode::None, "None");
-                ui.radio_value(&mut self.render_graph.ao_mode, AoMode::Gtao, "GTAO");
-                ui.radio_value(&mut self.render_graph.ao_mode, AoMode::Rtao, "RTAO");
-            });
-            match self.render_graph.ao_mode {
-                i3_renderer::render_graph::AoMode::Gtao => {
-                    let gtao = &mut self.render_graph.gtao_group.gtao_pass;
-                    ui.add(egui::Slider::new(&mut gtao.radius, 0.1_f32..=2.0).text("AO Radius"));
-                    ui.add(egui::Slider::new(&mut gtao.final_power, 0.5_f32..=4.0).text("AO Final Power"));
-                    ui.add(egui::Slider::new(&mut gtao.slice_count, 1_u32..=4).text("AO Slices"));
-                    ui.add(egui::Slider::new(&mut gtao.step_count, 2_u32..=8).text("AO Steps"));
-                    let alpha = &mut self.render_graph.gtao_group.gtao_temporal_pass.alpha;
-                    ui.add(
-                        egui::Slider::new(alpha, 0.01_f32..=1.0)
-                            .text("AO Temporal Alpha")
-                            .logarithmic(true),
-                    );
-                }
-                i3_renderer::render_graph::AoMode::Rtao => {
-                    let rtao = &mut self.render_graph.rtao_group.rtao_pass;
-                    ui.add(egui::Slider::new(&mut rtao.radius, 0.1_f32..=5.0).text("RTAO Radius"));
-                    let temporal = &mut self.render_graph.rtao_group.rtao_temporal_pass;
-                    ui.add(egui::Slider::new(&mut temporal.alpha, 0.01_f32..=0.5).text("RTAO Temporal Alpha"));
-                }
-                i3_renderer::render_graph::AoMode::None => {}
-            }
-
-            ui.separator();
-            {
-                let ssr = &mut self.render_graph.sssr_sample_pass;
-                ui.checkbox(&mut ssr.enabled, "SSR");
-                if ssr.enabled {
-                    ui.add(egui::Slider::new(&mut ssr.max_mip_level, 1_u32..=5).text("SSR Max Mip"));
-                    ui.add(egui::Slider::new(&mut ssr.thickness, 0.01_f32..=1.0).text("SSR Thickness"));
-                    let intensity = &mut self.render_graph.sssr_composite_pass.intensity;
-                    ui.add(egui::Slider::new(intensity, 0.0_f32..=2.0).text("SSR Intensity"));
-
-                    let dbg = &mut self.render_graph.sssr_sample_pass.debug_mode;
-                    ui.horizontal(|ui| {
-                        ui.label("SSR debug:");
-                        ui.selectable_value(dbg, 0, "Off");
-                        ui.selectable_value(dbg, 1, "R=hit G=iter B=thickness");
-                        ui.selectable_value(dbg, 2, "RG=hit_uv B=hit");
-                    });
-
-                    // Downsample factor: applies to sample and bilateral passes together.
-                    let mut factor = self.render_graph.sssr_sample_pass.downsample_factor;
-                    if ui.add(egui::Slider::new(&mut factor, 1_u32..=4).text("SSR Downsample")).changed() {
-                        self.render_graph.sssr_sample_pass.downsample_factor = factor;
-                        self.render_graph.sssr_bilateral_pass.downsample_factor = factor;
-                    }
-                }
-            }
-
-            ui.separator();
-            {
-                let bloom = &mut self.render_graph.bloom_pass;
-                ui.checkbox(&mut bloom.enabled, "Bloom");
-                if bloom.enabled {
-                    ui.add(
-                        egui::Slider::new(&mut bloom.threshold, 0.5_f32..=4.0)
-                            .text("Bloom Threshold"),
-                    );
-                    ui.add(egui::Slider::new(&mut bloom.knee, 0.0_f32..=1.0).text("Bloom Knee"));
-                    ui.add(
-                        egui::Slider::new(&mut bloom.intensity, 0.0_f32..=1.0)
-                            .logarithmic(true)
-                            .text("Bloom Intensity"),
-                    );
-                }
-            }
-
-            ui.separator();
-            ui.label("Culling Debug:");
-            ui.checkbox(&mut self.show_culling_debug, "Show bounding boxes");
-            if self.show_culling_debug {
-                ui.checkbox(&mut self.culling_show_ids, "  Instance IDs");
-            }
-
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Debug Channel:");
-                let selected_label = match self.render_graph.debug_channel {
-                    DebugChannel::Lit => "Lit (Final)",
-                    DebugChannel::Albedo => "Albedo",
-                    DebugChannel::Normal => "Normals",
-                    DebugChannel::Roughness => "Roughness",
-                    DebugChannel::Metallic => "Metallic",
-                    DebugChannel::Emissive => "Emissive",
-                    DebugChannel::Depth => "Depth",
-                    DebugChannel::AO => "AO (accumulated)",
-                    DebugChannel::SsrRaw => "SSR (raw stochastic)",
-                    DebugChannel::SsrUpsampled => "SSR (upsampled)",
-                    DebugChannel::BloomBuffer => "Bloom buffer",
-
-                    DebugChannel::LightDensity => "Light density",
-                    DebugChannel::ClusterGrid => "Cluster grid",
-                };
-                egui::ComboBox::from_id_salt("debug_channel")
-                    .selected_text(selected_label)
+        self.debug_gui.show(
+            &egui_ctx,
+            &mut self.render_graph,
+            &self.camera,
+            self.smoothed_dt,
+            |ui| {
+                ui.separator();
+                ui.label("Scene:");
+                egui::ComboBox::from_label("Select Scene")
+                    .selected_text(current_scene.as_str())
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::Lit,
-                            "Lit (Final)",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::Albedo,
-                            "Albedo",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::Normal,
-                            "Normals",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::Roughness,
-                            "Roughness",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::Metallic,
-                            "Metallic",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::Emissive,
-                            "Emissive",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::Depth,
-                            "Depth",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::AO,
-                            "AO (accumulated)",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::SsrRaw,
-                            "SSR (raw stochastic)",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::SsrUpsampled,
-                            "SSR (upsampled)",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::BloomBuffer,
-                            "Bloom buffer",
-                        );
-
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::LightDensity,
-                            "Light density",
-                        );
-                        ui.selectable_value(
-                            &mut self.render_graph.debug_channel,
-                            DebugChannel::ClusterGrid,
-                            "Cluster grid",
-                        );
+                        for scene in available_scenes {
+                            if ui.selectable_label(*current_scene == *scene, scene).clicked() {
+                                *scene_to_load_ref = Some(scene.clone());
+                            }
+                        }
                     });
-            });
-        });
-
-        if self.show_perf_graph {
-            egui::Window::new("Performance Graph").show(&egui_ctx, |ui| {
-                self.draw_performance_graph(ui);
-            });
-        }
+            },
+        );
 
         if let Some(name) = scene_to_load {
             self.load_scene(&name);
@@ -700,10 +307,9 @@ impl ExampleApp for DeferredGltfApp {
             let cam_right = [view[(0, 0)], view[(0, 1)], view[(0, 2)]];
             let cam_up = [view[(1, 0)], view[(1, 1)], view[(1, 2)]];
 
-            if self.show_culling_debug {
+            if self.debug_gui.show_culling_debug {
                 let col = [0.0_f32, 1.0, 0.2, 0.85]; // green = frustum-visible
                 for (idx, inst) in self.render_graph.cached_instances.iter().enumerate() {
-                    // Skip if outside the camera frustum.
                     if !frustum_cull_cpu(inst.world_aabb_min, inst.world_aabb_max, &vp) {
                         continue;
                     }
@@ -714,8 +320,7 @@ impl ExampleApp for DeferredGltfApp {
                         col,
                     );
 
-                    // Optional: draw instance index as 7-segment label (= thread ID in draw_call_gen).
-                    if self.culling_show_ids {
+                    if self.debug_gui.culling_show_ids {
                         let cx = (inst.world_aabb_min[0] + inst.world_aabb_max[0]) * 0.5;
                         let cy = (inst.world_aabb_min[1] + inst.world_aabb_max[1]) * 0.5;
                         let cz = (inst.world_aabb_min[2] + inst.world_aabb_max[2]) * 0.5;
@@ -818,12 +423,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         is_fullscreen: false,
         current_scene: String::new(),
         available_scenes,
-        frame_time_history: VecDeque::with_capacity(2000),
-        show_perf_graph: false,
-        sample_accum_time: 0.0,
-        sample_max_dt: 0.0,
-        show_culling_debug: false,
-        culling_show_ids: false,
+        debug_gui: RendererDebugGui::new(),
     };
 
     // Initial load

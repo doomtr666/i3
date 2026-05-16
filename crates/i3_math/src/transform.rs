@@ -66,4 +66,12 @@ impl Transform {
     pub fn scale(&self) -> f32 {
         self.scale
     }
+
+    pub fn translation(&self) -> Vector3<f32> {
+        self.isometry.translation.vector
+    }
+
+    pub fn rotation(&self) -> UnitQuaternion<f32> {
+        self.isometry.rotation
+    }
 }

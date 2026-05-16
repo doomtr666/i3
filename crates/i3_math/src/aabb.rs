@@ -2,8 +2,8 @@ use crate::Transform;
 use nalgebra::Point3;
 
 pub struct AABB {
-    pub(crate) min: Point3<f32>,
-    pub(crate) max: Point3<f32>,
+    pub min: Point3<f32>,
+    pub max: Point3<f32>,
 }
 
 impl AABB {

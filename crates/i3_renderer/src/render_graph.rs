@@ -254,6 +254,9 @@ pub struct DefaultRenderGraph {
     pub sssr_composite_pass: crate::passes::sssr::SssrCompositePass,
     pub bloom_pass: crate::passes::bloom::BloomPass,
 
+    /// Extra GBuffer passes injected between GBufferPass and HiZBuildPass.
+    pub extra_gbuffer_passes: Vec<Box<dyn RenderPass>>,
+
     // Scene data cached during sync() for declare() and dirty checking
     pub scene_mesh_descriptors: Vec<(u32, crate::scene::GpuMeshDescriptor)>,
     pub cached_instances: Vec<crate::scene::GpuInstanceData>,
@@ -494,6 +497,7 @@ impl DefaultRenderGraph {
             sssr_bilateral_pass,
             sssr_composite_pass,
             bloom_pass,
+            extra_gbuffer_passes: Vec::new(),
             scene_mesh_descriptors: Vec::new(),
             cached_instances: Vec::new(),
             cached_materials: Vec::new(),
@@ -677,6 +681,13 @@ impl DefaultRenderGraph {
             .init_pass_direct(&mut self.debug_viz_pass, backend);
         self.graph
             .init_pass_direct(&mut self.debug_draw_pass, backend);
+
+        // Extra GBuffer passes (e.g. SDF ray marching) — injected by the caller before init().
+        let mut extra = std::mem::take(&mut self.extra_gbuffer_passes);
+        for pass in &mut extra {
+            self.graph.init_pass_direct(pass.as_mut(), backend);
+        }
+        self.extra_gbuffer_passes = extra;
 
         // Egui pipeline lives in an Arc<Mutex<EguiRenderer>> shared across all per-frame passes.
         // Call init() once on a dummy pass so the pipeline gets loaded into that shared renderer.
@@ -1468,6 +1479,11 @@ impl DefaultRenderGraph {
 
             // 2. GBuffer (images declared as outputs inside GBufferPass)
             builder.add_pass(&mut self.gbuffer_pass);
+
+            // 2c. Extra GBuffer passes (SDF ray marching, etc.)
+            for pass in &mut self.extra_gbuffer_passes {
+                builder.add_pass(pass.as_mut());
+            }
 
             // 2b. Hi-Z Pyramid — Final (DepthBuffer → HiZFinal, for screen-space effects)
             builder.add_pass(&mut self.hiz_build_final);

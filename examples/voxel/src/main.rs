@@ -5,8 +5,7 @@ use nalgebra::{UnitQuaternion, vector};
 
 use examples_common::basic_scene::BasicScene;
 use examples_common::camera_controller::CameraController;
-use examples_common::{AppRenderer, ExampleApp, init_renderer, init_tracing, main_loop};
-use i3_egui::prelude::*;
+use examples_common::{AppRenderer, ExampleApp, RendererDebugGui, init_renderer, init_tracing, main_loop};
 use i3_gfx::prelude::*;
 use i3_io::mesh::BoundingBox;
 use i3_io::prelude::*;
@@ -114,20 +113,24 @@ impl<'a> VoxelSceneSink for VoxelSink<'a> {
 // ─── VoxelApp ─────────────────────────────────────────────────────────────────
 
 struct VoxelApp {
-    backend: VulkanBackend,
-    window: WindowHandle,
-    render_graph: DefaultRenderGraph,
-    ui: Arc<i3_egui::UiSystem>,
-    camera: CameraController,
-    scene: BasicScene,
-    voxel_octree: VoxelOctree,
-    dt: f32,
+    backend:         VulkanBackend,
+    window:          WindowHandle,
+    render_graph:    DefaultRenderGraph,
+    ui:              Arc<i3_egui::UiSystem>,
+    camera:          CameraController,
+    scene:           BasicScene,
+    voxel_octree:    VoxelOctree,
+    dt:              f32,
+    smoothed_dt:     f32,
     show_debug_draw: bool,
+    debug_gui:       RendererDebugGui,
 }
 
 impl ExampleApp for VoxelApp {
-    fn update(&mut self, delta: Duration, _smoothed: Duration) {
+    fn update(&mut self, delta: Duration, smoothed: Duration) {
         self.dt = delta.as_secs_f32();
+        self.smoothed_dt = smoothed.as_secs_f32();
+        self.debug_gui.update(self.dt);
         self.camera.update(delta);
 
         let p = self.camera.position;
@@ -143,7 +146,10 @@ impl ExampleApp for VoxelApp {
         self.ui.begin_frame();
         let egui_ctx = self.ui.context().clone();
 
-        egui::Window::new("Voxel").show(&egui_ctx, |ui| {
+        let show_debug_draw = &mut self.show_debug_draw;
+        let camera_locked   = self.camera.camera_locked;
+        self.debug_gui.show(&egui_ctx, &mut self.render_graph, &self.camera, self.smoothed_dt, |ui| {
+            ui.separator();
             ui.label(format!(
                 "Terrain  {:.1} × {:.1} × {:.1} km",
                 SCENE_XZ / 1000.0,
@@ -158,9 +164,9 @@ impl ExampleApp for VoxelApp {
             ));
             ui.label(format!("Budget {FRAME_BUDGET} blocks/frame"));
             ui.separator();
-            ui.checkbox(&mut self.show_debug_draw, "Debug AABB");
+            ui.checkbox(show_debug_draw, "Debug AABB");
             ui.separator();
-            if self.camera.camera_locked {
+            if camera_locked {
                 ui.label("Camera: LOCKED  (Tab to unlock)");
             } else {
                 ui.label("Camera: FREE   (Tab to lock)");
@@ -296,10 +302,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         render_graph,
         ui,
         camera,
-        scene: BasicScene::new(),
+        scene:           BasicScene::new(),
         voxel_octree,
-        dt: 0.016,
+        dt:              0.016,
+        smoothed_dt:     0.016,
         show_debug_draw: false,
+        debug_gui:       RendererDebugGui::new(),
     });
 
     Ok(())

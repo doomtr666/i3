@@ -1,0 +1,20 @@
+[package]
+name = "sdf"
+edition = "2024"
+version.workspace = true
+authors.workspace = true
+
+[dependencies]
+i3_vulkan_backend = { path = "../../crates/i3_vulkan_backend" }
+i3_renderer       = { path = "../../crates/i3_renderer" }
+i3_gfx            = { path = "../../crates/i3_gfx" }
+i3_egui           = { path = "../../crates/i3_egui" }
+i3_io             = { path = "../../crates/i3_io" }
+examples_common   = { path = "../common" }
+i3_math           = { path = "../../crates/i3_math" }
+nalgebra-glm      = { workspace = true }
+bytemuck          = { workspace = true }
+tracing           = { workspace = true }
+
+[build-dependencies]
+i3_baker = { path = "../../crates/i3_baker" }

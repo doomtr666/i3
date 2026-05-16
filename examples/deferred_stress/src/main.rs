@@ -1,31 +1,38 @@
 extern crate nalgebra_glm;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use examples_common::basic_scene::BasicScene;
-use examples_common::{AppRenderer, ExampleApp, init_renderer, init_tracing, main_loop};
+use examples_common::{AppRenderer, ExampleApp, RendererDebugGui, init_renderer, init_tracing, main_loop};
 use i3_gfx::prelude::*;
 use i3_renderer::render_graph::DefaultRenderGraph;
 use i3_renderer::scene::{LightData, LightType, ObjectData};
 use i3_vulkan_backend::VulkanBackend;
 use nalgebra_glm as glm;
-use std::time::Duration;
 use tracing::{info, warn};
 
 struct DeferredStressApp {
-    backend: VulkanBackend,
-    window: WindowHandle,
+    backend:      VulkanBackend,
+    window:       WindowHandle,
     render_graph: DefaultRenderGraph,
-    scene: BasicScene,
-    time: f32,
-    dt: f32,
+    ui:           Arc<i3_egui::UiSystem>,
+    scene:        BasicScene,
+    time:         f32,
+    dt:           f32,
+    smoothed_dt:  f32,
     light_indices: Vec<i3_renderer::scene::LightId>,
-    camera: examples_common::camera_controller::CameraController,
+    camera:       examples_common::camera_controller::CameraController,
     is_fullscreen: bool,
+    debug_gui:    RendererDebugGui,
 }
 
 impl ExampleApp for DeferredStressApp {
-    fn update(&mut self, delta: Duration, _smoothed_delta: Duration) {
+    fn update(&mut self, delta: Duration, smoothed_delta: Duration) {
         self.dt = delta.as_secs_f32();
+        self.smoothed_dt = smoothed_delta.as_secs_f32();
         self.time += self.dt;
+        self.debug_gui.update(self.dt);
 
         // Update light positions and intensities to create flickering/movement
         for (i, &light_id) in self.light_indices.iter().enumerate() {
@@ -48,6 +55,11 @@ impl ExampleApp for DeferredStressApp {
     }
 
     fn render(&mut self) {
+        self.ui.begin_frame();
+        let egui_ctx = self.ui.context().clone();
+        self.debug_gui.show(&egui_ctx, &mut self.render_graph, &self.camera, self.smoothed_dt, |_| {});
+        self.ui.update_textures(&mut self.backend);
+
         let view = self.camera.view_matrix();
         let (width, height) = self.backend.window_size(self.window).unwrap_or((1280, 720));
         let projection = glm::perspective_rh_zo(
@@ -78,6 +90,7 @@ impl ExampleApp for DeferredStressApp {
     }
 
     fn handle_event(&mut self, event: &Event) {
+        self.ui.handle_event(event);
         self.camera.handle_event(event);
 
         if let Event::KeyDown { key } = event {
@@ -93,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _guard = init_tracing("deferred_stress.log");
     info!("Starting Deferred Stress Test");
 
-    let AppRenderer { mut backend, window, render_graph, .. } =
+    let AppRenderer { mut backend, window, render_graph, ui } =
         init_renderer("Deferred Stress Test", 1280, 720, None)?;
 
     // Build scene
@@ -166,12 +179,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend,
         window,
         render_graph,
+        ui,
         scene,
-        time: 0.0,
-        dt: 0.016,
+        time:         0.0,
+        dt:           0.016,
+        smoothed_dt:  0.016,
         light_indices,
-        camera: examples_common::camera_controller::CameraController::new(),
+        camera:       examples_common::camera_controller::CameraController::new(),
         is_fullscreen: false,
+        debug_gui:    RendererDebugGui::new(),
     };
     main_loop(app);
 
