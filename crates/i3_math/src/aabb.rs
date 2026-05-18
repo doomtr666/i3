@@ -1,6 +1,7 @@
 use crate::Transform;
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
+#[derive(Copy, Clone, Debug)]
 pub struct AABB {
     pub min: Point3<f32>,
     pub max: Point3<f32>,
@@ -82,6 +83,37 @@ impl AABB {
             min: Point3::from([self.min.x - r, self.min.y - r, self.min.z - r]),
             max: Point3::from([self.max.x + r, self.max.y + r, self.max.z + r]),
         }
+    }
+
+    pub fn center(&self) -> Point3<f32> {
+        Point3::new(
+            (self.min.x + self.max.x) * 0.5,
+            (self.min.y + self.max.y) * 0.5,
+            (self.min.z + self.max.z) * 0.5,
+        )
+    }
+
+    pub fn diagonal_length(&self) -> f32 {
+        (self.max - self.min).norm()
+    }
+
+    pub fn union(&self, other: &AABB) -> AABB {
+        AABB {
+            min: Point3::new(
+                self.min.x.min(other.min.x),
+                self.min.y.min(other.min.y),
+                self.min.z.min(other.min.z),
+            ),
+            max: Point3::new(
+                self.max.x.max(other.max.x),
+                self.max.y.max(other.max.y),
+                self.max.z.max(other.max.z),
+            ),
+        }
+    }
+
+    pub fn extent(&self) -> Vector3<f32> {
+        self.max - self.min
     }
 
     pub fn transform(&self, transform: &Transform) -> AABB {

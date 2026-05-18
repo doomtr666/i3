@@ -1,6 +1,6 @@
 PipelineConfig(
-    name: "sdf_gbuffer",
-    shader: Path("../shaders/sdf_gbuffer.slang"),
+    name: "brickmap_clipmap",
+    shader: Path("../shaders/brickmap_clipmap.slang"),
     search_paths: [
         "../../../../crates/i3_renderer/assets/shaders",
     ],

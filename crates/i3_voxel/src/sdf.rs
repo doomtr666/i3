@@ -192,31 +192,135 @@ impl SdfNode {
             subtract,
         }
     }
+
+    pub fn primitive(&self) -> &SdfPrimitive { &self.primitive }
+    pub fn transform(&self) -> &Transform    { &self.transform }
+    pub fn is_subtract(&self) -> bool        { self.subtract }
 }
 
+// ─── BVH ─────────────────────────────────────────────────────────────────────
+
+struct BvhNode {
+    aabb:     AABB,
+    left:     u32,     // index in bvh_nodes[]; u32::MAX = leaf
+    right:    u32,
+    prim_idx: u32,     // index in nodes[]; valid only when left == u32::MAX
+}
+
+// ─── SdfScene ─────────────────────────────────────────────────────────────────
+
 pub struct SdfScene {
-    nodes: Vec<SdfNode>,
+    nodes:     Vec<SdfNode>,
+    bvh_nodes: Vec<BvhNode>,
 }
 
 impl SdfScene {
     pub fn new() -> SdfScene {
-        SdfScene { nodes: Vec::new() }
+        SdfScene { nodes: Vec::new(), bvh_nodes: Vec::new() }
     }
 
     pub fn add(&mut self, transform: &Transform, primitive: &SdfPrimitive) {
         self.nodes.push(SdfNode::new(transform, primitive, false));
+        self.bvh_nodes.clear(); // invalidate BVH
     }
 
     pub fn sub(&mut self, transform: &Transform, primitive: &SdfPrimitive) {
         self.nodes.push(SdfNode::new(transform, primitive, true));
+        self.bvh_nodes.clear();
     }
 
-    pub fn get_nodes(&self, aabb: &AABB) -> Vec<&SdfNode> {
-        self.nodes
-            .iter()
-            .filter(|n| n.world_aabb.intersects(&aabb))
-            .collect()
+    /// Build (or rebuild) the BVH. Call once after all primitives are added.
+    pub fn build_bvh(&mut self) {
+        self.bvh_nodes.clear();
+        if self.nodes.is_empty() {
+            return;
+        }
+        let mut indices: Vec<u32> = (0..self.nodes.len() as u32).collect();
+        Self::bvh_build(&self.nodes, &mut indices, &mut self.bvh_nodes);
     }
+
+    /// Query nodes whose world AABB intersects `query`. Uses BVH if built, else linear scan.
+    pub fn get_nodes(&self, aabb: &AABB) -> Vec<&SdfNode> {
+        if !self.bvh_nodes.is_empty() {
+            self.bvh_query(aabb)
+        } else {
+            self.nodes
+                .iter()
+                .filter(|n| n.world_aabb.intersects(aabb))
+                .collect()
+        }
+    }
+
+    // ── BVH internals ────────────────────────────────────────────────────────
+
+    fn bvh_build(nodes: &[SdfNode], indices: &mut [u32], out: &mut Vec<BvhNode>) -> u32 {
+        let idx = out.len() as u32;
+
+        // Compute union AABB of all primitives in this subset
+        let mut union_aabb = nodes[indices[0] as usize].world_aabb;
+        for &i in &indices[1..] {
+            union_aabb = union_aabb.union(&nodes[i as usize].world_aabb);
+        }
+
+        if indices.len() == 1 {
+            out.push(BvhNode { aabb: union_aabb, left: u32::MAX, right: 0, prim_idx: indices[0] });
+            return idx;
+        }
+
+        // Split along the longest axis by centroid median
+        let ext = union_aabb.extent();
+        let axis = if ext.x >= ext.y && ext.x >= ext.z { 0usize }
+                   else if ext.y >= ext.z { 1 }
+                   else { 2 };
+
+        indices.sort_unstable_by(|&a, &b| {
+            let ca = nodes[a as usize].world_aabb.center().coords[axis];
+            let cb = nodes[b as usize].world_aabb.center().coords[axis];
+            ca.partial_cmp(&cb).unwrap()
+        });
+
+        let mid = indices.len() / 2;
+        let (left_idx, right_idx) = indices.split_at_mut(mid);
+
+        // Reserve slot for this internal node before recursing
+        out.push(BvhNode { aabb: union_aabb, left: 0, right: 0, prim_idx: u32::MAX });
+        let left  = Self::bvh_build(nodes, left_idx, out);
+        let right = Self::bvh_build(nodes, right_idx, out);
+        out[idx as usize].left  = left;
+        out[idx as usize].right = right;
+        idx
+    }
+
+    fn bvh_query<'a>(&'a self, query: &AABB) -> Vec<&'a SdfNode> {
+        let mut result = Vec::new();
+        if self.bvh_nodes.is_empty() {
+            return result;
+        }
+        let mut stack = [0u32; 64];
+        let mut top = 0usize;
+        stack[top] = 0;
+        top += 1;
+
+        while top > 0 {
+            top -= 1;
+            let node = &self.bvh_nodes[stack[top] as usize];
+            if !node.aabb.intersects(query) {
+                continue;
+            }
+            if node.left == u32::MAX {
+                // Leaf
+                result.push(&self.nodes[node.prim_idx as usize]);
+            } else {
+                stack[top] = node.left;
+                top += 1;
+                stack[top] = node.right;
+                top += 1;
+            }
+        }
+        result
+    }
+
+    pub fn nodes(&self) -> &[SdfNode] { &self.nodes }
 
     pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
         let mut solid_dist = f32::MAX;

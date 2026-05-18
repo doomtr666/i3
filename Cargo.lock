@@ -1132,6 +1132,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "i3_brickmap"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "i3_math",
+ "i3_voxel",
+ "nalgebra",
+ "rayon",
+]
+
+[[package]]
 name = "i3_bundle"
 version = "0.1.0"
 dependencies = [
@@ -1192,7 +1203,7 @@ dependencies = [
 name = "i3_math"
 version = "0.1.0"
 dependencies = [
- "nalgebra 0.34.2",
+ "nalgebra",
 ]
 
 [[package]]
@@ -1234,7 +1245,7 @@ version = "0.1.0"
 dependencies = [
  "i3_math",
  "libnoise",
- "nalgebra 0.34.2",
+ "nalgebra",
  "rayon",
 ]
 
@@ -1580,21 +1591,6 @@ dependencies = [
 
 [[package]]
 name = "nalgebra"
-version = "0.33.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26aecdf64b707efd1310e3544d709c5c0ac61c13756046aaaba41be5c4f66a3b"
-dependencies = [
- "approx",
- "matrixmultiply",
- "num-complex",
- "num-rational",
- "num-traits",
- "simba",
- "typenum",
-]
-
-[[package]]
-name = "nalgebra"
 version = "0.34.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df76ea0ff5c7e6b88689085804d6132ded0ddb9de5ca5b8aeb9eeadc0508a70a"
@@ -1629,12 +1625,12 @@ dependencies = [
 
 [[package]]
 name = "nalgebra-glm"
-version = "0.19.0"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e441f43bccdf40cb6bd4294321e6983c5bc7b9886112d19fd4c9813976b117e4"
+checksum = "784a598b961eafe0f3329861482ebdb73ecdcc02f771192783c099dd3b438461"
 dependencies = [
  "approx",
- "nalgebra 0.33.2",
+ "nalgebra",
  "num-traits",
  "simba",
 ]
@@ -2319,12 +2315,15 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "examples_common",
+ "half",
  "i3_baker",
+ "i3_brickmap",
  "i3_egui",
  "i3_gfx",
  "i3_io",
  "i3_math",
  "i3_renderer",
+ "i3_voxel",
  "i3_vulkan_backend",
  "nalgebra-glm",
  "tracing",
@@ -2890,7 +2889,7 @@ dependencies = [
  "i3_voxel",
  "i3_vulkan_backend",
  "libnoise",
- "nalgebra 0.34.2",
+ "nalgebra",
  "nalgebra-glm",
  "tracing",
  "uuid",

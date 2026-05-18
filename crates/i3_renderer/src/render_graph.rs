@@ -254,6 +254,8 @@ pub struct DefaultRenderGraph {
     pub sssr_composite_pass: crate::passes::sssr::SssrCompositePass,
     pub bloom_pass: crate::passes::bloom::BloomPass,
 
+    /// Compute passes injected before the GBuffer stage (e.g. GPU bake).
+    pub extra_pre_gbuffer_passes: Vec<Box<dyn RenderPass>>,
     /// Extra GBuffer passes injected between GBufferPass and HiZBuildPass.
     pub extra_gbuffer_passes: Vec<Box<dyn RenderPass>>,
 
@@ -497,6 +499,7 @@ impl DefaultRenderGraph {
             sssr_bilateral_pass,
             sssr_composite_pass,
             bloom_pass,
+            extra_pre_gbuffer_passes: Vec::new(),
             extra_gbuffer_passes: Vec::new(),
             scene_mesh_descriptors: Vec::new(),
             cached_instances: Vec::new(),
@@ -681,6 +684,13 @@ impl DefaultRenderGraph {
             .init_pass_direct(&mut self.debug_viz_pass, backend);
         self.graph
             .init_pass_direct(&mut self.debug_draw_pass, backend);
+
+        // Extra pre-GBuffer compute passes — injected by the caller before init().
+        let mut extra_pre = std::mem::take(&mut self.extra_pre_gbuffer_passes);
+        for pass in &mut extra_pre {
+            self.graph.init_pass_direct(pass.as_mut(), backend);
+        }
+        self.extra_pre_gbuffer_passes = extra_pre;
 
         // Extra GBuffer passes (e.g. SDF ray marching) — injected by the caller before init().
         let mut extra = std::mem::take(&mut self.extra_gbuffer_passes);
@@ -1476,6 +1486,11 @@ impl DefaultRenderGraph {
 
             // 1. Clustering (buffers declared as outputs inside ClusteringGroup)
             builder.add_pass(&mut self.clustering_group);
+
+            // 1c. Extra pre-GBuffer compute passes (e.g. GPU brickmap bake)
+            for pass in &mut self.extra_pre_gbuffer_passes {
+                builder.add_pass(pass.as_mut());
+            }
 
             // 2. GBuffer (images declared as outputs inside GBufferPass)
             builder.add_pass(&mut self.gbuffer_pass);

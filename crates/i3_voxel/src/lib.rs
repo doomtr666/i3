@@ -4,7 +4,7 @@ pub mod voxel;
 
 pub use i3_math::{AABB, Transform};
 pub use octree::{VoxelOctree, VoxelSceneSink};
-pub use sdf::{SdfPrimitive, SdfScene};
+pub use sdf::{SdfNode, SdfPrimitive, SdfScene};
 pub use voxel::{VoxelBlock, VoxelScene, VoxelVertex};
 
 pub mod prelude {

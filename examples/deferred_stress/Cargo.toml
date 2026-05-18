@@ -10,6 +10,6 @@ i3_slang = { path = "../../crates/i3_slang" }
 i3_renderer = { path = "../../crates/i3_renderer" }
 i3_egui = { path = "../../crates/i3_egui" }
 examples_common = { path = "../common" }
-nalgebra-glm = "0.19"
+nalgebra-glm = { workspace = true }
 tracing = "0.1"
 sdl2 = { version = "0.37", default-features = false }

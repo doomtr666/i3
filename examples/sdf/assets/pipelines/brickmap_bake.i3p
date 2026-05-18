@@ -1,0 +1,6 @@
+PipelineConfig(
+    name: "brickmap_bake",
+    shader: Path("../shaders/brickmap_bake.slang"),
+    search_paths: [],
+    graphics: None,
+)

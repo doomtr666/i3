@@ -286,6 +286,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         &SdfPrimitive::Sphere { radius: 500.0 },
     );
 
+    sdf_scene.build_bvh();
+
     // ── Octree ────────────────────────────────────────────────────────────────
     let voxel_octree = VoxelOctree::new(
         Arc::new(sdf_scene),

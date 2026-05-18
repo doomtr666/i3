@@ -67,6 +67,10 @@ impl Transform {
         self.scale
     }
 
+    pub fn inv_scale(&self) -> f32 {
+        self.inv_scale
+    }
+
     pub fn translation(&self) -> Vector3<f32> {
         self.isometry.translation.vector
     }
