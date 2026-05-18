@@ -40,6 +40,20 @@ pub struct BakeManifest {
     /// Procedural noise textures to bake (no source file required).
     #[serde(default)]
     pub noise: Vec<NoiseManifestEntry>,
+
+    /// Material sets to pack dynamically (Albedo, Normal, packed ORM).
+    #[serde(default)]
+    pub material_sets: Vec<MaterialSetManifestEntry>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct MaterialSetManifestEntry {
+    pub name: String,
+    pub albedo: Option<PathBuf>,
+    pub normal: Option<PathBuf>,
+    pub roughness: Option<PathBuf>,
+    pub metallic: Option<PathBuf>,
+    pub occlusion: Option<PathBuf>,
 }
 
 /// One IBL entry in the manifest.
@@ -188,6 +202,50 @@ impl ManifestBaker {
             baker = baker.add_asset_keyed(
                 std::path::PathBuf::from(&virtual_path),
                 crate::importers::NoiseImporter { entry },
+                config_key,
+            );
+        }
+
+        // Material sets — pack Albedo, Normal, and separate R, M, A source maps.
+        for entry in manifest.material_sets {
+            let virtual_path = format!("material_set__{}", entry.name);
+            let albedo = entry.albedo.as_ref().map(|p| resolve(p));
+            let normal = entry.normal.as_ref().map(|p| resolve(p));
+            let roughness = entry.roughness.as_ref().map(|p| resolve(p));
+            let metallic = entry.metallic.as_ref().map(|p| resolve(p));
+            let occlusion = entry.occlusion.as_ref().map(|p| resolve(p));
+            
+            // Pack mod times into the config key for cache invalidation
+            let mut mod_times = String::new();
+            let check_time = |p: Option<&PathBuf>| {
+                if let Some(path) = p {
+                    if let Ok(meta) = std::fs::metadata(path) {
+                        if let Ok(time) = meta.modified() {
+                            return format!("{:?}", time);
+                        }
+                    }
+                }
+                "none".to_string()
+            };
+            mod_times.push_str(&check_time(albedo.as_ref()));
+            mod_times.push_str(&check_time(normal.as_ref()));
+            mod_times.push_str(&check_time(roughness.as_ref()));
+            mod_times.push_str(&check_time(metallic.as_ref()));
+            mod_times.push_str(&check_time(occlusion.as_ref()));
+            
+            let mut config_key = postcard::to_allocvec(&entry.name).unwrap_or_default();
+            config_key.extend_from_slice(mod_times.as_bytes());
+
+            baker = baker.add_asset_keyed(
+                std::path::PathBuf::from(&virtual_path),
+                crate::importers::MaterialSetImporter { 
+                    name: entry.name, 
+                    albedo, 
+                    normal, 
+                    roughness, 
+                    metallic, 
+                    occlusion 
+                },
                 config_key,
             );
         }

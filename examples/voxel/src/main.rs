@@ -5,17 +5,20 @@ use nalgebra::{UnitQuaternion, vector};
 
 use examples_common::basic_scene::BasicScene;
 use examples_common::camera_controller::CameraController;
-use examples_common::{AppRenderer, ExampleApp, RendererDebugGui, init_renderer, init_tracing, main_loop};
+use examples_common::{ExampleApp, RendererDebugGui, main_loop};
 use i3_gfx::prelude::*;
 use i3_io::mesh::BoundingBox;
 use i3_io::prelude::*;
 use i3_renderer::prelude::*;
-use i3_renderer::scene::{ObjectData, ObjectId};
+use i3_renderer::scene::{ObjectData, ObjectId, MaterialData};
 use i3_voxel::{SdfPrimitive, SdfScene, Transform, VoxelOctree, VoxelSceneSink, VoxelVertex};
 use i3_vulkan_backend::prelude::*;
 use nalgebra::Point3;
 use nalgebra_glm as glm;
 use std::f32::consts::FRAC_PI_4;
+mod voxel_gbuffer_pass;
+use voxel_gbuffer_pass::VoxelGBufferPass;
+
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
@@ -74,6 +77,9 @@ fn voxel_to_gbuffer(v: &VoxelVertex) -> [f32; 12] {
 struct VoxelSink<'a> {
     backend: &'a mut VulkanBackend,
     scene: &'a mut BasicScene,
+    grass_mat: u32,
+    rock_mat: u32,
+    dirt_mat: u32,
 }
 
 impl<'a> VoxelSceneSink for VoxelSink<'a> {
@@ -97,10 +103,23 @@ impl<'a> VoxelSceneSink for VoxelSink<'a> {
             world_transform: glm::identity(),
             prev_transform: glm::identity(),
             mesh_id,
-            material_id: 0,
-            flags: 0,
-            _pad: 0,
+            material_id: 0xFFFFFFFE, // Special voxel material ID
+            flags: self.grass_mat,
+            _pad: self.rock_mat,
         });
+        
+        // Use an ugly bitcast to float for the 3rd material to stuff it in `_pad2` (or set a transform to 1.0 scale etc).
+        // Actually, basic_scene's iter_instances does:
+        // `_pad2: 0.0,`
+        // So we can't easily modify `_pad2` from `ObjectData`.
+        // Wait, ObjectData doesn't have `_pad2`. It has `flags` and `_pad`.
+        // Where can we stuff the 3rd material? 
+        // We can pack grass and rock in `flags` (16 bits each) and dirt in `_pad` (32 bits).
+        // Let's pack grass and rock into `flags`.
+        
+        let packed_flags = (self.grass_mat & 0xFFFF) | ((self.rock_mat & 0xFFFF) << 16);
+        self.scene.set_voxel_materials(object_id, packed_flags, self.dirt_mat);
+        
         (mesh_id, object_id.0)
     }
 
@@ -120,6 +139,9 @@ struct VoxelApp {
     camera:          CameraController,
     scene:           BasicScene,
     voxel_octree:    VoxelOctree,
+    grass_mat:       u32,
+    rock_mat:        u32,
+    dirt_mat:        u32,
     dt:              f32,
     smoothed_dt:     f32,
     show_debug_draw: bool,
@@ -138,6 +160,9 @@ impl ExampleApp for VoxelApp {
         let mut sink = VoxelSink {
             backend: &mut self.backend,
             scene: &mut self.scene,
+            grass_mat: self.grass_mat,
+            rock_mat: self.rock_mat,
+            dirt_mat: self.dirt_mat,
         };
         self.voxel_octree.update(cam_pos, &mut sink, FRAME_BUDGET);
     }
@@ -222,15 +247,76 @@ impl ExampleApp for VoxelApp {
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let _guard = init_tracing("voxel.log");
+    let _guard = examples_common::init_tracing("voxel.log");
+
+    let mut backend = VulkanBackend::new()?;
+    examples_common::maybe_list_gpus(&backend);
+    backend.initialize(examples_common::get_gpu_index())?;
+
+    let window = backend.create_window(WindowDesc {
+        title: "Voxel".to_string(),
+        width: 1280,
+        height: 720,
+    })?;
+
+    let config = i3_renderer::render_graph::RenderConfig { width: 1280, height: 720 };
+    let ui = Arc::new(i3_egui::UiSystem::new(1280, 720));
+
+    let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
+    render_graph.publish("UiSystem", ui.clone());
 
     let loader = Arc::new(AssetLoader::new(Arc::new(Vfs::new())));
-    let AppRenderer {
-        backend,
-        window,
-        render_graph,
-        ui,
-    } = init_renderer("Voxel", 1280, 720, Some(loader))?;
+    
+    // Mount bundles
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_default();
+    
+    for (cat, blob) in [("system.i3c", "system.i3b"), ("voxel.i3c", "voxel.i3b")] {
+        if exe_dir.join(cat).exists() {
+            if let Ok(bundle) = i3_io::prelude::BundleBackend::mount(
+                exe_dir.join(cat).to_str().unwrap(),
+                exe_dir.join(blob).to_str().unwrap(),
+            ) {
+                let _ = loader.vfs().mount(Box::new(bundle));
+            }
+        }
+    }
+    render_graph.publish("AssetLoader", loader.clone());
+
+    for key in loader.list_assets::<TextureAsset>() {
+        tracing::info!("Loaded VFS Texture: {}", key);
+    }
+
+    // Inject our custom voxel GBuffer pass
+    render_graph.extra_gbuffer_passes.push(Box::new(VoxelGBufferPass::new()));
+
+    render_graph.init(&mut backend);
+
+    let mut scene = BasicScene::new();
+
+    // Load textures and create materials
+    let mut load_mat = |name: &str| -> MaterialData {
+        let albedo = BasicScene::load_texture_by_name(&mut backend, &mut render_graph.bindless_manager, &loader, &format!("{}_albedo.png", name));
+        let normal = BasicScene::load_texture_by_name(&mut backend, &mut render_graph.bindless_manager, &loader, &format!("{}_normal.png", name));
+        let orm = BasicScene::load_texture_by_name(&mut backend, &mut render_graph.bindless_manager, &loader, &format!("{}_orm.png", name));
+        MaterialData {
+            base_color_factor: [1.0, 1.0, 1.0, 1.0],
+            emissive_factor_and_alpha_cutoff: [0.0, 0.0, 0.0, 0.0],
+            metallic_factor: 1.0,
+            roughness_factor: 1.0,
+            _pad_pbr: [0.0; 2],
+            albedo_tex_index: albedo,
+            normal_tex_index: normal,
+            rmao_tex_index: orm,
+            emissive_tex_index: -1,
+        }
+    };
+
+    let grass_mat = scene.add_material(load_mat("grass")).0;
+    let rock_mat = scene.add_material(load_mat("rock")).0;
+    let dirt_mat = scene.add_material(load_mat("dirt")).0;
 
     let mut camera = CameraController::new();
     let half_xz = SCENE_XZ * 0.5; // 5555 m — centre XZ
@@ -304,8 +390,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         render_graph,
         ui,
         camera,
-        scene:           BasicScene::new(),
+        scene,
         voxel_octree,
+        grass_mat,
+        rock_mat,
+        dirt_mat,
         dt:              0.016,
         smoothed_dt:     0.016,
         show_debug_draw: false,

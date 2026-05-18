@@ -418,9 +418,9 @@ impl Importer for ImageImporter {
     }
 }
 
-struct ImageImportedData {
-    img: image::DynamicImage,
-    source_path: PathBuf,
+pub struct ImageImportedData {
+    pub img: image::DynamicImage,
+    pub source_path: PathBuf,
 }
 
 impl ImportedData for ImageImportedData {

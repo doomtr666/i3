@@ -109,6 +109,12 @@ VertexOutput vertexMain(uint indexId: SV_VertexID,
 [shader("fragment")]
 GBufferOutput fragmentMain(VertexOutput input)
 {
+    // Ignore voxel chunks, they are rendered by the VoxelGBufferPass extension
+    if (input.materialId == 0xFFFFFFFEu)
+    {
+        discard;
+    }
+
     MaterialData mat = materials[input.materialId];
 
     float4 albedo = float4(mat.baseColorFactor);

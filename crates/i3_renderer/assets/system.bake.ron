@@ -18,4 +18,30 @@ BakeManifest(
         (name: "blue_noise",  size: 1024, seed: 42, algorithm: BlueNoise(sigma: 0.5)),
         (name: "white_noise", size: 1024, seed: 0,  algorithm: WhiteNoise),
     ],
+    material_sets: [
+        (
+            name: "grass",
+            albedo: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_Color.png"),
+            normal: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_Roughness.png"),
+            metallic: None,
+            occlusion: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_AmbientOcclusion.png"),
+        ),
+        (
+            name: "rock",
+            albedo: Some("../../../assets/textures/Rock060_1K-PNG/Rock060_1K-PNG_Color.png"),
+            normal: Some("../../../assets/textures/Rock060_1K-PNG/Rock060_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/Rock060_1K-PNG/Rock060_1K-PNG_Roughness.png"),
+            metallic: None,
+            occlusion: Some("../../../assets/textures/Rock060_1K-PNG/Rock060_1K-PNG_AmbientOcclusion.png"),
+        ),
+        (
+            name: "dirt",
+            albedo: Some("../../../assets/textures/Ground104_1K-PNG/Ground104_1K-PNG_Color.png"),
+            normal: Some("../../../assets/textures/Ground104_1K-PNG/Ground104_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/Ground104_1K-PNG/Ground104_1K-PNG_Roughness.png"),
+            metallic: None,
+            occlusion: Some("../../../assets/textures/Ground104_1K-PNG/Ground104_1K-PNG_AmbientOcclusion.png"),
+        ),
+    ],
 )

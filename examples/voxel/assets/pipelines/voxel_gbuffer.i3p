@@ -1,0 +1,27 @@
+PipelineConfig(
+    name: "voxel_gbuffer",
+    shader: Path("../shaders/voxel_gbuffer.slang"),
+    search_paths: [
+        "../../../../crates/i3_renderer/assets/shaders",
+    ],
+    graphics: Some(GraphicsConfig(
+        rasterization: (
+            cull_mode: Back,
+        ),
+        depth_stencil: (
+            depth_test_enable: true,
+            depth_write_enable: true,
+            depth_compare_op: Greater,
+        ),
+        depth_stencil_format: Some(D32_FLOAT),
+        topology: TriangleList,
+        targets: [
+            (format: R8G8B8A8_SRGB),      // Albedo
+            (format: R16G16_SFLOAT),        // Normal
+            (format: R8G8_UNORM),           // RoughMetal
+            (format: R11G11B10_UFLOAT),     // Emissive
+            (format: R32_SFLOAT),           // HiZ mip 0 (depth copy for SPD)
+        ],
+        vertex_layout: None,
+    ))
+)

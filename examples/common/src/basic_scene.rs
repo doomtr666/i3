@@ -166,6 +166,15 @@ impl BasicScene {
         self.dirty_objects.remove(&id);
     }
 
+    /// Sets the packed voxel materials (flags and _pad) for an object.
+    pub fn set_voxel_materials(&mut self, id: ObjectId, packed_flags: u32, pad_mat: u32) {
+        if let Some((_, data)) = self.objects.iter_mut().find(|(oid, _)| *oid == id) {
+            data.flags = packed_flags;
+            data._pad = pad_mat;
+            self.dirty_objects.insert(id);
+        }
+    }
+
     /// Removes a mesh and its associated GPU buffers.
     ///
     /// The caller must ensure the GPU is no longer using these buffers
@@ -448,6 +457,108 @@ impl BasicScene {
         id
     }
 
+    /// Loads a texture asset by UUID and registers it with the BindlessManager.
+    pub fn load_texture_by_uuid<T: i3_gfx::graph::backend::RenderBackendInternal + ?Sized>(
+        backend: &mut T,
+        bindless: &mut i3_renderer::bindless::BindlessManager,
+        loader: &i3_io::asset::AssetLoader,
+        tex_uuid: uuid::Uuid,
+    ) -> i32 {
+        if let Ok(tex_handle) = loader.load_by_uuid::<i3_io::texture::TextureAsset>(&tex_uuid) {
+            if let Ok(tex_asset) = tex_handle.wait_loaded() {
+                return Self::upload_and_register_texture(backend, bindless, &tex_asset);
+            }
+        }
+        -1
+    }
+
+    /// Loads a texture asset by name and registers it with the BindlessManager.
+    pub fn load_texture_by_name<T: i3_gfx::graph::backend::RenderBackendInternal + ?Sized>(
+        backend: &mut T,
+        bindless: &mut i3_renderer::bindless::BindlessManager,
+        loader: &i3_io::asset::AssetLoader,
+        name: &str,
+    ) -> i32 {
+        let tex_handle = loader.load::<i3_io::texture::TextureAsset>(name);
+        if let Ok(tex_asset) = tex_handle.wait_loaded() {
+            return Self::upload_and_register_texture(backend, bindless, &tex_asset);
+        }
+        -1
+    }
+
+    fn upload_and_register_texture<T: i3_gfx::graph::backend::RenderBackendInternal + ?Sized>(
+        backend: &mut T,
+        bindless: &mut i3_renderer::bindless::BindlessManager,
+        tex_asset: &i3_io::texture::TextureAsset,
+    ) -> i32 {
+        let width = tex_asset.header.width;
+        let height = tex_asset.header.height;
+        let mips = tex_asset.header.mip_levels;
+
+        let format = match tex_asset.header.format {
+            f if f == i3_io::texture::TextureFormat::BC7_SRGB as u32 => Format::BC7_SRGB,
+            f if f == i3_io::texture::TextureFormat::BC7_UNORM as u32 => Format::BC7_UNORM,
+            f if f == i3_io::texture::TextureFormat::BC5_UNORM as u32 => Format::BC5_UNORM,
+            f if f == i3_io::texture::TextureFormat::BC1_RGB_SRGB as u32 => Format::BC1_RGB_SRGB,
+            f if f == i3_io::texture::TextureFormat::BC1_RGB_UNORM as u32 => Format::BC1_RGB_UNORM,
+            f if f == i3_io::texture::TextureFormat::BC3_SRGB as u32 => Format::BC3_SRGB,
+            f if f == i3_io::texture::TextureFormat::BC3_UNORM as u32 => Format::BC3_UNORM,
+            _ => Format::R8G8B8A8_SRGB,
+        };
+
+        let image = backend.create_image(&ImageDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            usage: ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST,
+            mip_levels: mips as u32,
+            array_layers: 1,
+            view_type: ImageViewType::Type2D,
+            swizzle: Default::default(),
+            clear_value: None,
+        });
+
+        let handle = ImageHandle(SymbolId(image.0));
+        let mut current_offset = 0;
+        
+        for mip in 0..mips {
+            let mip_width = (width >> mip).max(1);
+            let mip_height = (height >> mip).max(1);
+
+            let blocks_x = (mip_width + 3) / 4;
+            let blocks_y = (mip_height + 3) / 4;
+
+            let bpb = match format {
+                Format::BC1_RGB_SRGB | Format::BC1_RGB_UNORM => 8,
+                Format::R8G8B8A8_SRGB | Format::R8G8B8A8_UNORM => 0,
+                _ => 16,
+            };
+
+            let mip_size = if bpb == 0 {
+                (mip_width * mip_height * 4) as usize
+            } else {
+                (blocks_x * blocks_y) as usize * bpb
+            };
+
+            if current_offset + mip_size <= tex_asset.data.len() {
+                let _ = backend.upload_image(
+                    image,
+                    &tex_asset.data[current_offset..current_offset + mip_size],
+                    0,
+                    0,
+                    mip_width as u32,
+                    mip_height as u32,
+                    mip as u32,
+                    0,
+                );
+                current_offset += mip_size;
+            }
+        }
+
+        bindless.register_texture(backend, handle) as i32
+    }
+
     /// Uploads a baked material and its textures, registering them with the BindlessManager.
     pub fn add_baked_material<T: i3_gfx::graph::backend::RenderBackendInternal + ?Sized>(
         &mut self,
@@ -671,8 +782,8 @@ impl SceneProvider for BasicScene {
                 prev_transform: obj.prev_transform,
                 mesh_idx: obj.mesh_id,
                 material_id: obj.material_id,
-                flags: 0,
-                _pad: 0,
+                flags: obj.flags,
+                _pad: obj._pad,
                 world_aabb_min: world_aabb.min,
                 _pad2: 0.0,
                 world_aabb_max: world_aabb.max,
