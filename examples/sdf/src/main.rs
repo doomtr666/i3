@@ -32,42 +32,51 @@ fn build_clipmap_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
     use i3_math::nalgebra::Vector3;
     use i3_voxel::{SdfPrimitive, SdfScene};
 
+    // Material IDs: 0=grey stone  1=terracotta  2=silver  3=gold  4=blue ceramic
+    //               5=matte green  6=red plastic  7=black metal
     let id = UnitQuaternion::identity();
     let rot_x90 = UnitQuaternion::from_euler_angles(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
     let mut scene = SdfScene::new();
 
-    scene.add(
+    scene.add_mat(
         &Transform::new(Vector3::new(0.0, 1.2, 0.0), id, 1.0),
         &SdfPrimitive::Sphere { radius: 1.0 },
+        2, // silver
     );
-    scene.add(
+    scene.add_mat(
         &Transform::new(Vector3::new(0.0, 1.2, 0.0), id, 1.0),
         &SdfPrimitive::Torus { major_radius: 1.35, minor_radius: 0.18 },
+        3, // gold
     );
-    scene.add(
+    scene.add_mat(
         &Transform::new(Vector3::new(-2.8, 1.1, -0.5), id, 1.0),
         &SdfPrimitive::Capsule { half_height: 1.1, radius: 0.28 },
+        4, // blue ceramic
     );
-    scene.add(
+    scene.add_mat(
         &Transform::new(Vector3::new(2.8, 1.0, -0.5), id, 1.0),
         &SdfPrimitive::Cylinder { half_height: 1.0, radius: 0.42 },
+        6, // red plastic
     );
-    scene.add(
+    scene.add_mat(
         &Transform::new(Vector3::new(gem_pos[0], gem_pos[1], gem_pos[2]), id, 1.0),
         &SdfPrimitive::Sphere { radius: 0.6 },
+        3, // gold gem
     );
     // Wall with spherical niche (subtraction)
-    scene.add(
+    scene.add_mat(
         &Transform::new(Vector3::new(0.0, 1.6, -3.8), id, 1.0),
         &SdfPrimitive::Box { half_extents: Vector3::new(1.4, 1.6, 0.35) },
+        1, // terracotta
     );
     scene.sub(
         &Transform::new(Vector3::new(0.0, 1.6, -4.0), id, 1.0),
         &SdfPrimitive::Sphere { radius: 0.85 },
     );
-    scene.add(
+    scene.add_mat(
         &Transform::new(Vector3::new(2.8, 1.5, -3.0), rot_x90, 1.0),
         &SdfPrimitive::Torus { major_radius: 0.7, minor_radius: 0.14 },
+        7, // black metal
     );
     // Floor
     scene.add(

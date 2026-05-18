@@ -11,6 +11,8 @@ pub const BRICK_SIZE: u32 = 8;
 /// Atlas voxels per brick = (BRICK_SIZE+1)³ — includes 1-voxel positive overlap on each axis
 /// so the trilinear sampler can fetch cross-brick corner data without clamping.
 pub const BRICK_VOXELS: usize = ((BRICK_SIZE + 1) * (BRICK_SIZE + 1) * (BRICK_SIZE + 1)) as usize; // 9³ = 729
+/// DWORDs per brick in the u8-packed atlas: ceil(BRICK_VOXELS / 4) = 183
+pub const BRICK_DWORDS: usize = (BRICK_VOXELS + 3) / 4;
 
 // ─── BrickmapBaker ────────────────────────────────────────────────────────────
 
@@ -182,7 +184,7 @@ impl BrickmapBaker {
                 data.page_table[flat] as usize
             };
 
-            let atlas_offset = (lev * MAX_BRICKS_PER_LEVEL + brick_idx) * BRICK_VOXELS;
+            let atlas_offset = (lev * MAX_BRICKS_PER_LEVEL + brick_idx) * BRICK_DWORDS * 4;
             jobs.push(GpuBrickJob {
                 brick_world_min: world_min,
                 voxel_size:      self.voxel_size,

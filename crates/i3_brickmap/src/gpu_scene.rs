@@ -40,9 +40,10 @@ pub struct GpuPrimitive {
     pub data0:     f32,   // Sphere: radius | Box: he.x | Capsule/Cylinder: half_height | Torus: major_r
     pub data1:     f32,   // Box: he.y | Capsule/Cylinder: radius | Torus: minor_r
     pub data2:     f32,   // Box: he.z
-    pub prim_type: u32,   // 0=Sphere  1=Box  2=Capsule  3=Cylinder  4=Torus
-    pub subtract:  u32,   // 0 or 1
-    pub _pad:      [u32; 2],
+    pub prim_type:   u32,   // 0=Sphere  1=Box  2=Capsule  3=Cylinder  4=Torus
+    pub subtract:    u32,   // 0 or 1
+    pub material_id: u32,
+    pub _pad:        u32,
 }
 
 impl GpuPrimitive {
@@ -71,33 +72,34 @@ pub fn pack_node(node: &i3_voxel::SdfNode) -> Option<GpuPrimitive> {
     let row1 = [col0.y, col1.y, col2.y, t.y];
     let row2 = [col0.z, col1.z, col2.z, t.z];
     let inv_scale = tf.inv_scale();
-    let subtract  = node.is_subtract() as u32;
+    let subtract    = node.is_subtract() as u32;
+    let material_id = node.material_id();
 
     let prim = match node.primitive() {
         SdfPrimitive::Sphere { radius } => GpuPrimitive {
             row0, row1, row2, inv_scale,
             data0: *radius, data1: 0.0, data2: 0.0,
-            prim_type: GpuPrimitive::SPHERE, subtract, _pad: [0; 2],
+            prim_type: GpuPrimitive::SPHERE, subtract, material_id, _pad: 0,
         },
         SdfPrimitive::Box { half_extents } => GpuPrimitive {
             row0, row1, row2, inv_scale,
             data0: half_extents.x, data1: half_extents.y, data2: half_extents.z,
-            prim_type: GpuPrimitive::BOX, subtract, _pad: [0; 2],
+            prim_type: GpuPrimitive::BOX, subtract, material_id, _pad: 0,
         },
         SdfPrimitive::Capsule { half_height, radius } => GpuPrimitive {
             row0, row1, row2, inv_scale,
             data0: *half_height, data1: *radius, data2: 0.0,
-            prim_type: GpuPrimitive::CAPSULE, subtract, _pad: [0; 2],
+            prim_type: GpuPrimitive::CAPSULE, subtract, material_id, _pad: 0,
         },
         SdfPrimitive::Cylinder { half_height, radius } => GpuPrimitive {
             row0, row1, row2, inv_scale,
             data0: *half_height, data1: *radius, data2: 0.0,
-            prim_type: GpuPrimitive::CYLINDER, subtract, _pad: [0; 2],
+            prim_type: GpuPrimitive::CYLINDER, subtract, material_id, _pad: 0,
         },
         SdfPrimitive::Torus { major_radius, minor_radius } => GpuPrimitive {
             row0, row1, row2, inv_scale,
             data0: *major_radius, data1: *minor_radius, data2: 0.0,
-            prim_type: GpuPrimitive::TORUS, subtract, _pad: [0; 2],
+            prim_type: GpuPrimitive::TORUS, subtract, material_id, _pad: 0,
         },
         SdfPrimitive::TerrainBox { .. } => return None,
     };

@@ -1,41 +1,49 @@
 #include "common.slangh"
 
-// ─── Clipmap storage buffers (Set 0) — all 4 levels concatenated ──────────────
-[[vk::binding(0, 0)]]
-StructuredBuffer<uint> page_table;
-[[vk::binding(1, 0)]]
-StructuredBuffer<float> sdf_atlas; // world-space metres
-[[vk::binding(2, 0)]]
-StructuredBuffer<uint> mat_atlas;
+// ─── Clipmap storage buffers (Set 0) — all levels concatenated ────────────────
+[[vk::binding(0, 0)]] StructuredBuffer<uint>  page_table;
+[[vk::binding(1, 0)]] ByteAddressBuffer       sdf_atlas; // u8-packed voxels
+[[vk::binding(2, 0)]] ByteAddressBuffer       mat_atlas; // u8-packed material IDs
 
 // ─── Push constants ───────────────────────────────────────────────────────────
 struct LevelPC
 {
     float3 world_origin;
-    float voxel_size;
+    float  voxel_size;
 };
 struct ClipmapPC
 {
     LevelPC levels[10];
-    uint num_levels;
-    uint debug_flags; // bit 0 = show level colours
-    uint2 _pad;
+    uint    num_levels;
+    uint    debug_flags; // bit 0=level colours  1=brick grid  2=world-Y  3=step heat
+    uint2   _pad;
 };
-[[vk::push_constant]]
-ClipmapPC pc;
+[[vk::push_constant]] ClipmapPC pc;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-static const uint BRICK_DIM = 8u;
-static const uint BRICK_VOXELS = 729u; // 9³ — BRICK_DIM+1 per axis, 1-voxel positive overlap
-static const uint GRID_X = 32u;
-static const uint GRID_Y = 32u;
-static const uint GRID_Z = 32u;
-static const uint GRID_VOL = 32768u;
-static const uint MAX_BRICKS = 8192u;
-static const uint PAGE_EMPTY = 0xFFFFFFFFu;
-// Fraction of each level's half-extent used for cross-level SDF blending.
-// 0.25 = 25%, giving ~1.6 m of transition at L2, ~3.2 m at L3, etc.
-static const float LEVEL_BLEND = 0.25;
+static const uint  BRICK_DIM    = 8u;
+static const uint  BRICK_VOXELS = 729u;   // 9³
+static const uint  BRICK_DWORDS = 183u;   // ceil(729/4)
+static const uint  GRID_X       = 32u;
+static const uint  GRID_Y       = 32u;
+static const uint  GRID_Z       = 32u;
+static const uint  GRID_VOL     = 32768u;
+static const uint  MAX_BRICKS   = 8192u;
+static const uint  PAGE_EMPTY   = 0xFFFFFFFFu;
+static const float LEVEL_BLEND  = 0.25;
+
+// ─── Materials ────────────────────────────────────────────────────────────────
+struct Material { float3 albedo; float roughness; float metalness; };
+static const Material kMaterials[8] = {
+    { float3(0.75, 0.73, 0.70), 0.60, 0.00 }, // 0: grey stone (default)
+    { float3(0.80, 0.30, 0.15), 0.80, 0.00 }, // 1: terracotta
+    { float3(0.95, 0.95, 0.95), 0.10, 1.00 }, // 2: polished silver
+    { float3(0.85, 0.65, 0.10), 0.20, 1.00 }, // 3: gold
+    { float3(0.20, 0.35, 0.70), 0.60, 0.00 }, // 4: blue ceramic
+    { float3(0.15, 0.55, 0.25), 0.90, 0.00 }, // 5: matte green
+    { float3(0.70, 0.15, 0.15), 0.40, 0.00 }, // 6: red plastic
+    { float3(0.05, 0.05, 0.05), 0.80, 1.00 }, // 7: black metal
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -58,69 +66,85 @@ float3 safeRcp(float3 rd)
         abs(rd.z) > 1e-7 ? 1.0 / rd.z : (rd.z >= 0.0 ? 1e30 : -1e30));
 }
 
-// ─── Trilinear SDF + Smooth Gradient ─────────────────────────────────────────
-// Returns the SDF value at p for the given level.
-// The analytic gradient of a trilinear interpolant is piecewise-constant along
-// its axes, causing blocky/faceted normals. To achieve genuinely smooth normals,
-// we must use central finite differences on the continuous trilinear field itself.
+// ─── Atlas u8 accessors ───────────────────────────────────────────────────────
 
-float sampleSdfLevel(float3 p, uint lev)
+// Decode one SDF byte at vox_flat index within a brick.
+// base_bytes: byte offset of brick in ByteAddressBuffer.
+// half_diag:  brick half-diagonal (decode scale).
+float loadSdfVoxel(uint base_bytes, uint vox_flat, float half_diag)
+{
+    uint dword_off = vox_flat / 4u;
+    uint byte_pos  = vox_flat % 4u;
+    uint packed    = sdf_atlas.Load(base_bytes + dword_off * 4u);
+    uint byte_val  = (packed >> (byte_pos * 8u)) & 0xFFu;
+    return (float(byte_val) / 127.5 - 1.0) * half_diag;
+}
+
+// Load a material ID byte at vox_flat index within a brick.
+uint loadMatVoxel(uint base_bytes, uint vox_flat)
+{
+    uint dword_off = vox_flat / 4u;
+    uint byte_pos  = vox_flat % 4u;
+    uint packed    = mat_atlas.Load(base_bytes + dword_off * 4u);
+    return (packed >> (byte_pos * 8u)) & 0xFFu;
+}
+
+// Common brick lookup shared by SDF and material samplers.
+// Returns false if p is outside the level or in an empty brick.
+// Fills: base_bytes, vi (corner voxel index), fr (trilinear fractions), half_diag.
+bool brickLookup(float3 p, uint lev,
+                 out uint base_bytes, out int3 vi, out float3 fr, out float half_diag)
 {
     float3 org = pc.levels[lev].world_origin;
-    float vs = pc.levels[lev].voxel_size;
-    float bws = float(BRICK_DIM) * vs;
+    float  vs  = pc.levels[lev].voxel_size;
+    float  bws = float(BRICK_DIM) * vs;
+    half_diag  = float(BRICK_DIM) * vs * 0.8660254; // sqrt(3)/2
 
-#if 0
-    float3 gp = (p - org) / bws;
-    int3   b  = int3(floor(gp));          // offset from origin ∈ [0, grid) for valid p
-    if (!brickInGrid(b)) return 1e10;
-#else
-    // Shift the evaluation point by half a voxel to perfectly align the 0.5..8.5
-    // valid interpolation range with the brick boundaries. This avoids negative
-    // local positions that would be clamped to 0, causing flat normals at boundaries.
     float3 gp = (p - (org + 0.5 * vs)) / bws;
     int3 b = clamp(int3(floor(gp)), int3(0), int3(GRID_X - 1, GRID_Y - 1, GRID_Z - 1));
 
-#endif
-
-    // Toroidal page-table lookup.
-    // b.x is the offset from the origin, so the world-brick is (ob + b).
-    // Its cell in the page table is (ob + b) % grid.
-    int3 ob = int3(round(org / bws)); // origin world-brick (integer)
+    int3 ob   = int3(round(org / bws));
     int3 grid = int3(GRID_X, GRID_Y, GRID_Z);
     int3 cell = ((ob + b) % grid + grid) % grid;
 
     uint page = page_table[lev * GRID_VOL + brickFlatIdx(cell)];
     if (page == PAGE_EMPTY)
-        return 1e10;
+        return false;
 
-    uint base = lev * MAX_BRICKS * BRICK_VOXELS + page * BRICK_VOXELS;
-    // Atlas stride is BRICK_DIM+1 (9) — one extra voxel of positive overlap per axis.
-    uint bd = BRICK_DIM + 1u;
+    base_bytes = (lev * MAX_BRICKS + page) * BRICK_DWORDS * 4u;
 
-    // Local position inside the brick, in voxel units.
-    // Clamped to [0, BRICK_DIM-ε] so vi ∈ [0, BRICK_DIM-1] and vi+1 ∈ [1, BRICK_DIM].
-    // The overlap voxel at index BRICK_DIM is the neighbouring brick's voxel 0,
-    // letting the trilinear use real cross-brick data instead of clamped edge values.
     float3 lp = (p - (org + float3(b) * bws)) / vs - 0.5;
     lp = clamp(lp, float3(0.0), float3(float(BRICK_DIM) - 1e-4));
-    int3 vi = int3(floor(lp));
-    float3 fr = lp - float3(vi);
+    vi = int3(floor(lp));
+    fr = lp - float3(vi);
     vi = min(vi, int3(int(BRICK_DIM) - 1, int(BRICK_DIM) - 1, int(BRICK_DIM) - 1));
+    return true;
+}
 
-    // Fetch 8 corners (world-space SDF values in metres)
-    float s000 = sdf_atlas[base + uint(vi.x) + bd * (uint(vi.y) + bd * uint(vi.z))];
-    float s100 = sdf_atlas[base + uint(vi.x + 1) + bd * (uint(vi.y) + bd * uint(vi.z))];
-    float s010 = sdf_atlas[base + uint(vi.x) + bd * (uint(vi.y + 1) + bd * uint(vi.z))];
-    float s110 = sdf_atlas[base + uint(vi.x + 1) + bd * (uint(vi.y + 1) + bd * uint(vi.z))];
-    float s001 = sdf_atlas[base + uint(vi.x) + bd * (uint(vi.y) + bd * uint(vi.z + 1))];
-    float s101 = sdf_atlas[base + uint(vi.x + 1) + bd * (uint(vi.y) + bd * uint(vi.z + 1))];
-    float s011 = sdf_atlas[base + uint(vi.x) + bd * (uint(vi.y + 1) + bd * uint(vi.z + 1))];
-    float s111 = sdf_atlas[base + uint(vi.x + 1) + bd * (uint(vi.y + 1) + bd * uint(vi.z + 1))];
+// ─── Trilinear SDF + Smooth Gradient ─────────────────────────────────────────
 
+float sampleSdfLevel(float3 p, uint lev)
+{
+    uint   base_bytes;
+    int3   vi;
+    float3 fr;
+    float  half_diag;
+    if (!brickLookup(p, lev, base_bytes, vi, fr, half_diag))
+        return 1e10;
+
+    uint bd = BRICK_DIM + 1u;
     float fx = fr.x, fy = fr.y, fz = fr.z;
 
-    // Trilinear value
+    // Fetch 8 corners via u8 atlas
+    float s000 = loadSdfVoxel(base_bytes, uint(vi.x  ) + bd*(uint(vi.y  ) + bd*uint(vi.z  )), half_diag);
+    float s100 = loadSdfVoxel(base_bytes, uint(vi.x+1) + bd*(uint(vi.y  ) + bd*uint(vi.z  )), half_diag);
+    float s010 = loadSdfVoxel(base_bytes, uint(vi.x  ) + bd*(uint(vi.y+1) + bd*uint(vi.z  )), half_diag);
+    float s110 = loadSdfVoxel(base_bytes, uint(vi.x+1) + bd*(uint(vi.y+1) + bd*uint(vi.z  )), half_diag);
+    float s001 = loadSdfVoxel(base_bytes, uint(vi.x  ) + bd*(uint(vi.y  ) + bd*uint(vi.z+1)), half_diag);
+    float s101 = loadSdfVoxel(base_bytes, uint(vi.x+1) + bd*(uint(vi.y  ) + bd*uint(vi.z+1)), half_diag);
+    float s011 = loadSdfVoxel(base_bytes, uint(vi.x  ) + bd*(uint(vi.y+1) + bd*uint(vi.z+1)), half_diag);
+    float s111 = loadSdfVoxel(base_bytes, uint(vi.x+1) + bd*(uint(vi.y+1) + bd*uint(vi.z+1)), half_diag);
+
     return lerp(
         lerp(lerp(s000, s100, fx), lerp(s010, s110, fx), fy),
         lerp(lerp(s001, s101, fx), lerp(s011, s111, fx), fy),
@@ -130,33 +154,46 @@ float sampleSdfLevel(float3 p, uint lev)
 float sampleSdfLevelGrad(float3 p, uint lev, out float3 grad)
 {
     float val = sampleSdfLevel(p, lev);
-    
-    // Smooth normal via Central Finite Differences.
-    // An epsilon of 0.5 to 1.0 voxel crosses the C0 cell boundaries and smooths
-    // the piecewise-constant trilinear derivative into a continuous gradient.
+
     float e = pc.levels[lev].voxel_size * 0.5;
-    
+
     float dx = sampleSdfLevel(p + float3(e, 0, 0), lev) - sampleSdfLevel(p - float3(e, 0, 0), lev);
     float dy = sampleSdfLevel(p + float3(0, e, 0), lev) - sampleSdfLevel(p - float3(0, e, 0), lev);
     float dz = sampleSdfLevel(p + float3(0, 0, e), lev) - sampleSdfLevel(p - float3(0, 0, e), lev);
-    
+
     grad = float3(dx, dy, dz) / (2.0 * e);
     return val;
 }
 
+// ─── Material sampling ────────────────────────────────────────────────────────
+// Returns the material ID at the voxel nearest to p in the given level.
+
+uint sampleMatLevel(float3 p, uint lev)
+{
+    uint   base_bytes;
+    int3   vi;
+    float3 fr;
+    float  half_diag;
+    if (!brickLookup(p, lev, base_bytes, vi, fr, half_diag))
+        return 0u;
+
+    // Nearest voxel (round fractions)
+    int3 vn = vi + int3(fr.x > 0.5 ? 1 : 0, fr.y > 0.5 ? 1 : 0, fr.z > 0.5 ? 1 : 0);
+    vn = clamp(vn, int3(0), int3(int(BRICK_DIM) - 1, int(BRICK_DIM) - 1, int(BRICK_DIM) - 1));
+
+    uint bd = BRICK_DIM + 1u;
+    uint vox_flat = uint(vn.x) + bd * (uint(vn.y) + bd * uint(vn.z));
+    return loadMatVoxel(base_bytes, vox_flat);
+}
+
 // ─── Level sampling with transition blending ──────────────────────────────────
-// Near each level's outer boundary (LEVEL_BLEND zone), lerps to the next coarser
-// level so transitions are seamless instead of a hard cut.
 
 float sampleFinest(float3 p, out uint lev_out)
 {
-
     for (uint lev = 0u; lev < pc.num_levels; lev++)
     {
-        float bws = float(BRICK_DIM) * pc.levels[lev].voxel_size;
+        float bws  = float(BRICK_DIM) * pc.levels[lev].voxel_size;
         float3 org = pc.levels[lev].world_origin;
-        float3 half_e = float3(GRID_X, GRID_Y, GRID_Z) * bws * 0.5;
-        float3 ctr = org + half_e;
         float3 gmax = org + float3(GRID_X, GRID_Y, GRID_Z) * bws;
         if (!all(p >= org) || !all(p < gmax))
             continue;
@@ -169,9 +206,11 @@ float sampleFinest(float3 p, out uint lev_out)
 
         if (lev + 1u < pc.num_levels)
         {
-            float3 rel = abs(p - ctr) / half_e;
-            float t = max(rel.x, max(rel.y, rel.z));
-            float alpha = smoothstep(1.0 - LEVEL_BLEND, 1.0, t);
+            float3 half_e = float3(GRID_X, GRID_Y, GRID_Z) * bws * 0.5;
+            float3 ctr    = org + half_e;
+            float3 rel    = abs(p - ctr) / half_e;
+            float  t      = max(rel.x, max(rel.y, rel.z));
+            float  alpha  = smoothstep(1.0 - LEVEL_BLEND, 1.0, t);
             if (alpha > 0.0)
             {
                 float d_next = sampleSdfLevel(p, lev + 1u);
@@ -185,13 +224,7 @@ float sampleFinest(float3 p, out uint lev_out)
     return 1e10;
 }
 
-// ─── Smooth normal (Söderström / JCGT 2022) ────────────────────────────────────
-// Analytic gradient of the trilinear SDF interpolant — C0 within each brick.
-// Mirrors sampleFinest's blend so the normal direction is consistent with the
-// blended SDF that drove the sphere tracer.  Without the blend, the tracer can
-// converge in the transition zone via the coarse level's SDF, but normalFinest
-// would return the fine level's gradient (pointing toward a different surface),
-// producing catastrophically wrong normals near level edges.
+// ─── Smooth normal (Söderström / JCGT 2022) ───────────────────────────────────
 
 float3 normalFinest(float3 p, uint lev)
 {
@@ -202,31 +235,23 @@ float3 normalFinest(float3 p, uint lev)
     if (d >= 9e9)
         return float3(0, 1, 0);
 
-    // Blend gradient at the transition zone.
-    // The blended distance is D = lerp(d, d_next, alpha), so the true gradient is
-    //   ∇D = (1-α)∇d + α∇d_next + (∇α)(d_next - d)
-    // The last term (∇α)(d_next - d) is non-zero whenever the two levels disagree
-    // near the level boundary and must be included to avoid a shading discontinuity.
     if (lev + 1u < pc.num_levels)
     {
-        float bws = float(BRICK_DIM) * pc.levels[lev].voxel_size;
-        float3 org = pc.levels[lev].world_origin;
+        float  bws    = float(BRICK_DIM) * pc.levels[lev].voxel_size;
+        float3 org    = pc.levels[lev].world_origin;
         float3 half_e = float3(GRID_X, GRID_Y, GRID_Z) * bws * 0.5;
-        float3 ctr = org + half_e;
-        float3 rel = abs(p - ctr) / half_e;
-        float t = max(rel.x, max(rel.y, rel.z));
-        float alpha = smoothstep(1.0 - LEVEL_BLEND, 1.0, t);
+        float3 ctr    = org + half_e;
+        float3 rel    = abs(p - ctr) / half_e;
+        float  t      = max(rel.x, max(rel.y, rel.z));
+        float  alpha  = smoothstep(1.0 - LEVEL_BLEND, 1.0, t);
         if (alpha > 0.0)
         {
             float3 grad_next;
             float d_next = sampleSdfLevelGrad(p, lev + 1u, grad_next);
             if (d_next < 9e9)
             {
-                // ∇α = dα/dt · ∇t  where t = L∞ norm of rel.
-                // dα/dt = 6·t_n·(1-t_n)/BLEND  (derivative of smoothstep).
-                float t_n = clamp((t - (1.0 - LEVEL_BLEND)) / LEVEL_BLEND, 0.0, 1.0);
-                float da_dt = 6.0 * t_n * (1.0 - t_n) / LEVEL_BLEND;
-                // ∇t selects the axis (or axes) achieving the max.
+                float  t_n    = clamp((t - (1.0 - LEVEL_BLEND)) / LEVEL_BLEND, 0.0, 1.0);
+                float  da_dt  = 6.0 * t_n * (1.0 - t_n) / LEVEL_BLEND;
                 float3 grad_alpha = float3(0.0, 0.0, 0.0);
                 if (abs(rel.x - t) < 1e-5)
                     grad_alpha.x = da_dt * sign(p.x - ctr.x) / half_e.x;
@@ -263,8 +288,8 @@ bool traceClipmap(float3 ro, float3 rd, float far,
             float vs = pc.levels[lev].voxel_size;
             if (d < vs * 0.15)
             {
-                t_hit = t;
-                hit_lev = lev;
+                t_hit      = t;
+                hit_lev    = lev;
                 hit_normal = normalFinest(p, lev);
                 return true;
             }
@@ -272,7 +297,6 @@ bool traceClipmap(float3 ro, float3 rd, float far,
         }
         else
         {
-            // Outside all levels — advance by the coarsest brick size.
             t += float(BRICK_DIM) * pc.levels[pc.num_levels - 1u].voxel_size;
         }
 
@@ -280,9 +304,9 @@ bool traceClipmap(float3 ro, float3 rd, float far,
             break;
     }
 
-    t_hit = far;
+    t_hit      = far;
     hit_normal = float3(0, 1, 0);
-    hit_lev = 0u;
+    hit_lev    = 0u;
     return false;
 }
 
@@ -299,12 +323,12 @@ float4 vsMain(uint id: SV_VertexID) : SV_Position
 
 struct GBufferOut
 {
-    float4 albedo : SV_Target0;
-    float2 normal : SV_Target1;
+    float4 albedo     : SV_Target0;
+    float2 normal     : SV_Target1;
     float2 roughMetal : SV_Target2;
-    float3 emissive : SV_Target3;
-    float hizDepth : SV_Target4;
-    float depth : SV_Depth;
+    float3 emissive   : SV_Target3;
+    float  hizDepth   : SV_Target4;
+    float  depth      : SV_Depth;
 };
 
 [shader("fragment")]
@@ -314,7 +338,7 @@ GBufferOut fsMain(float4 svPos: SV_Position)
         discard;
 
     float2 screenSize = g_common.GetScreenSize();
-    float2 uv = svPos.xy / screenSize;
+    float2 uv  = svPos.xy / screenSize;
     float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 
     float4 wFar = mul(g_common.invViewProjection, float4(ndc, 0.0, 1.0));
@@ -323,70 +347,72 @@ GBufferOut fsMain(float4 svPos: SV_Position)
     float3 ro = g_common.GetCameraPos();
     float3 rd = normalize(wFar.xyz - ro);
 
-    float t_hit;
+    float  t_hit;
     float3 hit_normal;
-    uint hit_lev;
-    int steps;
+    uint   hit_lev;
+    int    steps;
     if (!traceClipmap(ro, rd, g_common.GetFarPlane(), t_hit, hit_normal, hit_lev, steps))
         discard;
 
-    float3 hitPos = ro + t_hit * rd;
-    float4 clip = mul(g_common.viewProjection, float4(hitPos, 1.0));
-    float ndcDepth = clip.z / clip.w;
+    float3 hitPos  = ro + t_hit * rd;
+    float4 clip    = mul(g_common.viewProjection, float4(hitPos, 1.0));
+    float  ndcDepth = clip.z / clip.w;
+
+    // Material lookup
+    uint     mat_id = sampleMatLevel(hitPos, hit_lev);
+    Material mat    = kMaterials[min(mat_id, 7u)];
 
     GBufferOut o;
-    // Default albedo
-    o.albedo = float4(0.75, 0.73, 0.70, 1.0);
+    o.albedo = float4(mat.albedo, 1.0);
 
     // bit 0 – level colors
     if ((pc.debug_flags & 1u) != 0u)
     {
         float4 level_colors[10] = {
-            float4(0.05, 0.20, 1.00, 1.0), // L0  0.0125 m — deep blue
+            float4(0.05, 0.20, 1.00, 1.0), // L0  0.0125 m
             float4(0.10, 0.50, 1.00, 1.0), // L1  0.025 m
             float4(0.10, 0.75, 0.90, 1.0), // L2  0.05 m
             float4(0.15, 0.90, 0.55, 1.0), // L3  0.10 m
             float4(0.20, 0.85, 0.20, 1.0), // L4  0.20 m
-            float4(0.85, 0.85, 0.10, 1.0), // L5  0.40 m — yellow
+            float4(0.85, 0.85, 0.10, 1.0), // L5  0.40 m
             float4(0.95, 0.55, 0.05, 1.0), // L6  0.80 m
             float4(0.90, 0.25, 0.05, 1.0), // L7  1.60 m
             float4(0.80, 0.05, 0.20, 1.0), // L8  4.00 m
-            float4(0.60, 0.00, 0.40, 1.0), // L9  8.00 m — purple
+            float4(0.60, 0.00, 0.40, 1.0), // L9  8.00 m
         };
         o.albedo = level_colors[min(hit_lev, 9u)];
     }
 
-    // bit 1 – brick grid overlay (black lines at brick boundaries)
+    // bit 1 – brick grid overlay
     if ((pc.debug_flags & 2u) != 0u)
     {
-        float bws = float(BRICK_DIM) * pc.levels[hit_lev].voxel_size;
-        float3 bf = frac((hitPos - pc.levels[hit_lev].world_origin) / bws);
-        float3 be = min(bf, 1.0 - bf);
-        float edge = min(be.x, min(be.y, be.z));
-        float t = 1.0 - smoothstep(0.0, 0.04, edge);
-        o.albedo = lerp(o.albedo, float4(0.0, 0.0, 0.0, 1.0), t);
+        float  bws = float(BRICK_DIM) * pc.levels[hit_lev].voxel_size;
+        float3 bf  = frac((hitPos - pc.levels[hit_lev].world_origin) / bws);
+        float3 be  = min(bf, 1.0 - bf);
+        float  edge = min(be.x, min(be.y, be.z));
+        float  tt   = 1.0 - smoothstep(0.0, 0.04, edge);
+        o.albedo = lerp(o.albedo, float4(0.0, 0.0, 0.0, 1.0), tt);
     }
 
-    // bit 2 – world-Y gradient (hue cycles every 2 m)
+    // bit 2 – world-Y gradient
     if ((pc.debug_flags & 4u) != 0u)
     {
-        float h = frac(hitPos.y * 0.5);
-        // Simple HSV→RGB with S=0.8 V=0.9
+        float  h = frac(hitPos.y * 0.5);
         float3 c = clamp(abs(fmod(h * 6.0 + float3(0, 4, 2), 6.0) - 3.0) - 1.0, 0.0, 1.0);
         o.albedo = float4(lerp(float3(1, 1, 1), c, 0.8) * 0.9, 1.0);
     }
 
-    // bit 3 – step-count heat map (green=cheap → red=expensive, full at 256 steps)
+    // bit 3 – step-count heat map
     if ((pc.debug_flags & 8u) != 0u)
     {
         float heat = saturate(float(steps) / 256.0);
         o.albedo = float4(heat, 1.0 - heat, 0.0, 1.0);
     }
 
-    o.normal = encodeOctahedral(hit_normal);
-    o.roughMetal = float2(0.6, 0.0);
-    o.emissive = float3(0.0, 0.0, 0.0);
-    o.hizDepth = ndcDepth;
-    o.depth = ndcDepth;
+    o.normal     = encodeOctahedral(hit_normal);
+    o.roughMetal = float2(mat.roughness, mat.metalness);
+    o.emissive   = float3(0.0, 0.0, 0.0);
+    o.hizDepth   = ndcDepth;
+    o.depth      = ndcDepth;
     return o;
 }

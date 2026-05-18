@@ -1,7 +1,7 @@
 use std::mem::size_of;
 use std::sync::{Arc, RwLock};
 
-use i3_brickmap::{GpuBrickJob, GpuPrimitive, BrickmapClipmapState, GRID_VOL, MAX_BRICKS_PER_LEVEL, NUM_LEVELS, BRICK_VOXELS};
+use i3_brickmap::{GpuBrickJob, GpuPrimitive, BrickmapClipmapState, GRID_VOL, MAX_BRICKS_PER_LEVEL, NUM_LEVELS, BRICK_DWORDS};
 use i3_gfx::prelude::*;
 use i3_io::asset::AssetLoader;
 use i3_voxel::SdfScene;
@@ -21,7 +21,7 @@ pub struct ClipmapGpuBuffers {
 impl ClipmapGpuBuffers {
     pub fn new(backend: &mut dyn RenderBackend) -> Self {
         let page_table_bytes = (NUM_LEVELS * GRID_VOL * 4) as u64;
-        let atlas_bytes      = (NUM_LEVELS * MAX_BRICKS_PER_LEVEL * BRICK_VOXELS * 4) as u64;
+        let atlas_bytes      = (NUM_LEVELS * MAX_BRICKS_PER_LEVEL * BRICK_DWORDS * 4) as u64;
 
         Self {
             page_table_buf: backend.create_buffer(&BufferDesc {
@@ -188,6 +188,7 @@ impl RenderPass for ComputeBakePass {
             DescriptorWrite::storage_buffer(0, 0, self.jobs_virt),
             DescriptorWrite::storage_buffer(0, 1, self.prims_virt),
             DescriptorWrite::storage_buffer(0, 2, self.sdf_atlas_virt),
+            DescriptorWrite::storage_buffer(0, 3, self.mat_atlas_virt),
         ]);
         ctx.bind_descriptor_set(0, set);
 

@@ -1,8 +1,11 @@
 // Brickmap GPU bake — compute shader
-// One workgroup = one brick.  Threads: [8, 8, 8] = 512 per brick.
+// One workgroup = one brick.  Threads: [9, 9, 9] = 729 per brick.
 //
 // CPU does: BVH query, centre-SDF cull, atlas-slot allocation.
-// GPU does: all 512 voxel SDF evaluations.
+// GPU does: all 729 voxel SDF evaluations + u8 quantization + packing.
+//
+// Atlas layout: u8-packed, 4 voxels per DWORD.
+// BRICK_DWORDS = ceil(729/4) = 183.  atlas_offset = byte offset in ByteAddressBuffer.
 
 // ─── Bindings ─────────────────────────────────────────────────────────────────
 
@@ -10,8 +13,8 @@ struct GpuBrickJob
 {
     float3 brick_world_min;
     float  voxel_size;
-    uint   atlas_offset;   // = (lev*MAX_BRICKS + brick_idx) * BRICK_VOXELS
-    float  half_diag;      // unused in shader, kept for layout compat
+    uint   atlas_offset;   // byte offset into ByteAddressBuffer atlas
+    float  half_diag;      // brick half-diagonal (world space), used for SDF normalization
     uint2  _pad;
 };
 
@@ -26,12 +29,14 @@ struct GpuPrimitive
     float  data2;      // half_extents.z
     uint   prim_type;  // 0=Sphere  1=Box  2=Capsule  3=Cylinder  4=Torus
     uint   subtract;   // 0 or 1
-    uint2  _pad;
+    uint   material_id;
+    uint   _pad;
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<GpuBrickJob>   jobs;
 [[vk::binding(1, 0)]] StructuredBuffer<GpuPrimitive>  prims;
-[[vk::binding(2, 0)]] RWStructuredBuffer<float>       sdf_atlas;
+[[vk::binding(2, 0)]] RWByteAddressBuffer              sdf_atlas;
+[[vk::binding(3, 0)]] RWByteAddressBuffer              mat_atlas;
 
 struct BakePushConstants
 {
@@ -42,12 +47,21 @@ struct BakePushConstants
 };
 [[vk::push_constant]] BakePushConstants pc;
 
-// ─── Primitive type constants ─────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
+
 static const uint PRIM_SPHERE   = 0u;
 static const uint PRIM_BOX      = 1u;
 static const uint PRIM_CAPSULE  = 2u;
 static const uint PRIM_CYLINDER = 3u;
 static const uint PRIM_TORUS    = 4u;
+
+static const uint BRICK_VOXELS = 729u;   // 9³
+static const uint BRICK_DWORDS = 183u;   // ceil(729/4)
+
+// ─── LDS — one slot per voxel (both atlases) ─────────────────────────────────
+
+groupshared uint lds_sdf[729];
+groupshared uint lds_mat[729];
 
 // ─── SDF functions in local (un-transformed) space ───────────────────────────
 
@@ -85,14 +99,12 @@ float sdfTorus(float3 p, float major_r, float minor_r)
 
 float evalPrimitive(float3 p_world, GpuPrimitive prim)
 {
-    // Transform to local space
     float3 pc     = p_world - float3(prim.row0.w, prim.row1.w, prim.row2.w);
     float3 p_rot  = float3(dot(prim.row0.xyz, pc),
                             dot(prim.row1.xyz, pc),
                             dot(prim.row2.xyz, pc));
     float3 p_local = p_rot * prim.inv_scale;
 
-    // Evaluate primitive SDF in local space
     float d_local;
     if (prim.prim_type == PRIM_SPHERE)
         d_local = sdfSphere(p_local, prim.data0);
@@ -102,43 +114,77 @@ float evalPrimitive(float3 p_world, GpuPrimitive prim)
         d_local = sdfCapsule(p_local, prim.data0, prim.data1);
     else if (prim.prim_type == PRIM_CYLINDER)
         d_local = sdfCylinder(p_local, prim.data0, prim.data1);
-    else // TORUS
+    else
         d_local = sdfTorus(p_local, prim.data0, prim.data1);
 
-    // Scale back to world space: d_world = d_local * scale = d_local / inv_scale
     return d_local / prim.inv_scale;
 }
 
 // ─── Compute entry point ─────────────────────────────────────────────────────
 
-// One workgroup = one brick.  9×9×9 threads produce 729 voxels per brick:
-// the inner 8×8×8 are the visible data, the extra slice on each positive face
-// is the 1-voxel overlap that gives the trilinear sampler cross-brick corners.
 [shader("compute")]
 [numthreads(9, 9, 9)]
 void csMain(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID)
 {
     GpuBrickJob job = jobs[gid.x];
 
-    // World-space position of the centre of this voxel (lid goes 0..8 inclusive).
-    // lid == 8 along an axis samples the neighbouring brick's first voxel.
     float3 p = job.brick_world_min + (float3(lid) + float3(0.5, 0.5, 0.5)) * job.voxel_size;
+
+    // ── Phase 1: evaluate SDF + track closest primitive for material ──────────
 
     float solid_d = 1e10;
     float empty_d = 1e10;
+    uint  mat_id  = 0u;
+    float min_solid_d = 1e10;
 
     for (uint i = 0u; i < pc.prim_count; i++)
     {
         float d = evalPrimitive(p, prims[i]);
         if (prims[i].subtract != 0u)
+        {
             empty_d = min(empty_d, d);
+        }
         else
+        {
             solid_d = min(solid_d, d);
+            if (d < min_solid_d)
+            {
+                min_solid_d = d;
+                mat_id = prims[i].material_id;
+            }
+        }
     }
 
     float sdf = max(solid_d, -empty_d);
 
-    // Atlas layout: stride 9 per axis (matching BRICK_VOXELS = 9³ = 729).
+    // Quantize SDF to u8: range [-half_diag, +half_diag] → [0, 255]
+    float norm = clamp(sdf / job.half_diag, -1.0, 1.0);
+    uint  sdf_byte = uint(round((norm + 1.0) * 127.5));
+
     uint vox_idx = lid.x + 9u * (lid.y + 9u * lid.z);
-    sdf_atlas[job.atlas_offset + vox_idx] = sdf;
+
+    lds_sdf[vox_idx] = sdf_byte;
+    lds_mat[vox_idx] = mat_id & 0xFFu;
+
+    // ── Phase 2: pack 4 bytes per DWORD and write to atlas ───────────────────
+
+    GroupMemoryBarrierWithGroupSync();
+
+    if (vox_idx < BRICK_DWORDS)
+    {
+        uint base = vox_idx * 4u;
+        uint b0 = lds_sdf[base];
+        uint b1 = (base + 1u < BRICK_VOXELS) ? lds_sdf[base + 1u] : 0u;
+        uint b2 = (base + 2u < BRICK_VOXELS) ? lds_sdf[base + 2u] : 0u;
+        uint b3 = (base + 3u < BRICK_VOXELS) ? lds_sdf[base + 3u] : 0u;
+        sdf_atlas.Store(job.atlas_offset + vox_idx * 4u,
+                        b0 | (b1 << 8u) | (b2 << 16u) | (b3 << 24u));
+
+        uint m0 = lds_mat[base];
+        uint m1 = (base + 1u < BRICK_VOXELS) ? lds_mat[base + 1u] : 0u;
+        uint m2 = (base + 2u < BRICK_VOXELS) ? lds_mat[base + 2u] : 0u;
+        uint m3 = (base + 3u < BRICK_VOXELS) ? lds_mat[base + 3u] : 0u;
+        mat_atlas.Store(job.atlas_offset + vox_idx * 4u,
+                        m0 | (m1 << 8u) | (m2 << 16u) | (m3 << 24u));
+    }
 }

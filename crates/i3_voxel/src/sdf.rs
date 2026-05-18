@@ -177,25 +177,28 @@ impl SdfPrimitive {
 }
 
 pub struct SdfNode {
-    pub(crate) primitive: SdfPrimitive,
-    pub(crate) world_aabb: AABB,
-    pub(crate) transform: Transform,
-    pub(crate) subtract: bool,
+    pub(crate) primitive:   SdfPrimitive,
+    pub(crate) world_aabb:  AABB,
+    pub(crate) transform:   Transform,
+    pub(crate) subtract:    bool,
+    pub(crate) material_id: u32,
 }
 
 impl SdfNode {
-    pub fn new(transform: &Transform, primitive: &SdfPrimitive, subtract: bool) -> SdfNode {
+    pub fn new(transform: &Transform, primitive: &SdfPrimitive, subtract: bool, material_id: u32) -> SdfNode {
         SdfNode {
             primitive: primitive.clone(),
             world_aabb: AABB::transform(&primitive.local_aabb(), transform),
             transform: *transform,
             subtract,
+            material_id,
         }
     }
 
-    pub fn primitive(&self) -> &SdfPrimitive { &self.primitive }
-    pub fn transform(&self) -> &Transform    { &self.transform }
-    pub fn is_subtract(&self) -> bool        { self.subtract }
+    pub fn primitive(&self)   -> &SdfPrimitive { &self.primitive }
+    pub fn transform(&self)   -> &Transform    { &self.transform }
+    pub fn is_subtract(&self) -> bool          { self.subtract }
+    pub fn material_id(&self) -> u32           { self.material_id }
 }
 
 // ─── BVH ─────────────────────────────────────────────────────────────────────
@@ -220,12 +223,22 @@ impl SdfScene {
     }
 
     pub fn add(&mut self, transform: &Transform, primitive: &SdfPrimitive) {
-        self.nodes.push(SdfNode::new(transform, primitive, false));
-        self.bvh_nodes.clear(); // invalidate BVH
+        self.nodes.push(SdfNode::new(transform, primitive, false, 0));
+        self.bvh_nodes.clear();
     }
 
     pub fn sub(&mut self, transform: &Transform, primitive: &SdfPrimitive) {
-        self.nodes.push(SdfNode::new(transform, primitive, true));
+        self.nodes.push(SdfNode::new(transform, primitive, true, 0));
+        self.bvh_nodes.clear();
+    }
+
+    pub fn add_mat(&mut self, transform: &Transform, primitive: &SdfPrimitive, material_id: u32) {
+        self.nodes.push(SdfNode::new(transform, primitive, false, material_id));
+        self.bvh_nodes.clear();
+    }
+
+    pub fn sub_mat(&mut self, transform: &Transform, primitive: &SdfPrimitive, material_id: u32) {
+        self.nodes.push(SdfNode::new(transform, primitive, true, material_id));
         self.bvh_nodes.clear();
     }
 
