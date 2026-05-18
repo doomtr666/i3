@@ -335,6 +335,11 @@ impl SdfScene {
 
     pub fn nodes(&self) -> &[SdfNode] { &self.nodes }
 
+    pub fn nodes_mut(&mut self) -> &mut Vec<SdfNode> {
+        self.bvh_nodes.clear();
+        &mut self.nodes
+    }
+
     pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
         let mut solid_dist = f32::MAX;
         let mut empty_dist = f32::MAX;

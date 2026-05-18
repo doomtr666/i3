@@ -166,24 +166,58 @@ float sampleSdfLevelGrad(float3 p, uint lev, out float3 grad)
 }
 
 // ─── Material sampling ────────────────────────────────────────────────────────
-// Returns the material ID at the voxel nearest to p in the given level.
+// Trilinear blend of material properties weighted by surface proximity.
+// Corners with sdf < 0 (inside solid) contribute fully;
+// corners outside attenuate with exp(-sdf / vs) over ~1 voxel width.
 
-uint sampleMatLevel(float3 p, uint lev)
+Material sampleMatBlended(float3 p, uint lev)
 {
     uint   base_bytes;
     int3   vi;
     float3 fr;
     float  half_diag;
     if (!brickLookup(p, lev, base_bytes, vi, fr, half_diag))
-        return 0u;
+        return kMaterials[0];
 
-    // Nearest voxel (round fractions)
-    int3 vn = vi + int3(fr.x > 0.5 ? 1 : 0, fr.y > 0.5 ? 1 : 0, fr.z > 0.5 ? 1 : 0);
-    vn = clamp(vn, int3(0), int3(int(BRICK_DIM) - 1, int(BRICK_DIM) - 1, int(BRICK_DIM) - 1));
+    float vs = pc.levels[lev].voxel_size;
+    uint  bd = BRICK_DIM + 1u;
 
-    uint bd = BRICK_DIM + 1u;
-    uint vox_flat = uint(vn.x) + bd * (uint(vn.y) + bd * uint(vn.z));
-    return loadMatVoxel(base_bytes, vox_flat);
+    Material result;
+    result.albedo    = float3(0.0, 0.0, 0.0);
+    result.roughness = 0.0;
+    result.metalness = 0.0;
+    float total_w = 0.0;
+
+    for (uint iz = 0u; iz <= 1u; iz++)
+    for (uint iy = 0u; iy <= 1u; iy++)
+    for (uint ix = 0u; ix <= 1u; ix++)
+    {
+        uint  vf  = uint(vi.x + ix) + bd * (uint(vi.y + iy) + bd * uint(vi.z + iz));
+        float sd  = loadSdfVoxel(base_bytes, vf, half_diag);
+        uint  mid = loadMatVoxel(base_bytes, vf);
+
+        float wx = (ix == 0u) ? (1.0 - fr.x) : fr.x;
+        float wy = (iy == 0u) ? (1.0 - fr.y) : fr.y;
+        float wz = (iz == 0u) ? (1.0 - fr.z) : fr.z;
+        float w  = wx * wy * wz * exp(-max(sd, 0.0) / vs);
+
+        Material m = kMaterials[min(mid, 7u)];
+        result.albedo    += m.albedo    * w;
+        result.roughness += m.roughness * w;
+        result.metalness += m.metalness * w;
+        total_w          += w;
+    }
+
+    if (total_w > 1e-6)
+    {
+        result.albedo    /= total_w;
+        result.roughness /= total_w;
+        result.metalness /= total_w;
+    }
+    else
+        result = kMaterials[0];
+
+    return result;
 }
 
 // ─── Level sampling with transition blending ──────────────────────────────────
@@ -215,7 +249,7 @@ float sampleFinest(float3 p, out uint lev_out)
             {
                 float d_next = sampleSdfLevel(p, lev + 1u);
                 if (d_next < 9e9)
-                    d = lerp(d, d_next, alpha);
+                    d = lerp(d, min(d, d_next), alpha);
             }
         }
         return d;
@@ -248,7 +282,8 @@ float3 normalFinest(float3 p, uint lev)
         {
             float3 grad_next;
             float d_next = sampleSdfLevelGrad(p, lev + 1u, grad_next);
-            if (d_next < 9e9)
+            float vs_next = pc.levels[lev + 1u].voxel_size;
+            if (d_next < 9e9 && d_next < vs_next * 2.0)
             {
                 float  t_n    = clamp((t - (1.0 - LEVEL_BLEND)) / LEVEL_BLEND, 0.0, 1.0);
                 float  da_dt  = 6.0 * t_n * (1.0 - t_n) / LEVEL_BLEND;
@@ -358,9 +393,8 @@ GBufferOut fsMain(float4 svPos: SV_Position)
     float4 clip    = mul(g_common.viewProjection, float4(hitPos, 1.0));
     float  ndcDepth = clip.z / clip.w;
 
-    // Material lookup
-    uint     mat_id = sampleMatLevel(hitPos, hit_lev);
-    Material mat    = kMaterials[min(mat_id, 7u)];
+    // Material lookup — trilinear blend weighted by surface proximity
+    Material mat = sampleMatBlended(hitPos, hit_lev);
 
     GBufferOut o;
     o.albedo = float4(mat.albedo, 1.0);

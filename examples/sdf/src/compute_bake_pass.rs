@@ -98,8 +98,8 @@ impl RenderPass for ComputeBakePass {
     fn name(&self) -> &str { "ComputeBakePass" }
 
     fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder) {
-        // Worst case: budget × NUM_LEVELS jobs per frame (6 × 256 = 1536 → round to 2048)
-        let max_jobs  = 2048usize;
+        // Worst case: budget × NUM_LEVELS jobs per frame (6 × 512 = 3072 → round to 4096)
+        let max_jobs  = 4096usize;
         let max_prims = 256usize;
 
         self.jobs_buf = backend.create_buffer(&BufferDesc {
@@ -148,7 +148,7 @@ impl RenderPass for ComputeBakePass {
         let scene = self.clipmap_scene.read().unwrap();
         let (jobs, prims) = {
             let mut cm = self.clipmap_state.write().unwrap();
-            cm.prepare_gpu_bake(&scene, 256)
+            cm.prepare_gpu_bake(&scene, 512)
         };
 
         if jobs.is_empty() { return; }
@@ -161,7 +161,7 @@ impl RenderPass for ComputeBakePass {
             if !ptr.is_null() {
                 unsafe {
                     let dst = ptr as *mut GpuBrickJob;
-                    let n = jobs.len().min(2048);
+                    let n = jobs.len().min(4096);
                     std::ptr::copy_nonoverlapping(jobs.as_ptr(), dst, n);
                 }
                 ctx.unmap_buffer(self.jobs_virt);
@@ -195,7 +195,7 @@ impl RenderPass for ComputeBakePass {
         let pc = BakePushConstants { prim_count, _pad: [0; 3] };
         ctx.push_constant_data(ShaderStageFlags::Compute, 0, &pc);
 
-        let dispatch_count = jobs.len().min(2048) as u32;
+        let dispatch_count = jobs.len().min(4096) as u32;
         ctx.dispatch(dispatch_count, 1, 1);
 
         tracing::debug!("ComputeBakePass: dispatched {}/{} bricks, {} prims", dispatch_count, jobs.len(), prim_count);

@@ -25,6 +25,14 @@ use tracing::warn;
 use clipmap_pass::ClipmapGBufferPass;
 use compute_bake_pass::{ClipmapGpuBuffers, ComputeBakePass};
 
+// ─── Edit operation (persisted across gem rebuilds) ───────────────────────────
+
+struct EditOp {
+    transform:   i3_math::Transform,
+    primitive:   i3_voxel::SdfPrimitive,
+    subtract:    bool,
+}
+
 // ─── Clipmap scene builder ────────────────────────────────────────────────────
 
 fn build_clipmap_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
@@ -88,6 +96,19 @@ fn build_clipmap_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
     scene
 }
 
+fn build_full_scene(gem_pos: [f32; 3], edits: &[EditOp]) -> i3_voxel::SdfScene {
+    let mut scene = build_clipmap_scene(gem_pos);
+    for edit in edits {
+        if edit.subtract {
+            scene.sub(&edit.transform, &edit.primitive);
+        } else {
+            scene.add(&edit.transform, &edit.primitive);
+        }
+    }
+    scene.build_bvh();
+    scene
+}
+
 // ─── SdfApp ───────────────────────────────────────────────────────────────────
 
 struct SdfApp {
@@ -108,6 +129,7 @@ struct SdfApp {
     dig_radius:     f32,
     gem_pos_last:   [f32; 3],
     pending_action: Option<bool>,
+    edits:          Vec<EditOp>,
 }
 
 impl ExampleApp for SdfApp {
@@ -133,7 +155,7 @@ impl ExampleApp for SdfApp {
                     + (new_gem[1]-prev[1]).powi(2)
                     + (new_gem[2]-prev[2]).powi(2)).sqrt();
             if d > 0.05 {
-                *self.clipmap_scene.write().unwrap() = build_clipmap_scene(new_gem);
+                *self.clipmap_scene.write().unwrap() = build_full_scene(new_gem, &self.edits);
                 let mut cm = self.clipmap_state.write().unwrap();
                 cm.invalidate_sphere(prev, 0.7);
                 cm.invalidate_sphere(new_gem, 0.7);
@@ -228,7 +250,7 @@ impl ExampleApp for SdfApp {
         self.camera.handle_event(event);
         match event {
             Event::MouseDown { button: 1, .. } => self.pending_action = Some(true),
-            Event::MouseDown { button: 3, .. } => self.pending_action = Some(false),
+            Event::MouseDown { button: 2, .. } => self.pending_action = Some(false),
             _ => {}
         }
     }
@@ -270,13 +292,34 @@ impl SdfApp {
                 1.0,
             );
             let sphere = SdfPrimitive::Sphere { radius: self.dig_radius };
-            {
-                let mut scene = self.clipmap_scene.write().unwrap();
-                if is_dig { scene.sub(&xf, &sphere); } else { scene.add(&xf, &sphere); }
-                scene.build_bvh();
-            }
             let center = [hit.x, hit.y, hit.z];
-            self.clipmap_state.write().unwrap().invalidate_sphere(center, self.dig_radius);
+
+            if !is_dig {
+                // Fill: remove subtract edits near the fill point, then rebuild the scene.
+                // Removing the subtract restores the underlying solid — no fill sphere needed.
+                let thr_sq = (self.dig_radius * 1.5f32).powi(2);
+                self.edits.retain(|e| {
+                    if !e.subtract { return true; }
+                    let tx = e.transform.translation();
+                    let d2 = (tx.x - hit.x).powi(2)
+                            + (tx.y - hit.y).powi(2)
+                            + (tx.z - hit.z).powi(2);
+                    d2 > thr_sq
+                });
+                *self.clipmap_scene.write().unwrap() =
+                    build_full_scene(self.gem_pos_last, &self.edits);
+            } else {
+                let mut scene = self.clipmap_scene.write().unwrap();
+                scene.sub(&xf, &sphere);
+                scene.build_bvh();
+                drop(scene);
+                self.edits.push(EditOp { transform: xf, primitive: sphere, subtract: true });
+            }
+
+            // Fill: hit is on the hole surface, not the dig center → use 2.5× radius so
+            // the entire dug sphere (up to dig_radius away) is covered by the invalidation.
+            let inv_radius = if is_dig { self.dig_radius } else { self.dig_radius * 2.5 };
+            self.clipmap_state.write().unwrap().invalidate_sphere(center, inv_radius);
             tracing::info!(
                 "{} at ({:.2}, {:.2}, {:.2}) r={:.2}",
                 if is_dig { "DIG" } else { "FILL" },
@@ -382,6 +425,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         dig_radius:     1.0,
         gem_pos_last:   [3.35, 2.38, -0.5],
         pending_action: None,
+        edits:          Vec::new(),
     });
 
     Ok(())
