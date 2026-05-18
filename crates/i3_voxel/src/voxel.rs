@@ -7,13 +7,13 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 pub(crate) const VOXEL_BLOCK_WIDTH: i32 = 31;
-const VOXEL_BLOCK_PADDED_WIDTH: i32 = VOXEL_BLOCK_WIDTH + 1;
+const VOXEL_BLOCK_PADDED_WIDTH: i32 = VOXEL_BLOCK_WIDTH + 2;
 const VOXEL_BLOCK_PADDED_WIDTH2: i32 = VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH;
 const VOXEL_BLOCK_PADDED_SIZE: i32 =
     VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH;
 
-// SDF cache covers [-1, BLOCK_WIDTH] per axis = BLOCK_WIDTH+2 points per axis.
-const VOXEL_SDF_CACHE_WIDTH: i32 = VOXEL_BLOCK_WIDTH + 2;
+// SDF cache covers [-1, BLOCK_WIDTH + 1] per axis = BLOCK_WIDTH+3 points per axis.
+const VOXEL_SDF_CACHE_WIDTH: i32 = VOXEL_BLOCK_WIDTH + 3;
 const VOXEL_SDF_CACHE_SIZE: usize =
     (VOXEL_SDF_CACHE_WIDTH * VOXEL_SDF_CACHE_WIDTH * VOXEL_SDF_CACHE_WIDTH) as usize;
 
@@ -82,9 +82,9 @@ fn fill_sdf_cache_impl(
     cache: &mut [f32],
     wp: &impl Fn(i32, i32, i32) -> Point3<f32>,
 ) {
-    for z in -1..=VOXEL_BLOCK_WIDTH {
-        for y in -1..=VOXEL_BLOCK_WIDTH {
-            for x in -1..=VOXEL_BLOCK_WIDTH {
+    for z in -1..=(VOXEL_BLOCK_WIDTH + 1) {
+        for y in -1..=(VOXEL_BLOCK_WIDTH + 1) {
+            for x in -1..=(VOXEL_BLOCK_WIDTH + 1) {
                 cache[sdf_cache_idx(x, y, z)] = SdfScene::value(sdf_nodes, &wp(x, y, z));
             }
         }
@@ -98,9 +98,9 @@ fn compute_vertices_impl(
     valid: &mut [bool],
     wp: &impl Fn(i32, i32, i32) -> Point3<f32>,
 ) {
-    for z in -1..=(VOXEL_BLOCK_WIDTH - 1) {
-        for y in -1..=(VOXEL_BLOCK_WIDTH - 1) {
-            for x in -1..=(VOXEL_BLOCK_WIDTH - 1) {
+    for z in -1..=VOXEL_BLOCK_WIDTH {
+        for y in -1..=VOXEL_BLOCK_WIDTH {
+            for x in -1..=VOXEL_BLOCK_WIDTH {
                 let mut corners = [Point3::origin(); 8];
                 let mut values = [0.0f32; 8];
                 for i in 0..8 {
@@ -174,9 +174,9 @@ fn compute_indices_impl(
     packed_vertices: &mut Vec<VoxelVertex>,
     packed_indices: &mut Vec<u32>,
 ) {
-    for z in 0..VOXEL_BLOCK_WIDTH {
-        for y in 0..VOXEL_BLOCK_WIDTH {
-            for x in 0..VOXEL_BLOCK_WIDTH {
+    for z in 0..=VOXEL_BLOCK_WIDTH {
+        for y in 0..=VOXEL_BLOCK_WIDTH {
+            for x in 0..=VOXEL_BLOCK_WIDTH {
                 let sv   = sdf_cache[sdf_cache_idx(x,     y,     z    )];
                 let xp_v = sdf_cache[sdf_cache_idx(x + 1, y,     z    )];
                 let yp_v = sdf_cache[sdf_cache_idx(x,     y + 1, z    )];
@@ -247,6 +247,7 @@ fn emit_quad(
 pub(crate) fn generate_mesh_from_sdf(
     sdf: &SdfScene,
     query_aabb: AABB,
+    voxel_dist: f32,
     wp: impl Fn(i32, i32, i32) -> Point3<f32>,
     packed_vertices: &mut Vec<VoxelVertex>,
     packed_indices: &mut Vec<u32>,
@@ -271,6 +272,66 @@ pub(crate) fn generate_mesh_from_sdf(
             });
         });
     });
+
+    // Generate skirts to hide LOD seams. Extrude boundary edges inwards by 4.0 * voxel_dist.
+    generate_skirts(packed_vertices, packed_indices, voxel_dist * 4.0);
+}
+
+fn generate_skirts(packed_vertices: &mut Vec<VoxelVertex>, packed_indices: &mut Vec<u32>, skirt_length: f32) {
+    use std::collections::HashMap;
+
+    let mut edge_counts = HashMap::new();
+
+    for chunk in packed_indices.chunks_exact(3) {
+        let i0 = chunk[0];
+        let i1 = chunk[1];
+        let i2 = chunk[2];
+        
+        *edge_counts.entry((i0, i1)).or_insert(0) += 1;
+        *edge_counts.entry((i1, i2)).or_insert(0) += 1;
+        *edge_counts.entry((i2, i0)).or_insert(0) += 1;
+    }
+
+    let mut boundary_edges = Vec::new();
+    for (&(i0, i1), &count) in &edge_counts {
+        if count == 1 && !edge_counts.contains_key(&(i1, i0)) {
+            boundary_edges.push((i0, i1));
+        }
+    }
+
+    let mut skirt_vertex_map = HashMap::new();
+
+    for (i0, i1) in boundary_edges {
+        // Need to get/create skirt vertices
+        // We use a local helper closure, but since we need to mutate packed_vertices and skirt_vertex_map,
+        // we'll just do it directly.
+        let s0 = if let Some(&s) = skirt_vertex_map.get(&i0) {
+            s
+        } else {
+            let orig_v = &packed_vertices[i0 as usize];
+            let mut skirt_v = orig_v.clone();
+            skirt_v.position -= orig_v.normal * skirt_length;
+            let new_idx = packed_vertices.len() as u32;
+            packed_vertices.push(skirt_v);
+            skirt_vertex_map.insert(i0, new_idx);
+            new_idx
+        };
+
+        let s1 = if let Some(&s) = skirt_vertex_map.get(&i1) {
+            s
+        } else {
+            let orig_v = &packed_vertices[i1 as usize];
+            let mut skirt_v = orig_v.clone();
+            skirt_v.position -= orig_v.normal * skirt_length;
+            let new_idx = packed_vertices.len() as u32;
+            packed_vertices.push(skirt_v);
+            skirt_vertex_map.insert(i1, new_idx);
+            new_idx
+        };
+
+        // Winding for outward-facing skirt: i1, i0, s0, s1
+        packed_indices.extend([i1, i0, s0, i1, s0, s1]);
+    }
 }
 
 // ─── VoxelBlock (legacy flat-grid block, kept for backward compat) ─────────────
@@ -324,6 +385,7 @@ impl VoxelBlock {
         generate_mesh_from_sdf(
             &sdf,
             local_aabb,
+            VOXEL_DIST,
             |x, y, z| point![
                 (px * VOXEL_BLOCK_WIDTH + x) as f32 * VOXEL_DIST,
                 (py * VOXEL_BLOCK_WIDTH + y) as f32 * VOXEL_DIST,

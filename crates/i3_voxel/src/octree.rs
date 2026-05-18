@@ -89,6 +89,7 @@ impl OctreeNode {
         generate_mesh_from_sdf(
             sdf,
             node_aabb.expand(2.0 * voxel_dist),
+            voxel_dist,
             move |x, y, z| {
                 Point3::new(
                     center.x - half_size + x as f32 * voxel_dist,

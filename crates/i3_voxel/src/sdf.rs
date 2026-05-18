@@ -203,11 +203,11 @@ impl SdfNode {
 
 // ─── BVH ─────────────────────────────────────────────────────────────────────
 
-struct BvhNode {
-    aabb:     AABB,
-    left:     u32,     // index in bvh_nodes[]; u32::MAX = leaf
-    right:    u32,
-    prim_idx: u32,     // index in nodes[]; valid only when left == u32::MAX
+pub struct BvhNode {
+    pub aabb:     AABB,
+    pub left:     u32,     // index in bvh_nodes[]; u32::MAX = leaf
+    pub right:    u32,
+    pub prim_idx: u32,     // index in nodes[]; valid only when left == u32::MAX
 }
 
 // ─── SdfScene ─────────────────────────────────────────────────────────────────
@@ -334,6 +334,7 @@ impl SdfScene {
     }
 
     pub fn nodes(&self) -> &[SdfNode] { &self.nodes }
+    pub fn bvh_nodes(&self) -> &[BvhNode] { &self.bvh_nodes }
 
     pub fn nodes_mut(&mut self) -> &mut Vec<SdfNode> {
         self.bvh_nodes.clear();
