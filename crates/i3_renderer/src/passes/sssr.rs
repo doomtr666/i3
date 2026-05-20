@@ -243,6 +243,7 @@ pub struct SssrCompositePass {
     ao_resolved: ImageHandle,
     hdr_target: ImageHandle,
     common_buffer: BufferHandle,
+    exposure_buffer: BufferHandle,
 }
 
 impl SssrCompositePass {
@@ -258,6 +259,7 @@ impl SssrCompositePass {
             ao_resolved: ImageHandle::INVALID,
             hdr_target: ImageHandle::INVALID,
             common_buffer: BufferHandle::INVALID,
+            exposure_buffer: BufferHandle::INVALID,
         }
     }
 }
@@ -288,6 +290,7 @@ impl RenderPass for SssrCompositePass {
         self.ao_resolved = builder.resolve_image("AO_Resolved");
         self.hdr_target = builder.resolve_image("HDR_Target");
         self.common_buffer = builder.resolve_buffer("CommonBuffer");
+        self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
 
         builder.read_image(self.depth_buffer, ResourceUsage::SHADER_READ);
         builder.read_image(self.gbuffer_normal, ResourceUsage::SHADER_READ);
@@ -297,6 +300,7 @@ impl RenderPass for SssrCompositePass {
         builder.read_image(self.ao_resolved, ResourceUsage::SHADER_READ);
         builder.read_image(self.hdr_target, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.common_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.exposure_buffer, ResourceUsage::SHADER_READ);
         builder.write_image(self.hdr_target, ResourceUsage::SHADER_WRITE);
     }
 
@@ -370,6 +374,11 @@ impl RenderPass for SssrCompositePass {
                     0,
                     self.hdr_target,
                     DescriptorImageLayout::General,
+                ),
+                DescriptorWrite::storage_buffer(
+                    7,
+                    0,
+                    self.exposure_buffer,
                 ),
             ],
         );

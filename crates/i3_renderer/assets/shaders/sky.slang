@@ -1,5 +1,7 @@
 // assets/system/shaders/sky.slang
 #include "common.slangh"
+[[vk::binding(0, 0)]]
+StructuredBuffer<ExposureData> exposure_buffer;
 struct VertexOutput
 {
     float4 position : SV_Position;
@@ -57,6 +59,10 @@ float4 fragmentMain(VertexOutput input) : SV_Target
         // Procedural sky fallback
         color = get_sky_color(dir, -g_common.GetSunDir(), g_common.GetSunColor() * g_common.GetSunIntensity());
     }
+
+    float prev_ex = exposure_buffer[0].new_exposure;
+    if (prev_ex == 0.0) { prev_ex = 1.0; }
+    color *= prev_ex;
 
     return float4(color, 1.0);
 }

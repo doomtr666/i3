@@ -257,6 +257,8 @@ pub(crate) fn generate_mesh_from_sdf(
         return;
     }
 
+    crate::sdf::clear_terrain_cache();
+
     SDF_SCRATCH.with(|sc| {
         VERTEX_SCRATCH.with(|vc| {
             VERTEX_MAP_SCRATCH.with(|vm| {

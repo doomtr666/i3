@@ -10,6 +10,7 @@ pub struct SkyPass {
 
     pipeline:      Option<BackendPipeline>,
     common_buffer: BufferHandle,
+    exposure_buffer: BufferHandle,
 }
 impl SkyPass {
     pub fn new() -> Self {
@@ -17,6 +18,7 @@ impl SkyPass {
             hdr_target:    ImageHandle::INVALID,
             depth_buffer:  ImageHandle::INVALID,
             common_buffer: BufferHandle::INVALID,
+            exposure_buffer: BufferHandle::INVALID,
             pipeline:      None,
         }
     }
@@ -65,8 +67,10 @@ impl RenderPass for SkyPass {
         );
         self.depth_buffer = builder.resolve_image("DepthBuffer");
         self.common_buffer = builder.resolve_buffer("CommonBuffer");
+        self.exposure_buffer = builder.read_buffer_history("ExposureBuffer");
 
         builder.read_buffer(self.common_buffer, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.exposure_buffer, ResourceUsage::SHADER_READ);
         builder.write_image(self.hdr_target, ResourceUsage::COLOR_ATTACHMENT);
         builder.write_image(self.depth_buffer, ResourceUsage::DEPTH_STENCIL);
     }
@@ -77,6 +81,12 @@ impl RenderPass for SkyPass {
             return;
         };
 
+        let ds = ctx.create_descriptor_set(
+            pipeline,
+            0,
+            &[DescriptorWrite::storage_buffer(0, 0, self.exposure_buffer)],
+        );
+
         let common_set = ctx.create_descriptor_set(
             pipeline,
             1,
@@ -86,6 +96,7 @@ impl RenderPass for SkyPass {
         let bindless_set = *frame.consume::<DescriptorSetHandle>("BindlessSet");
 
         ctx.bind_pipeline_raw(pipeline);
+        ctx.bind_descriptor_set(0, ds);
         ctx.bind_descriptor_set(1, common_set);
         ctx.bind_descriptor_set(2, bindless_set);
         ctx.draw(3, 0); // Fullscreen triangle

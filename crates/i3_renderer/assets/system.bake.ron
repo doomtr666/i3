@@ -21,11 +21,11 @@ BakeManifest(
     material_sets: [
         (
             name: "grass",
-            albedo: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_Color.png"),
-            normal: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_NormalGL.png"),
-            roughness: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_Roughness.png"),
+            albedo: Some("../../../assets/textures/Ground037_1K-PNG/Ground037_1K-PNG_Color.png"),
+            normal: Some("../../../assets/textures/Ground037_1K-PNG/Ground037_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/Ground037_1K-PNG/Ground037_1K-PNG_Roughness.png"),
             metallic: None,
-            occlusion: Some("../../../assets/textures/Grass005_1K-PNG/Grass005_1K-PNG_AmbientOcclusion.png"),
+            occlusion: Some("../../../assets/textures/Ground037_1K-PNG/Ground037_1K-PNG_AmbientOcclusion.png"),
         ),
         (
             name: "rock",

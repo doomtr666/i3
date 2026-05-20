@@ -1,5 +1,5 @@
 use i3_math::nalgebra::Vector3;
-use i3_voxel::{SdfPrimitive, SdfScene};
+use i3_voxel::{BvhNode, SdfPrimitive, SdfScene};
 
 // ─── GpuBrickJob ─────────────────────────────────────────────────────────────
 // One entry per brick to bake this frame.  Uploaded to a CpuToGpu buffer,
@@ -110,4 +110,30 @@ pub fn pack_node(node: &i3_voxel::SdfNode) -> Option<GpuPrimitive> {
 /// Pack every node in a scene (skips TerrainBox).
 pub fn pack_scene(scene: &SdfScene) -> Vec<GpuPrimitive> {
     scene.nodes().iter().filter_map(pack_node).collect()
+}
+
+// ─── GpuBvhNode ──────────────────────────────────────────────────────────────
+
+/// 32-byte BVH node for GPU traversal.
+/// Leaf: left == u32::MAX, right_or_prim = primitive index.
+/// Internal: left/right = child indices.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GpuBvhNode {
+    pub aabb_min:      [f32; 3],
+    pub left:          u32,
+    pub aabb_max:      [f32; 3],
+    pub right_or_prim: u32,
+}
+
+pub fn pack_bvh(scene: &SdfScene) -> Vec<GpuBvhNode> {
+    scene.bvh_nodes().iter().map(|n: &BvhNode| {
+        let right_or_prim = if n.left == u32::MAX { n.prim_idx } else { n.right };
+        GpuBvhNode {
+            aabb_min:      [n.aabb.min.x, n.aabb.min.y, n.aabb.min.z],
+            left:          n.left,
+            aabb_max:      [n.aabb.max.x, n.aabb.max.y, n.aabb.max.z],
+            right_or_prim,
+        }
+    }).collect()
 }

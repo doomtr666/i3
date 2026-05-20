@@ -19,11 +19,8 @@ struct VertexOutput
     float3 worldBitangent : BITANGENT;
     float2 uv : TEXCOORD0;
     float3 worldPos : WORLDPOS;
-    [[vk::flat]]
     uint materialId : MAT_ID;
-    [[vk::flat]]
     uint voxelFlags : VOXEL_FLAGS;
-    [[vk::flat]]
     uint voxelPad : VOXEL_PAD;
 };
 
@@ -102,34 +99,76 @@ float2 hash22(float2 p)
     return frac((p3.xx + p3.yz) * p3.zy);
 }
 
-float4 SampleHexTiled(int texIndex, float2 uv)
+float4 SampleHexTiled(int texIndex, float2 uv, float2 dx, float2 dy)
 {
-    if (texIndex < 0) return float4(1.0);
-    
+    if (texIndex < 0)
+        return float4(1.0);
+
+    uv *= 10.0f;
+    dx *= 10.0f;
+    dy *= 10.0f;
+
     float2 grid = float2(1.0, sqrt(3.0));
     float2 uv2 = uv / grid;
-    
+
     float2 center1 = floor(uv2) + 0.5;
     float2 center2 = floor(uv2 + 0.5);
-    
+
     float2 offset1 = uv - center1 * grid;
     float2 offset2 = uv - center2 * grid;
-    
+
     float2 center = dot(offset1, offset1) < dot(offset2, offset2) ? center1 : center2;
     float2 offset = uv - center * grid;
-    
+
     float2 h = hash22(center) * 2.0 - 1.0;
     float angle = h.x * PI;
     float2 rotUv = float2(
         offset.x * cos(angle) - offset.y * sin(angle),
-        offset.x * sin(angle) + offset.y * cos(angle)
-    );
-    
+        offset.x * sin(angle) + offset.y * cos(angle));
+
     float2 finalUv = rotUv + h * 0.5;
-    float2 dx = ddx(uv);
-    float2 dy = ddy(uv);
-    
+
     return bindlessTextures[texIndex].SampleGrad(bindlessSamplers[SAMPLER_ANISO], finalUv, dx, dy);
+}
+
+float2 SampleHexTiledNormal(int texIndex, float2 uv, float2 dx, float2 dy)
+{
+    if (texIndex < 0)
+        return float2(0.0);
+
+    uv *= 10.0f;
+    dx *= 10.0f;
+    dy *= 10.0f;
+
+    float2 grid = float2(1.0, sqrt(3.0));
+    float2 uv2 = uv / grid;
+
+    float2 center1 = floor(uv2) + 0.5;
+    float2 center2 = floor(uv2 + 0.5);
+
+    float2 offset1 = uv - center1 * grid;
+    float2 offset2 = uv - center2 * grid;
+
+    float2 center = dot(offset1, offset1) < dot(offset2, offset2) ? center1 : center2;
+    float2 offset = uv - center * grid;
+
+    float2 h = hash22(center) * 2.0 - 1.0;
+    float angle = h.x * PI;
+    float2 rotUv = float2(
+        offset.x * cos(angle) - offset.y * sin(angle),
+        offset.x * sin(angle) + offset.y * cos(angle));
+
+    float2 finalUv = rotUv + h * 0.5;
+
+    float2 rawNormal = bindlessTextures[texIndex].SampleGrad(bindlessSamplers[SAMPLER_ANISO], finalUv, dx, dy).rg * 2.0 - 1.0;
+
+    // Rotate the tangent-space normal vector to align with the un-rotated surface tangent space
+    float cosA = cos(-angle);
+    float sinA = sin(-angle);
+    return float2(
+        rawNormal.x * cosA - rawNormal.y * sinA,
+        rawNormal.x * sinA + rawNormal.y * cosA
+    );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -138,43 +177,59 @@ float4 SampleHexTiled(int texIndex, float2 uv)
 
 void EvaluateVoxelMaterial(
     MaterialData mat, float3 p, float3 w, float3 worldNormal,
+    float3 dpdx, float3 dpdy,
     out float4 albedo, out float3 normal, out float4 rmao)
 {
-    float texScale = 0.05; 
+    float texScale = 0.05;
     float2 uvX = p.zy * texScale;
     float2 uvY = p.xz * texScale;
     float2 uvZ = p.xy * texScale;
 
+    float2 dxX = dpdx.zy * texScale;
+    float2 dyX = dpdy.zy * texScale;
+
+    float2 dxY = dpdx.xz * texScale;
+    float2 dyY = dpdy.xz * texScale;
+
+    float2 dxZ = dpdx.xy * texScale;
+    float2 dyZ = dpdy.xy * texScale;
+
     albedo = float4(1.0);
-    if (mat.textureIndices.x >= 0) {
-        float4 cx = SampleHexTiled(mat.textureIndices.x, uvX);
-        float4 cy = SampleHexTiled(mat.textureIndices.x, uvY);
-        float4 cz = SampleHexTiled(mat.textureIndices.x, uvZ);
+    if (mat.textureIndices.x >= 0)
+    {
+        float4 cx = SampleHexTiled(mat.textureIndices.x, uvX, dxX, dyX);
+        float4 cy = SampleHexTiled(mat.textureIndices.x, uvY, dxY, dyY);
+        float4 cz = SampleHexTiled(mat.textureIndices.x, uvZ, dxZ, dyZ);
         albedo = cx * w.x + cy * w.y + cz * w.z;
     }
 
-    rmao = float4(0.0, 1.0, 0.0, 1.0); 
-    if (mat.textureIndices.z >= 0) {
-        float4 cx = SampleHexTiled(mat.textureIndices.z, uvX);
-        float4 cy = SampleHexTiled(mat.textureIndices.z, uvY);
-        float4 cz = SampleHexTiled(mat.textureIndices.z, uvZ);
+    rmao = float4(0.0, 1.0, 0.0, 1.0);
+    if (mat.textureIndices.z >= 0)
+    {
+        float4 cx = SampleHexTiled(mat.textureIndices.z, uvX, dxX, dyX);
+        float4 cy = SampleHexTiled(mat.textureIndices.z, uvY, dxY, dyY);
+        float4 cz = SampleHexTiled(mat.textureIndices.z, uvZ, dxZ, dyZ);
         rmao = cx * w.x + cy * w.y + cz * w.z;
     }
 
     normal = worldNormal;
-    if (mat.textureIndices.y >= 0) {
-        float2 nx = SampleHexTiled(mat.textureIndices.y, uvX).rg * 2.0 - 1.0;
-        float2 ny = SampleHexTiled(mat.textureIndices.y, uvY).rg * 2.0 - 1.0;
-        float2 nz = SampleHexTiled(mat.textureIndices.y, uvZ).rg * 2.0 - 1.0;
-        
+    if (mat.textureIndices.y >= 0)
+    {
+        float2 nx = SampleHexTiledNormal(mat.textureIndices.y, uvX, dxX, dyX);
+        float2 ny = SampleHexTiledNormal(mat.textureIndices.y, uvY, dxY, dyY);
+        float2 nz = SampleHexTiledNormal(mat.textureIndices.y, uvZ, dxZ, dyZ);
+
         float3 tx = float3(nx, sqrt(max(0.0, 1.0 - dot(nx, nx))));
         float3 ty = float3(ny, sqrt(max(0.0, 1.0 - dot(ny, ny))));
         float3 tz = float3(nz, sqrt(max(0.0, 1.0 - dot(nz, nz))));
-        
-        float3 blendNormalX = float3(worldNormal.x, worldNormal.y + tx.y, worldNormal.z + tx.x);
-        float3 blendNormalY = float3(worldNormal.x + ty.x, worldNormal.y, worldNormal.z + ty.y);
-        float3 blendNormalZ = float3(worldNormal.x + tz.x, worldNormal.y + tz.y, worldNormal.z);
-        
+
+        float3 normalizedNormal = normalize(worldNormal);
+
+        // Sign flip correction for negative faces to keep lighting consistent
+        float3 blendNormalX = float3(normalizedNormal.x, normalizedNormal.y + tx.y, normalizedNormal.z + tx.x * sign(normalizedNormal.x));
+        float3 blendNormalY = float3(normalizedNormal.x + ty.x, normalizedNormal.y, normalizedNormal.z + ty.y * sign(normalizedNormal.y));
+        float3 blendNormalZ = float3(normalizedNormal.x + tz.x * sign(normalizedNormal.z), normalizedNormal.y + tz.y, normalizedNormal.z);
+
         normal = normalize(blendNormalX * w.x + blendNormalY * w.y + blendNormalZ * w.z);
     }
 }
@@ -182,6 +237,9 @@ void EvaluateVoxelMaterial(
 [shader("fragment")]
 GBufferOutput fragmentMain(VertexOutput input)
 {
+    float3 dpdx = ddx(input.worldPos);
+    float3 dpdy = ddy(input.worldPos);
+
     // Important: Only render voxel chunks!
     if (input.materialId != 0xFFFFFFFEu)
     {
@@ -220,18 +278,36 @@ GBufferOutput fragmentMain(VertexOutput input)
     float3 nGrass, nRock, nDirt;
     float4 rmaoGrass, rmaoRock, rmaoDirt;
 
-    if (wGrass > 0.01) EvaluateVoxelMaterial(mGrass, input.worldPos, blendW, input.worldNormal, aGrass, nGrass, rmaoGrass);
-    else { aGrass = float4(0); nGrass = float3(0); rmaoGrass = float4(0); }
+    if (wGrass > 0.01)
+        EvaluateVoxelMaterial(mGrass, input.worldPos, blendW, input.worldNormal, dpdx, dpdy, aGrass, nGrass, rmaoGrass);
+    else
+    {
+        aGrass = float4(0);
+        nGrass = float3(0);
+        rmaoGrass = float4(0);
+    }
 
-    if (wRock > 0.01) EvaluateVoxelMaterial(mRock, input.worldPos, blendW, input.worldNormal, aRock, nRock, rmaoRock);
-    else { aRock = float4(0); nRock = float3(0); rmaoRock = float4(0); }
+    if (wRock > 0.01)
+        EvaluateVoxelMaterial(mRock, input.worldPos, blendW, input.worldNormal, dpdx, dpdy, aRock, nRock, rmaoRock);
+    else
+    {
+        aRock = float4(0);
+        nRock = float3(0);
+        rmaoRock = float4(0);
+    }
 
-    if (wDirt > 0.01) EvaluateVoxelMaterial(mDirt, input.worldPos, blendW, input.worldNormal, aDirt, nDirt, rmaoDirt);
-    else { aDirt = float4(0); nDirt = float3(0); rmaoDirt = float4(0); }
+    if (wDirt > 0.01)
+        EvaluateVoxelMaterial(mDirt, input.worldPos, blendW, input.worldNormal, dpdx, dpdy, aDirt, nDirt, rmaoDirt);
+    else
+    {
+        aDirt = float4(0);
+        nDirt = float3(0);
+        rmaoDirt = float4(0);
+    }
 
     albedo = aGrass * wGrass + aRock * wRock + aDirt * wDirt;
     normal = normalize(nGrass * wGrass + nRock * wRock + nDirt * wDirt);
-    
+
     float4 rmao = rmaoGrass * wGrass + rmaoRock * wRock + rmaoDirt * wDirt;
     roughness = rmao.g;
     metallic = rmao.b;

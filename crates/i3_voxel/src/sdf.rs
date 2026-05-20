@@ -2,6 +2,18 @@ use i3_math::{AABB, Transform};
 use libnoise::Generator;
 use nalgebra::{Point3, Vector2, Vector3};
 use std::sync::Arc;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    static TERRAIN_CACHE: RefCell<HashMap<(u32, u32), f32>> = RefCell::new(HashMap::new());
+}
+
+pub fn clear_terrain_cache() {
+    TERRAIN_CACHE.with(|cache| {
+        cache.borrow_mut().clear();
+    });
+}
 
 const SDF_NORMAL_EPS: f32 = 0.001;
 
@@ -145,17 +157,19 @@ impl SdfPrimitive {
                 let nx = (position.x / half_extents.x + 1.0) * 0.5;
                 let nz = (position.z / half_extents.z + 1.0) * 0.5;
 
-                // Divide by |∇f| = sqrt(1 + (∂h/∂x)² + (∂h/∂z)²) to keep the SDF
-                // Lipschitz-1 on steep slopes, which is required for correct DC output.
-                const G: f32 = 1e-3;
-                let h   = sampler(nx,     nz    ) * amplitude;
-                let h_x = sampler(nx + G, nz    ) * amplitude;
-                let h_z = sampler(nx,     nz + G) * amplitude;
-                let dh_dx = (h_x - h) / (G * half_extents.x * 2.0);
-                let dh_dz = (h_z - h) / (G * half_extents.z * 2.0);
-                let terrain_d = (position.y - h)
-                    / (1.0_f32 + dh_dx * dh_dx + dh_dz * dh_dz).sqrt();
+                let h = TERRAIN_CACHE.with(|cache| {
+                    let mut cache = cache.borrow_mut();
+                    let key = (nx.to_bits(), nz.to_bits());
+                    if let Some(&val) = cache.get(&key) {
+                        val
+                    } else {
+                        let val = sampler(nx, nz) * amplitude;
+                        cache.insert(key, val);
+                        val
+                    }
+                });
 
+                let terrain_d = position.y - h;
                 terrain_d.max(box_d)
             }
         }

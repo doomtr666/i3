@@ -4,9 +4,6 @@ use i3_voxel::SdfScene;
 use nalgebra::Point3;
 use rayon::prelude::*;
 
-use crate::gpu_scene::GpuBrickJob;
-use crate::{BakeState, MAX_BRICKS_PER_LEVEL};
-
 pub const BRICK_SIZE: u32 = 8;
 /// Atlas voxels per brick = (BRICK_SIZE+1)³ — includes 1-voxel positive overlap on each axis
 /// so the trilinear sampler can fetch cross-brick corner data without clamping.
@@ -108,97 +105,6 @@ impl BrickmapBaker {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /// CPU-side preparation for GPU baking (toroidal clipmap).
-    ///
-    /// `origin_brick` is the world-brick coordinate of the grid corner for this level.
-    /// Cell (cx,cy,cz) represents world-brick (ob + offset) where
-    /// offset = (cell - ob%grid + grid) % grid, so brick_world_min = (ob + offset) * bws.
-    pub fn prepare_batch_gpu(
-        &self,
-        sdf: &SdfScene,
-        data: &mut BrickmapData,
-        state: &mut BakeState,
-        budget: usize,
-        lev: usize,
-        origin_brick: [i32; 3],
-    ) -> Vec<GpuBrickJob> {
-        let half_diag = self.brick_half_diag();
-        let bws = self.brick_world_size();
-        let [gx, gy, gz] = self.grid_dims.map(|v| v as i32);
-        let [ob_x, ob_y, ob_z] = origin_brick;
-        let ob_x_mod = ((ob_x % gx) + gx) % gx;
-        let ob_y_mod = ((ob_y % gy) + gy) % gy;
-        let ob_z_mod = ((ob_z % gz) + gz) % gz;
-
-        let count = budget.min(state.pending.len());
-        let batch: Vec<[u32; 3]> = state.pending.drain(..count).collect();
-        state.last_baked = 0;
-
-        let mut jobs = Vec::with_capacity(batch.len());
-
-        for [cx, cy, cz] in batch {
-            // Toroidal: compute offset from origin, then world-space min of this cell
-            let off_x = ((cx as i32 - ob_x_mod + gx) % gx) as f32;
-            let off_y = ((cy as i32 - ob_y_mod + gy) % gy) as f32;
-            let off_z = ((cz as i32 - ob_z_mod + gz) % gz) as f32;
-            let world_min = [
-                (ob_x as f32 + off_x) * bws,
-                (ob_y as f32 + off_y) * bws,
-                (ob_z as f32 + off_z) * bws,
-            ];
-
-            let brick_aabb = AABB::new(
-                Point3::new(world_min[0], world_min[1], world_min[2]),
-                Point3::new(world_min[0] + bws, world_min[1] + bws, world_min[2] + bws),
-            );
-            let query_aabb = brick_aabb.expand(self.voxel_size * 2.0);
-            let nodes      = sdf.get_nodes(&query_aabb);
-            let flat       = self.page_idx(cx, cy, cz);
-
-            if nodes.is_empty() {
-                // Brick is empty — free its atlas slot if it had one
-                let old = data.page_table[flat];
-                if old != u16::MAX { data.free_slot(old); }
-                data.page_table[flat] = u16::MAX;
-                continue;
-            }
-
-            let center_sdf = SdfScene::value(&nodes, &brick_aabb.center());
-            if center_sdf.abs() > half_diag * 2.0 {
-                let old = data.page_table[flat];
-                if old != u16::MAX { data.free_slot(old); }
-                data.page_table[flat] = u16::MAX;
-                continue;
-            }
-
-            // Atlas slot allocation: reuse existing or alloc new (with recycling)
-            let brick_idx = if data.page_table[flat] == u16::MAX {
-                match data.alloc_slot(self.max_atlas_bricks) {
-                    Some(idx) => {
-                        data.page_table[flat] = idx;
-                        idx as usize
-                    }
-                    None => continue, // atlas full
-                }
-            } else {
-                data.page_table[flat] as usize
-            };
-
-            let atlas_offset = (lev * MAX_BRICKS_PER_LEVEL + brick_idx) * BRICK_DWORDS * 4;
-            jobs.push(GpuBrickJob {
-                brick_world_min: world_min,
-                voxel_size:      self.voxel_size,
-                atlas_offset:    atlas_offset as u32,
-                half_diag,
-                _pad:            [0; 2],
-            });
-            state.last_baked += 1;
-        }
-
-        state.pending_count = state.pending.len();
-        jobs
-    }
-
     /// Bake every brick in the grid in parallel. Blocks until complete.
     pub fn bake_all(&self, sdf: &SdfScene) -> BrickmapData {
         let [gx, gy, gz] = self.grid_dims;
@@ -242,46 +148,6 @@ impl BrickmapBaker {
         }
     }
 
-    /// Bake up to `budget` bricks from `state.pending`, updating `data` in-place.
-    pub fn bake_batch(&self, sdf: &SdfScene, data: &mut BrickmapData, state: &mut BakeState, budget: usize) {
-        let half_diag = self.brick_half_diag();
-        let count = budget.min(state.pending.len());
-        let batch: Vec<[u32; 3]> = state.pending.drain(..count).collect();
-        state.last_baked = 0;
-
-        for [bx, by, bz] in batch {
-            let flat = self.page_idx(bx, by, bz);
-            match self.bake_one(bx, by, bz, sdf, half_diag) {
-                Some((sdf_data, mat_data)) => {
-                    let brick_idx = if data.page_table[flat] == u16::MAX {
-                        // New allocation — respect atlas capacity
-                        if data.brick_count >= self.max_atlas_bricks {
-                            continue;
-                        }
-                        let idx = data.brick_count as u16;
-                        data.page_table[flat] = idx;
-                        data.brick_count += 1;
-                        data.sdf_atlas.extend(std::iter::repeat(0u16).take(BRICK_VOXELS));
-                        data.mat_atlas.extend(std::iter::repeat(0u8).take(BRICK_VOXELS));
-                        idx as usize
-                    } else {
-                        // Re-bake of existing brick — always allowed
-                        data.page_table[flat] as usize
-                    };
-                    let base = brick_idx * BRICK_VOXELS;
-                    data.sdf_atlas[base..base + BRICK_VOXELS].copy_from_slice(&sdf_data);
-                    data.mat_atlas[base..base + BRICK_VOXELS].copy_from_slice(&mat_data);
-                    state.last_baked += 1;
-                }
-                None => {
-                    // Brick became empty (e.g. after an edit) — mark as unallocated
-                    data.page_table[flat] = u16::MAX;
-                }
-            }
-        }
-
-        state.pending_count = state.pending.len();
-    }
 }
 
 // ─── BrickmapData ─────────────────────────────────────────────────────────────

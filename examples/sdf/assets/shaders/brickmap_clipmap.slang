@@ -332,7 +332,22 @@ bool traceClipmap(float3 ro, float3 rd, float far,
         }
         else
         {
-            t += float(BRICK_DIM) * pc.levels[pc.num_levels - 1u].voxel_size;
+            // No SDF data at p — advance by the finest brick size that covers this point.
+            // Using the coarsest-level step (64 m) overshoots all geometry in a sparse
+            // GPU-culled clipmap where free-space cells are PAGE_EMPTY.
+            float step = float(BRICK_DIM) * pc.levels[pc.num_levels - 1u].voxel_size;
+            for (uint fb = 0u; fb < pc.num_levels; fb++)
+            {
+                float  bws_fb  = float(BRICK_DIM) * pc.levels[fb].voxel_size;
+                float3 org_fb  = pc.levels[fb].world_origin;
+                float3 end_fb  = org_fb + float3(GRID_X, GRID_Y, GRID_Z) * bws_fb;
+                if (all(p >= org_fb) && all(p < end_fb))
+                {
+                    step = bws_fb;
+                    break;
+                }
+            }
+            t += step;
         }
 
         if (t >= far)

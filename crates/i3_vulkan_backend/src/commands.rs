@@ -381,6 +381,15 @@ impl PassContext for VulkanPassContext {
         }
     }
 
+    fn dispatch_indirect(&mut self, buffer: BufferHandle, offset: u64) {
+        let buf = self.backend().resolve_buffer(buffer);
+        let vk_buf = self.backend().buffers.get(buf.0).unwrap().buffer;
+        unsafe {
+            let device = self.backend().get_device();
+            device.handle.cmd_dispatch_indirect(self.cmd, vk_buf, offset);
+        }
+    }
+
     fn draw_indexed_indirect_count(
         &mut self,
         indirect_buffer: BufferHandle,

@@ -567,6 +567,10 @@ impl<'a> PassContext for NullPassContext<'a> {
         info!(pass = %self.pass_name, x, y, z, "DISPATCH");
     }
 
+    fn dispatch_indirect(&mut self, _buffer: BufferHandle, _offset: u64) {
+        info!(pass = %self.pass_name, "DISPATCH_INDIRECT");
+    }
+
     fn build_blas(&mut self, handle: BackendAccelerationStructure, update: bool) {
         info!(pass = %self.pass_name, ?handle, update, "BUILD_BLAS");
     }

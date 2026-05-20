@@ -49,13 +49,23 @@ impl OctreeNode {
         OctreeNode { center, half_size, depth, state: NodeState::Ungenerated }
     }
 
+    fn distance_to_camera(&self, camera: &Point3<f32>) -> f32 {
+        let h = self.half_size;
+        let c = self.center;
+        let min = Point3::new(c.x - h, c.y - h, c.z - h);
+        let max = Point3::new(c.x + h, c.y + h, c.z + h);
+        let aabb = AABB::new(min, max);
+        let clamped = aabb.clamp(camera);
+        (camera - clamped).norm()
+    }
+
     fn needs_split(&self, camera: &Point3<f32>, max_depth: u32, split_factor: f32) -> bool {
         self.depth < max_depth
-            && (self.center - camera).norm() < self.half_size * split_factor
+            && self.distance_to_camera(camera) < self.half_size * split_factor
     }
 
     fn should_merge(&self, camera: &Point3<f32>, split_factor: f32, merge_hysteresis: f32) -> bool {
-        (self.center - camera).norm() > self.half_size * split_factor * merge_hysteresis
+        self.distance_to_camera(camera) > self.half_size * split_factor * merge_hysteresis
     }
 
     fn child_nodes(&self) -> [OctreeNode; 8] {
@@ -186,7 +196,6 @@ impl OctreeNode {
                     // (can_split=false) to avoid cascading multi-resolution overlaps.
                     if let NodeState::Splitting { children, .. } = &mut self.state {
                         for child in children.iter_mut() {
-                            if *budget == 0 { break; }
                             child.update(camera, sdf, sink, max_depth, split_factor,
                                 merge_hysteresis, budget, false);
                         }
@@ -198,19 +207,26 @@ impl OctreeNode {
 
             // ── Wait for all children, then drop coarse mesh ─────────────────
             NodeState::Splitting { mesh_id, object_id, mut children } => {
-                // Children may only generate their Leaf, not sub-split (can_split=false).
-                for child in children.iter_mut() {
-                    if *budget == 0 { break; }
-                    child.update(camera, sdf, sink, max_depth, split_factor,
-                        merge_hysteresis, budget, false);
-                }
-
-                if children.iter().all(|c| c.is_generated()) {
-                    // All children ready — drop the coarse mesh.
-                    Self::remove_leaf(mesh_id, object_id, sink);
-                    self.state = NodeState::Split { children };
+                if self.should_merge(camera, split_factor, merge_hysteresis) {
+                    // Abort split: clean up children and revert to Leaf
+                    for child in children.iter_mut() {
+                        child.remove_all(sink);
+                    }
+                    self.state = NodeState::Leaf { mesh_id, object_id };
                 } else {
-                    self.state = NodeState::Splitting { mesh_id, object_id, children };
+                    // Children may only generate their Leaf, not sub-split (can_split=false).
+                    for child in children.iter_mut() {
+                        child.update(camera, sdf, sink, max_depth, split_factor,
+                            merge_hysteresis, budget, false);
+                    }
+
+                    if children.iter().all(|c| c.is_generated()) {
+                        // All children ready — drop the coarse mesh.
+                        Self::remove_leaf(mesh_id, object_id, sink);
+                        self.state = NodeState::Split { children };
+                    } else {
+                        self.state = NodeState::Splitting { mesh_id, object_id, children };
+                    }
                 }
             }
 
@@ -228,7 +244,6 @@ impl OctreeNode {
                     self.try_finish_merge(sink);
                 } else {
                     for child in children.iter_mut() {
-                        if *budget == 0 { break; }
                         child.update(camera, sdf, sink, max_depth, split_factor,
                             merge_hysteresis, budget, true);
                     }
@@ -237,21 +252,24 @@ impl OctreeNode {
             }
 
             // ── Finish merging once coarse mesh is available ─────────────────
-            NodeState::Merging { children, coarse: None } => {
-                // self.state is Ungenerated here, so upload_mesh borrows cleanly.
-                let coarse = if *budget > 0 {
-                    *budget -= 1;
-                    Some(self.upload_mesh(sdf, sink))
+            NodeState::Merging { children, coarse } => {
+                if can_split && self.needs_split(camera, max_depth, split_factor) {
+                    // Abort merge: keep children, drop coarse if generated, revert to Split
+                    if let Some((mesh_id, object_id)) = coarse {
+                        Self::remove_leaf(mesh_id, object_id, sink);
+                    }
+                    self.state = NodeState::Split { children };
                 } else {
-                    None
-                };
-                self.state = NodeState::Merging { children, coarse };
-                self.try_finish_merge(sink);
-            }
-
-            NodeState::Merging { children, coarse: Some(pair) } => {
-                self.state = NodeState::Merging { children, coarse: Some(pair) };
-                self.try_finish_merge(sink);
+                    let mut current_coarse = coarse;
+                    if current_coarse.is_none() {
+                        if *budget > 0 {
+                            *budget -= 1;
+                            current_coarse = Some(self.upload_mesh(sdf, sink));
+                        }
+                    }
+                    self.state = NodeState::Merging { children, coarse: current_coarse };
+                    self.try_finish_merge(sink);
+                }
             }
         }
     }
@@ -332,7 +350,6 @@ impl VoxelOctree {
         let mut remaining = budget;
 
         for root in &mut self.roots {
-            if remaining == 0 { break; }
             root.update(&camera, &sdf, sink, max_depth, split_factor, merge_hysteresis, &mut remaining, true);
         }
     }

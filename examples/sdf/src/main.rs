@@ -23,7 +23,7 @@ use nalgebra_glm as glm;
 use tracing::warn;
 
 use clipmap_pass::ClipmapGBufferPass;
-use compute_bake_pass::{ClipmapGpuBuffers, ComputeBakePass};
+use compute_bake_pass::{ClipmapGpuBuffers, create_brickmap_passes};
 
 // ─── Edit operation (persisted across gem rebuilds) ───────────────────────────
 
@@ -203,10 +203,9 @@ impl ExampleApp for SdfApp {
                 bm_debug_flags.store(flags, Ordering::Relaxed);
                 if let Ok(cm) = clipmap_state_g.try_read() {
                     for lev in 0..i3_brickmap::NUM_LEVELS {
-                        let bricks  = cm.levels[lev].data.brick_count;
-                        let pending = cm.levels[lev].bake_state.pending_count;
+                        let vs = cm.levels[lev].voxel_size;
                         ui.label(
-                            egui::RichText::new(format!("L{lev}: {bricks} bricks  ({pending} pending)"))
+                            egui::RichText::new(format!("L{lev}: vs={vs:.4}m (GPU-driven)"))
                                 .monospace(),
                         );
                     }
@@ -382,19 +381,20 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let bm_enabled     = Arc::new(AtomicBool::new(true));
     let bm_debug_flags = Arc::new(AtomicU32::new(0));
 
-    // ── Compute bake pass (pre-GBuffer) ───────────────────────────────────────
-    render_graph.extra_pre_gbuffer_passes.push(Box::new(ComputeBakePass::new(
+    // ── Brickmap bake passes (pre-GBuffer, 7 atomic frame-graph passes) ─────
+    for pass in create_brickmap_passes(
         clipmap_state.clone(),
         clipmap_scene.clone(),
         gpu_buffers.clone(),
-    )));
+    ) {
+        render_graph.extra_pre_gbuffer_passes.push(pass);
+    }
 
     // ── Clipmap GBuffer pass ───────────────────────────────────────────────────
     render_graph.extra_gbuffer_passes.push(Box::new(ClipmapGBufferPass::new(
         clipmap_state.clone(),
         bm_enabled.clone(),
         bm_debug_flags.clone(),
-        gpu_buffers.clone(),
     )));
 
     render_graph.init(&mut backend);

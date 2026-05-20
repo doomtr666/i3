@@ -1,0 +1,6 @@
+PipelineConfig(
+    name: "brickmap_reset",
+    shader: Path("../shaders/brickmap_reset.slang"),
+    search_paths: [],
+    graphics: None,
+)

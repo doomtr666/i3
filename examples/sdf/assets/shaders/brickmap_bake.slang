@@ -1,8 +1,6 @@
 // Brickmap GPU bake — compute shader
 // One workgroup = one brick.  Threads: [9, 9, 9] = 729 per brick.
-//
-// CPU does: BVH query, centre-SDF cull, atlas-slot allocation.
-// GPU does: all 729 voxel SDF evaluations + u8 quantization + packing.
+// Dispatched indirectly from dispatch_jobs_buf; jobs were emitted by the cull pass.
 //
 // Atlas layout: u8-packed, 4 voxels per DWORD.
 // BRICK_DWORDS = ceil(729/4) = 183.  atlas_offset = byte offset in ByteAddressBuffer.

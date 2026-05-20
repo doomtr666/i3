@@ -228,6 +228,7 @@ pub trait PassContext {
         data: &[u8],
     );
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
+    fn dispatch_indirect(&mut self, buffer: BufferHandle, offset: u64);
 
     // --- Acceleration Structures ---
 

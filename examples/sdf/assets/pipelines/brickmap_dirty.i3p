@@ -1,0 +1,6 @@
+PipelineConfig(
+    name: "brickmap_dirty",
+    shader: Path("../shaders/brickmap_dirty.slang"),
+    search_paths: [],
+    graphics: None,
+)

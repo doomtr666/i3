@@ -10,7 +10,7 @@ use i3_gfx::prelude::*;
 use i3_io::mesh::BoundingBox;
 use i3_io::prelude::*;
 use i3_renderer::prelude::*;
-use i3_renderer::scene::{ObjectData, ObjectId, MaterialData};
+use i3_renderer::scene::{MaterialData, ObjectData, ObjectId};
 use i3_voxel::{SdfPrimitive, SdfScene, Transform, VoxelOctree, VoxelSceneSink, VoxelVertex};
 use i3_vulkan_backend::prelude::*;
 use nalgebra::Point3;
@@ -107,19 +107,20 @@ impl<'a> VoxelSceneSink for VoxelSink<'a> {
             flags: self.grass_mat,
             _pad: self.rock_mat,
         });
-        
+
         // Use an ugly bitcast to float for the 3rd material to stuff it in `_pad2` (or set a transform to 1.0 scale etc).
         // Actually, basic_scene's iter_instances does:
         // `_pad2: 0.0,`
         // So we can't easily modify `_pad2` from `ObjectData`.
         // Wait, ObjectData doesn't have `_pad2`. It has `flags` and `_pad`.
-        // Where can we stuff the 3rd material? 
+        // Where can we stuff the 3rd material?
         // We can pack grass and rock in `flags` (16 bits each) and dirt in `_pad` (32 bits).
         // Let's pack grass and rock into `flags`.
-        
+
         let packed_flags = (self.grass_mat & 0xFFFF) | ((self.rock_mat & 0xFFFF) << 16);
-        self.scene.set_voxel_materials(object_id, packed_flags, self.dirt_mat);
-        
+        self.scene
+            .set_voxel_materials(object_id, packed_flags, self.dirt_mat);
+
         (mesh_id, object_id.0)
     }
 
@@ -132,20 +133,20 @@ impl<'a> VoxelSceneSink for VoxelSink<'a> {
 // ─── VoxelApp ─────────────────────────────────────────────────────────────────
 
 struct VoxelApp {
-    backend:         VulkanBackend,
-    window:          WindowHandle,
-    render_graph:    DefaultRenderGraph,
-    ui:              Arc<i3_egui::UiSystem>,
-    camera:          CameraController,
-    scene:           BasicScene,
-    voxel_octree:    VoxelOctree,
-    grass_mat:       u32,
-    rock_mat:        u32,
-    dirt_mat:        u32,
-    dt:              f32,
-    smoothed_dt:     f32,
+    backend: VulkanBackend,
+    window: WindowHandle,
+    render_graph: DefaultRenderGraph,
+    ui: Arc<i3_egui::UiSystem>,
+    camera: CameraController,
+    scene: BasicScene,
+    voxel_octree: VoxelOctree,
+    grass_mat: u32,
+    rock_mat: u32,
+    dirt_mat: u32,
+    dt: f32,
+    smoothed_dt: f32,
     show_debug_draw: bool,
-    debug_gui:       RendererDebugGui,
+    debug_gui: RendererDebugGui,
 }
 
 impl ExampleApp for VoxelApp {
@@ -172,31 +173,37 @@ impl ExampleApp for VoxelApp {
         let egui_ctx = self.ui.context().clone();
 
         let show_debug_draw = &mut self.show_debug_draw;
-        let camera_locked   = self.camera.camera_locked;
-        self.debug_gui.show(&egui_ctx, &mut self.render_graph, &self.camera, self.smoothed_dt, |ui| {
-            ui.separator();
-            ui.label(format!(
-                "Terrain  {:.1} × {:.1} × {:.1} km",
-                SCENE_XZ / 1000.0,
-                SCENE_Y / 1000.0,
-                SCENE_XZ / 1000.0,
-            ));
-            ui.label(format!(
-                "MAX_DEPTH {}  ({:.2} m – {:.1} m voxels)",
-                MAX_DEPTH,
-                0.05_f32,
-                0.05 * (1u32 << MAX_DEPTH) as f32,
-            ));
-            ui.label(format!("Budget {FRAME_BUDGET} blocks/frame"));
-            ui.separator();
-            ui.checkbox(show_debug_draw, "Debug AABB");
-            ui.separator();
-            if camera_locked {
-                ui.label("Camera: LOCKED  (Tab to unlock)");
-            } else {
-                ui.label("Camera: FREE   (Tab to lock)");
-            }
-        });
+        let camera_locked = self.camera.camera_locked;
+        self.debug_gui.show(
+            &egui_ctx,
+            &mut self.render_graph,
+            &self.camera,
+            self.smoothed_dt,
+            |ui| {
+                ui.separator();
+                ui.label(format!(
+                    "Terrain  {:.1} × {:.1} × {:.1} km",
+                    SCENE_XZ / 1000.0,
+                    SCENE_Y / 1000.0,
+                    SCENE_XZ / 1000.0,
+                ));
+                ui.label(format!(
+                    "MAX_DEPTH {}  ({:.2} m – {:.1} m voxels)",
+                    MAX_DEPTH,
+                    0.05_f32,
+                    0.05 * (1u32 << MAX_DEPTH) as f32,
+                ));
+                ui.label(format!("Budget {FRAME_BUDGET} blocks/frame"));
+                ui.separator();
+                ui.checkbox(show_debug_draw, "Debug AABB");
+                ui.separator();
+                if camera_locked {
+                    ui.label("Camera: LOCKED  (Tab to unlock)");
+                } else {
+                    ui.label("Camera: FREE   (Tab to lock)");
+                }
+            },
+        );
 
         self.ui.update_textures(&mut self.backend);
 
@@ -259,20 +266,23 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         height: 720,
     })?;
 
-    let config = i3_renderer::render_graph::RenderConfig { width: 1280, height: 720 };
+    let config = i3_renderer::render_graph::RenderConfig {
+        width: 1280,
+        height: 720,
+    };
     let ui = Arc::new(i3_egui::UiSystem::new(1280, 720));
 
     let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
     render_graph.publish("UiSystem", ui.clone());
 
     let loader = Arc::new(AssetLoader::new(Arc::new(Vfs::new())));
-    
+
     // Mount bundles
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_default();
-    
+
     for (cat, blob) in [("system.i3c", "system.i3b"), ("voxel.i3c", "voxel.i3b")] {
         if exe_dir.join(cat).exists() {
             if let Ok(bundle) = i3_io::prelude::BundleBackend::mount(
@@ -290,7 +300,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
 
     // Inject our custom voxel GBuffer pass
-    render_graph.extra_gbuffer_passes.push(Box::new(VoxelGBufferPass::new()));
+    render_graph
+        .extra_gbuffer_passes
+        .push(Box::new(VoxelGBufferPass::new()));
 
     render_graph.init(&mut backend);
 
@@ -298,9 +310,24 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // Load textures and create materials
     let mut load_mat = |name: &str| -> MaterialData {
-        let albedo = BasicScene::load_texture_by_name(&mut backend, &mut render_graph.bindless_manager, &loader, &format!("{}_albedo.png", name));
-        let normal = BasicScene::load_texture_by_name(&mut backend, &mut render_graph.bindless_manager, &loader, &format!("{}_normal.png", name));
-        let orm = BasicScene::load_texture_by_name(&mut backend, &mut render_graph.bindless_manager, &loader, &format!("{}_orm.png", name));
+        let albedo = BasicScene::load_texture_by_name(
+            &mut backend,
+            &mut render_graph.bindless_manager,
+            &loader,
+            &format!("{}_albedo.png", name),
+        );
+        let normal = BasicScene::load_texture_by_name(
+            &mut backend,
+            &mut render_graph.bindless_manager,
+            &loader,
+            &format!("{}_normal.png", name),
+        );
+        let orm = BasicScene::load_texture_by_name(
+            &mut backend,
+            &mut render_graph.bindless_manager,
+            &loader,
+            &format!("{}_orm.png", name),
+        );
         MaterialData {
             base_color_factor: [1.0, 1.0, 1.0, 1.0],
             emissive_factor_and_alpha_cutoff: [0.0, 0.0, 0.0, 0.0],
@@ -338,7 +365,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let terrain_half_y = 4000.0_f32; // doit être > amplitude
 
     // FBM : 9 octaves pour avoir du détail sur plusieurs km
-    let generator = Source::perlin(42).fbm(9, 1.0, 2.0, 0.5);
+    let generator = Source::perlin(42).fbm(11, 1.0, 2.0, 0.5);
 
     let mut sdf_scene = SdfScene::new();
     sdf_scene.add(
@@ -395,10 +422,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         grass_mat,
         rock_mat,
         dirt_mat,
-        dt:              0.016,
-        smoothed_dt:     0.016,
+        dt: 0.016,
+        smoothed_dt: 0.016,
         show_debug_draw: false,
-        debug_gui:       RendererDebugGui::new(),
+        debug_gui: RendererDebugGui::new(),
     });
 
     Ok(())

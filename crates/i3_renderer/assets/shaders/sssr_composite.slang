@@ -42,6 +42,8 @@ Texture2D<float4> ssrUpsampled;
 Texture2D<float> aoResolved;
 [[vk::binding(6, 0)]]
 RWTexture2D<float4> hdrTarget;
+[[vk::binding(7, 0)]]
+StructuredBuffer<ExposureData> exposure_buffer;
 
 [numthreads(8, 8, 1)]
 void computeMain(uint3 id: SV_DispatchThreadID)
@@ -98,11 +100,13 @@ void computeMain(uint3 id: SV_DispatchThreadID)
                           .SampleLevel(bindlessSamplers[SAMPLER_LINEAR], float2(NdotV, roughness), 0)
                           .rg;
         float3 brdf_weight = F0 * brdf.x + brdf.y;
+        float prev_ex = exposure_buffer[0].new_exposure;
+        if (prev_ex == 0.0) { prev_ex = 1.0; }
 
-        // ibl_spec includes ao to match deferred_resolve's diffuse term scaling.
-        // ssr_spec has no ibl_intensity (ssr.rgb is already in scene-radiance units)
+        // ibl_spec includes ao and exposure (prev_ex) to match deferred_resolve's diffuse term scaling.
+        // ssr_spec has no ibl_intensity or exposure (ssr.rgb is already in exposed scene-radiance units)
         // and no ao (a traced ray handles occlusion naturally).
-        float3 ibl_spec = prefiltered * brdf_weight * g_common.GetIblIntensity() * ao;
+        float3 ibl_spec = prefiltered * brdf_weight * g_common.GetIblIntensity() * ao * prev_ex;
         float3 ssr_spec = ssr.rgb * brdf_weight;
 
         hdrTarget[coord] = float4(hdr.rgb + lerp(ibl_spec, ssr_spec, eff_conf), hdr.a);

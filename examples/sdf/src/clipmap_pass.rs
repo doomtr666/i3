@@ -1,18 +1,14 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use i3_brickmap::clipmap::{BrickmapClipmapState, GRID_VOL, NUM_LEVELS};
-use i3_brickmap::BrickmapData;
+use i3_brickmap::clipmap::{BrickmapClipmapState, NUM_LEVELS};
 use i3_gfx::prelude::*;
 use i3_io::asset::AssetLoader;
-
-use crate::compute_bake_pass::ClipmapGpuBuffers;
 
 pub struct ClipmapGBufferPass {
     pub shared:       Arc<RwLock<BrickmapClipmapState>>,
     pub enabled:      Arc<AtomicBool>,
     pub debug_flags:  Arc<AtomicU32>,
-    pub gpu_buffers:  Arc<ClipmapGpuBuffers>,
 
     // GBuffer / common handles
     gbuffer_albedo:     ImageHandle,
@@ -37,13 +33,11 @@ impl ClipmapGBufferPass {
         shared:       Arc<RwLock<BrickmapClipmapState>>,
         enabled:      Arc<AtomicBool>,
         debug_flags:  Arc<AtomicU32>,
-        gpu_buffers:  Arc<ClipmapGpuBuffers>,
     ) -> Self {
         Self {
             shared,
             enabled,
             debug_flags,
-            gpu_buffers,
             gbuffer_albedo:     ImageHandle::INVALID,
             gbuffer_normal:     ImageHandle::INVALID,
             gbuffer_roughmetal: ImageHandle::INVALID,
@@ -104,11 +98,11 @@ impl RenderPass for ClipmapGBufferPass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        // Page table: CpuToGpu, this pass uploads it (allocation info)
-        self.page_table_virt = builder.import_buffer("ClipmapPageTable", self.gpu_buffers.page_table_buf);
-        // Atlas buffers: GpuOnly, written by ComputeBakePass, read here
-        self.sdf_atlas_virt  = builder.import_buffer("ClipmapSdfAtlas",  self.gpu_buffers.sdf_atlas_buf);
-        self.mat_atlas_virt  = builder.import_buffer("ClipmapMatAtlas",  self.gpu_buffers.mat_atlas_buf);
+        // Resolve handles published by BrickmapSetupPass (same SymbolId → correct
+        // RAW barrier from BakePass write to this pass's read).
+        self.page_table_virt = builder.resolve_buffer("ClipmapPageTable");
+        self.sdf_atlas_virt  = builder.resolve_buffer("ClipmapSdfAtlas");
+        self.mat_atlas_virt  = builder.resolve_buffer("ClipmapMatAtlas");
 
         self.gbuffer_albedo     = builder.resolve_image("GBuffer_Albedo");
         self.gbuffer_normal     = builder.resolve_image("GBuffer_Normal");
@@ -137,9 +131,6 @@ impl RenderPass for ClipmapGBufferPass {
 
         let clipmap = self.shared.read().unwrap();
 
-        // Upload page table only — SDF atlas is written by ComputeBakePass on GPU.
-        upload_page_table(ctx, self.page_table_virt, &clipmap);
-
         ctx.bind_pipeline_raw(pipeline);
 
         let bm_set = ctx.create_descriptor_set(pipeline, 0, &[
@@ -158,7 +149,7 @@ impl RenderPass for ClipmapGBufferPass {
 
         let mut pc_levels = [LevelPC { world_origin: [0.0; 3], voxel_size: 0.0 }; 10];
         for lev in 0..NUM_LEVELS {
-            let ld = &clipmap.levels[lev].data;
+            let ld = &clipmap.levels[lev];
             pc_levels[lev] = LevelPC {
                 world_origin: ld.world_origin,
                 voxel_size:   ld.voxel_size,
@@ -176,24 +167,3 @@ impl RenderPass for ClipmapGBufferPass {
     }
 }
 
-// ─── Page-table upload ────────────────────────────────────────────────────────
-
-fn upload_page_table(
-    ctx:     &mut dyn PassContext,
-    handle:  BufferHandle,
-    clipmap: &BrickmapClipmapState,
-) {
-    let ptr = ctx.map_buffer(handle);
-    if ptr.is_null() { return; }
-    unsafe {
-        let dst = ptr as *mut u32;
-        for lev in 0..NUM_LEVELS {
-            let data: &BrickmapData = &clipmap.levels[lev].data;
-            let level_dst = dst.add(lev * GRID_VOL);
-            for (i, &s) in data.page_table.iter().enumerate() {
-                *level_dst.add(i) = if s == u16::MAX { u32::MAX } else { s as u32 };
-            }
-        }
-    }
-    ctx.unmap_buffer(handle);
-}
