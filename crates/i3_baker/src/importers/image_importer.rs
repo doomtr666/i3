@@ -321,11 +321,41 @@ impl Importer for ImageImporter {
                     .collect()
             };
 
+            let is_block_compressed = matches!(
+                target_format,
+                TextureFormat::BC1_RGB_UNORM
+                    | TextureFormat::BC1_RGB_SRGB
+                    | TextureFormat::BC3_UNORM
+                    | TextureFormat::BC3_SRGB
+                    | TextureFormat::BC4_UNORM
+                    | TextureFormat::BC4_SNORM
+                    | TextureFormat::BC5_UNORM
+                    | TextureFormat::BC5_SNORM
+                    | TextureFormat::BC7_UNORM
+                    | TextureFormat::BC7_SRGB
+            );
+
+            let (comp_width, comp_height, comp_data) = if is_block_compressed && (mip_width < 4 || mip_height < 4) {
+                let mut padded = vec![0u8; 64]; // 4x4 RGBA
+                for py in 0..4 {
+                    for px in 0..4 {
+                        let src_x = px.min(mip_width - 1);
+                        let src_y = py.min(mip_height - 1);
+                        let src_idx = ((src_y * mip_width + src_x) * 4) as usize;
+                        let dst_idx = ((py * 4 + px) * 4) as usize;
+                        padded[dst_idx..dst_idx + 4].copy_from_slice(&rgba_u8[src_idx..src_idx + 4]);
+                    }
+                }
+                (4, 4, padded)
+            } else {
+                (mip_width, mip_height, rgba_u8)
+            };
+
             let surface = intel_tex_2::RgbaSurface {
-                width: mip_width,
-                height: mip_height,
-                stride: mip_width * 4,
-                data: &rgba_u8,
+                width: comp_width,
+                height: comp_height,
+                stride: comp_width * 4,
+                data: &comp_data,
             };
 
             let compressed = match target_format {
@@ -350,16 +380,17 @@ impl Importer for ImageImporter {
                     };
                     intel_tex_2::bc7::compress_blocks(&settings, &surface)
                 }
-                _ => rgba_u8,
+                _ => comp_data,
             };
 
             all_pixel_data.extend_from_slice(&compressed);
             mip_count += 1;
 
-            if !self.options.generate_mips || (mip_width <= 4 || mip_height <= 4) {
-                if mip_width == 1 && mip_height == 1 {
-                    break;
-                }
+            if !self.options.generate_mips {
+                break;
+            }
+            if mip_width == 1 && mip_height == 1 {
+                break;
             }
 
             let next_width = (mip_width / 2).max(1);

@@ -111,14 +111,18 @@ float4 SampleHexTiled(int texIndex, float2 uv, float2 dx, float2 dy)
     float2 grid = float2(1.0, sqrt(3.0));
     float2 uv2 = uv / grid;
 
+    // Wrap grid coordinates to prevent catastrophic cancellation precision loss in the distance
+    float2 period = float2(1024.0, 1024.0);
+    uv2 = uv2 - floor(uv2 / period) * period;
+
     float2 center1 = floor(uv2) + 0.5;
     float2 center2 = floor(uv2 + 0.5);
 
-    float2 offset1 = uv - center1 * grid;
-    float2 offset2 = uv - center2 * grid;
+    float2 offset1 = (uv2 - center1) * grid;
+    float2 offset2 = (uv2 - center2) * grid;
 
     float2 center = dot(offset1, offset1) < dot(offset2, offset2) ? center1 : center2;
-    float2 offset = uv - center * grid;
+    float2 offset = (uv2 - center) * grid;
 
     float2 h = hash22(center) * 2.0 - 1.0;
     float angle = h.x * PI;
@@ -127,6 +131,10 @@ float4 SampleHexTiled(int texIndex, float2 uv, float2 dx, float2 dy)
         offset.x * sin(angle) + offset.y * cos(angle));
 
     float2 finalUv = rotUv + h * 0.5;
+
+    // Clamp derivatives to prevent GPU anisotropic filtering overflows/artifacts on extreme scales
+    dx = clamp(dx, -1.0, 1.0);
+    dy = clamp(dy, -1.0, 1.0);
 
     return bindlessTextures[texIndex].SampleGrad(bindlessSamplers[SAMPLER_ANISO], finalUv, dx, dy);
 }
@@ -140,17 +148,30 @@ float2 SampleHexTiledNormal(int texIndex, float2 uv, float2 dx, float2 dy)
     dx *= 10.0f;
     dy *= 10.0f;
 
+    // Fade out normal map in the distance (large derivatives) to prevent specular aliasing and noise
+    float derivLen = max(length(dx), length(dy));
+    float fade = smoothstep(0.5, 0.05, derivLen);
+
+    if (fade <= 0.001)
+    {
+        return float2(0.0);
+    }
+
     float2 grid = float2(1.0, sqrt(3.0));
     float2 uv2 = uv / grid;
+
+    // Wrap grid coordinates to prevent catastrophic cancellation precision loss in the distance
+    float2 period = float2(1024.0, 1024.0);
+    uv2 = uv2 - floor(uv2 / period) * period;
 
     float2 center1 = floor(uv2) + 0.5;
     float2 center2 = floor(uv2 + 0.5);
 
-    float2 offset1 = uv - center1 * grid;
-    float2 offset2 = uv - center2 * grid;
+    float2 offset1 = (uv2 - center1) * grid;
+    float2 offset2 = (uv2 - center2) * grid;
 
     float2 center = dot(offset1, offset1) < dot(offset2, offset2) ? center1 : center2;
-    float2 offset = uv - center * grid;
+    float2 offset = (uv2 - center) * grid;
 
     float2 h = hash22(center) * 2.0 - 1.0;
     float angle = h.x * PI;
@@ -160,7 +181,13 @@ float2 SampleHexTiledNormal(int texIndex, float2 uv, float2 dx, float2 dy)
 
     float2 finalUv = rotUv + h * 0.5;
 
+    // Clamp derivatives to prevent GPU anisotropic filtering overflows/artifacts on extreme scales
+    dx = clamp(dx, -1.0, 1.0);
+    dy = clamp(dy, -1.0, 1.0);
+
     float2 rawNormal = bindlessTextures[texIndex].SampleGrad(bindlessSamplers[SAMPLER_ANISO], finalUv, dx, dy).rg * 2.0 - 1.0;
+
+    rawNormal *= fade;
 
     // Rotate the tangent-space normal vector to align with the un-rotated surface tangent space
     float cosA = cos(-angle);
