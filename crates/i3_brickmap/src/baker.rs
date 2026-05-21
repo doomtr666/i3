@@ -197,6 +197,14 @@ impl BrickmapData {
             self.brick_count += 1;
             Some(slot)
         } else {
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    "brickmap atlas full: all {} slots exhausted, new bricks will be skipped",
+                    max
+                );
+            }
             None
         }
     }

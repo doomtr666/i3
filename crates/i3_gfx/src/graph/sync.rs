@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use bitflags::bitflags;
+use crate::graph::types::QueueType;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -89,10 +90,13 @@ pub enum ResourceKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ResourceState {
+    /// Meaningful only for images (maps to `VkImageLayout`).
+    /// Always `ImageLayout::Undefined` for buffers and acceleration structures —
+    /// those resources have no layout concept in Vulkan.
     pub layout: ImageLayout,
     pub access: AccessFlags,
     pub stage: StageFlags,
-    pub queue_family: u32,
+    pub queue: QueueType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

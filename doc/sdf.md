@@ -1,5 +1,16 @@
 # SDF → Brickmap avec clipmap multi-niveaux
 
+> **Note d'implémentation (2026-05-21)** — Ce document est le plan de conception original.
+> Il a été largement suivi mais présente plusieurs divergences avec le code actuel :
+> - **10 niveaux** implémentés (L0..L9), non 8.
+> - **Format atlas : u8-packed** (4 octets/DWORD). Les samples f16 du chemin CPU legacy (`BrickmapData`) ne sont plus uploadés vers le GPU.
+> - **Brick voxels : 9³ = 729** (BRICK\_SIZE=8 + 1 voxel de recouvrement pour le trilinear cross-brick), non 8³=512.
+> - **BRICK\_DWORDS = 183** (ceil(729/4)), non 128.
+> - **Grille par niveau : 32³ = 32 768 cellules** (CLIPMAP\_GRID=[32,32,32]). Couverture = 256 × voxel\_size par axe.
+> - Le **bake GPU compute** (`brickmap_bake.slang`) est implémenté et dispatché en indirect. Les passes `dirty` (détection) et `cull+alloc` (allocation GPU) sont la prochaine étape (plan GPU-driven dans `gpu_driven_plan.md`).
+> - La **DDA traversal** (`brickmap_clipmap.slang`) est implémentée et fonctionnelle.
+> - La **page\_table GPU** est un buffer `u32` (`PAGE_EMPTY = 0xFFFFFFFF`), initialisé par `BrickmapInitPass`.
+
 ## Contexte
 
 L'exemple SDF actuel évalue toutes les primitives par ray marching analytique (évaluateur RPN). Avec ~10 primitives c'est correct, mais le passage à des centaines de primitives + un terrain fBm détaillé rend cette approche trop coûteuse.
@@ -53,15 +64,19 @@ Remplace l'appel dans `octree.rs::OctreeNode::generate_mesh()`.
 
 ---
 
-## Étape 2 — Brickmap baker CPU (1 niveau uniforme)
+## Étape 2 — Brickmap baker CPU (1 niveau uniforme) — **implémenté**
 
-**Nouveau crate `crates/i3_brickmap/`**
+**Crate `crates/i3_brickmap/`**
 
 ```
-Brick = 8×8×8 = 512 samples
-Sample SDF : f16 (valeur normalisée par brick_half_diagonal)
-Sample mat : u8 (material ID)
-Page table : Vec<u16> flat [x][y][z], 0xFFFF = brick vide
+Brick = 9×9×9 = 729 samples (BRICK_SIZE=8 + 1 voxel de recouvrement trilinear)
+Sample SDF GPU : u8, normalisé par half_diag, packé 4 voxels/DWORD (183 DWORDs/brick)
+Sample mat GPU : u8, packé 4 voxels/DWORD
+Page table GPU : u32 flat [z][y][x], 0xFFFFFFFF = brick vide (GpuOnly buffer)
+
+// Chemin CPU legacy (BrickmapData, utilisé uniquement dans les tests) :
+Sample SDF CPU : f16 bits
+Page table CPU : Vec<u16>, 0xFFFF = vide
 ```
 
 **Types clés :**
@@ -142,43 +157,47 @@ struct BrickmapPC {
 
 ---
 
-## Étape 4 — Clipmap multi-niveaux (8 niveaux)
+## Étape 4 — Clipmap multi-niveaux (**10 niveaux — implémenté**)
 
-Chaque brick = 8³ voxels. La couverture double à chaque niveau. 8 niveaux couvrent du détail centimétrique (~2.5 cm) jusqu'à ~3.3 km, avec fallback analytique au-delà.
+Chaque brick = 8³ voxels + 1 voxel de recouvrement trilinear = 9³ = 729 samples. La couverture double à chaque niveau. 10 niveaux couvrent du détail millimétrique (1.25 cm) jusqu'à 2 km, avec fallback analytique au-delà.
 
-| Niveau | Voxel size | Brick size | Grille (X×Y×Z) | Couverture XZ | Couverture Y |
-|--------|-----------|-----------|----------------|--------------|-------------|
-| L0     | 0.025 m   | 0.20 m    | 128×64×128     | 25.6 m       | ± 6.4 m     |
-| L1     | 0.05 m    | 0.40 m    | 128×64×128     | 51.2 m       | ± 12.8 m    |
-| L2     | 0.10 m    | 0.80 m    | 128×64×128     | 102 m        | ± 25.6 m    |
-| L3     | 0.20 m    | 1.60 m    | 128×64×128     | 205 m        | ± 51 m      |
-| L4     | 0.40 m    | 3.20 m    | 128×64×128     | 410 m        | ± 102 m     |
-| L5     | 0.80 m    | 6.40 m    | 128×64×128     | 820 m        | ± 205 m     |
-| L6     | 1.60 m    | 12.8 m    | 128×64×128     | 1638 m       | ± 410 m     |
-| L7     | 3.20 m    | 25.6 m    | 128×64×128     | 3277 m       | ± 820 m     |
+Grille : **32×32×32 bricks/niveau**. Couverture = 32 × 8 × voxel\_size = 256 × voxel\_size par axe.
 
-**Mémoire :**
-- Page tables : 8 × 128×64×128 × 2 bytes = **16 MB**
-- Atlas SDF (f16) : ≈ 16K bricks actives/niveau × 1 KB = 16 MB/niveau → **~128 MB** total (atlas global partagé, éviction LRU)
-- Atlas material (u8) : moitié = **~64 MB**
+| Niveau | Voxel size | Brick size | Couverture (côté) | MAX\_BRICKS |
+|--------|-----------|-----------|-------------------|-------------|
+| L0     | 0.0125 m  | 0.10 m    | 3.2 m             | 8192        |
+| L1     | 0.025 m   | 0.20 m    | 6.4 m             | 8192        |
+| L2     | 0.05 m    | 0.40 m    | 12.8 m            | 8192        |
+| L3     | 0.10 m    | 0.80 m    | 25.6 m            | 8192        |
+| L4     | 0.20 m    | 1.60 m    | 51.2 m            | 8192        |
+| L5     | 0.40 m    | 3.20 m    | 102 m             | 8192        |
+| L6     | 0.80 m    | 6.40 m    | 205 m             | 8192        |
+| L7     | 1.60 m    | 12.8 m    | 410 m             | 8192        |
+| L8     | 4.00 m    | 32.0 m    | 1024 m            | 8192        |
+| L9     | 8.00 m    | 64.0 m    | 2048 m            | 8192        |
 
-**Mise à jour par frame :**
-- `world_origin` de chaque niveau = caméra arrondie à `brick_size × grid_dim/4`
-- Caméra sort d'un quart de la grille → invalider bricks sortantes, enqueue bricks entrantes
-- Rebake incrémental avec `BakeState` par niveau, priorité L0 → L7
+**Mémoire GPU :**
+- Page tables : 10 × 32³ × 4 bytes (u32) = **10 MB**
+- Atlas SDF (u8-packed) : 10 × 8192 bricks × 183 DWORDs × 4 bytes = **60 MB**
+- Atlas material (u8-packed) : identique = **60 MB**
+- Total atlas : **≈ 130 MB** (constant, pas d'éviction LRU)
 
-**`crates/i3_brickmap/src/clipmap.rs` :**
+**`crates/i3_brickmap/src/clipmap.rs` (implémenté) :**
 ```rust
-pub const NUM_LEVELS: usize = 8;
+pub const NUM_LEVELS: usize = 10;
+pub const CLIPMAP_GRID: [u32; 3] = [32, 32, 32];
+pub const LEVEL_VOXEL_SIZES: [f32; NUM_LEVELS] =
+    [0.0125, 0.025, 0.05, 0.10, 0.20, 0.40, 0.80, 1.60, 4.00, 8.00];
+pub const MAX_BRICKS_PER_LEVEL: usize = 8192;
+pub const GRID_VOL: usize = 32 * 32 * 32; // 32 768
 
 pub struct BrickmapClipmapState {
-    pub levels:      [BrickmapLevel; NUM_LEVELS],
-    pub bake_states: [BakeState; NUM_LEVELS],
-    pub atlas:       GlobalBrickAtlas,   // pool partagé, éviction LRU
+    pub levels:               Vec<ClipmapLevel>,
+    pub invalidation_spheres: Vec<InvalidationSphere>,
 }
 ```
 
-**Shader :** `level = clamp(floor(log2(t / coverage_L0)), 0, 7)`, blend trilinéaire aux transitions.
+**Shader :** sélection de niveau par distance camera → brick, blend aux transitions de niveau.
 
 ---
 

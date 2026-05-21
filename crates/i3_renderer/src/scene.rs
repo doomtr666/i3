@@ -41,23 +41,28 @@ pub struct MaterialData {
     pub emissive_tex_index: i32,
 }
 
-/// Type of light source.
+/// Type of light source. `repr(u32)` guarantees 4-byte discriminant matching the GPU shader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
 pub enum LightType {
-    Point,
-    Directional,
-    Spot,
+    Point       = 0,
+    Directional = 1,
+    Spot        = 2,
 }
 
 /// GPU-ready data for a single light.
+///
+/// Field order must match the HLSL `LightData` struct in lighting.slangh:
+///   float3 position, float radius, float3 color, float intensity,
+///   float3 direction, uint light_type  — total 48 bytes.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct LightData {
-    pub position: nalgebra_glm::Vec3,
-    pub direction: nalgebra_glm::Vec3,
-    pub color: nalgebra_glm::Vec3,
-    pub intensity: f32,
-    pub radius: f32,
+    pub position:   nalgebra_glm::Vec3,
+    pub radius:     f32,
+    pub color:      nalgebra_glm::Vec3,
+    pub intensity:  f32,
+    pub direction:  nalgebra_glm::Vec3,
     pub light_type: LightType,
 }
 

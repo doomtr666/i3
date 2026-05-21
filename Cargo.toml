@@ -66,3 +66,4 @@ strip = "symbols"
 inherits = "release"
 debug = 2
 strip = "none"
+#debug-assertions = true

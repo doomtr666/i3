@@ -1140,6 +1140,7 @@ dependencies = [
  "i3_voxel",
  "nalgebra",
  "rayon",
+ "tracing",
 ]
 
 [[package]]

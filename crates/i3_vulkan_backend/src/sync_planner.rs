@@ -215,7 +215,13 @@ pub fn translate_plan(
                     }
                 }
                 abstract_sync::ResourceKind::AccelStruct => {
-                    // TODO: Handle AS transitions (memory barriers, no layout)
+                    // AS use global memory barriers (no per-resource handle — accessed via device address).
+                    let barrier = vk::MemoryBarrier2::default()
+                        .src_stage_mask(translate_stages_from_abstract(transition.old_state.stage))
+                        .src_access_mask(translate_access_from_abstract(transition.old_state.access))
+                        .dst_stage_mask(translate_stages_from_abstract(transition.new_state.stage))
+                        .dst_access_mask(translate_access_from_abstract(transition.new_state.access));
+                    vk_plan.pass_sync[i].pre_barriers.push(Barrier::Memory(barrier));
                 }
             }
         }

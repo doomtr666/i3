@@ -770,16 +770,18 @@ pub fn record_barriers(
 
     let mut total_image_barriers = 0;
     let mut total_buffer_barriers = 0;
+    let mut total_memory_barriers = 0;
     for p in passes {
         for b in &p.sync.pre_barriers {
             match b {
                 crate::sync::Barrier::Image(_) => total_image_barriers += 1,
                 crate::sync::Barrier::Buffer(_) => total_buffer_barriers += 1,
+                crate::sync::Barrier::Memory(_) => total_memory_barriers += 1,
             }
         }
     }
 
-    if total_image_barriers == 0 && total_buffer_barriers == 0 {
+    if total_image_barriers == 0 && total_buffer_barriers == 0 && total_memory_barriers == 0 {
         tracing::debug!(
             "record_barriers: No barriers to declare for {} passes",
             passes.len()
@@ -788,9 +790,10 @@ pub fn record_barriers(
     }
 
     tracing::debug!(
-        "record_barriers: Recording {} image barriers and {} buffer barriers for {} passes",
+        "record_barriers: Recording {} image, {} buffer, {} memory barriers for {} passes",
         total_image_barriers,
         total_buffer_barriers,
+        total_memory_barriers,
         passes.len()
     );
 
@@ -848,17 +851,20 @@ pub fn record_barriers(
 
     let mut all_image_barriers = Vec::with_capacity(total_image_barriers);
     let mut all_buffer_barriers = Vec::with_capacity(total_buffer_barriers);
+    let mut all_memory_barriers = Vec::with_capacity(total_memory_barriers);
 
     for p in passes {
         for b in &p.sync.pre_barriers {
             match b {
                 crate::sync::Barrier::Image(i) => all_image_barriers.push(i.clone()),
                 crate::sync::Barrier::Buffer(b) => all_buffer_barriers.push(b.clone()),
+                crate::sync::Barrier::Memory(m) => all_memory_barriers.push(m.clone()),
             }
         }
     }
 
     let dependency_info = vk::DependencyInfo::default()
+        .memory_barriers(&all_memory_barriers)
         .image_memory_barriers(&all_image_barriers)
         .buffer_memory_barriers(&all_buffer_barriers);
 

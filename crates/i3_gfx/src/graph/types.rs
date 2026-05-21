@@ -370,8 +370,9 @@ pub enum PassDomain {
     Cpu,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum QueueType {
+    #[default]
     Graphics,
     AsyncCompute,
     Transfer,
@@ -414,6 +415,8 @@ pub struct FlatPass {
     pub image_writes: Vec<(ImageHandle, ResourceUsage)>,
     pub buffer_reads: Vec<(BufferHandle, ResourceUsage)>,
     pub buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
+    pub accel_struct_reads: Vec<(AccelerationStructureHandle, ResourceUsage)>,
+    pub accel_struct_writes: Vec<(AccelerationStructureHandle, ResourceUsage)>,
     pub data_reads: Vec<String>,
     pub data_writes: Vec<String>,
     pub prefer_async: bool,

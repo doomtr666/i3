@@ -122,6 +122,15 @@ impl RenderPass for TlasRebuildPass {
             builder.import_acceleration_structure("TLAS", tlas);
         }
 
+        // Declare read dependency on each BLAS so the frame graph orders BlasUpdate before
+        // TlasRebuild and emits the AS_BUILD → AS_BUILD memory barrier between them.
+        for inst in &self.instances {
+            let blas_name = format!("_as_{}", inst.blas.0);
+            if let Some(blas_virt) = builder.try_resolve_acceleration_structure(&blas_name) {
+                builder.read_acceleration_structure(blas_virt, ResourceUsage::ACCEL_STRUCT_READ);
+            }
+        }
+
         // Dirty check: only rebuild when the instance list changed.
         self.tlas_dirty = self.instances.len() != self.instances_cache.len()
             || self.instances

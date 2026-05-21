@@ -27,6 +27,8 @@ pub struct NodeStorage {
     pub image_writes: Vec<(ImageHandle, ResourceUsage)>,
     pub buffer_reads: Vec<(BufferHandle, ResourceUsage)>,
     pub buffer_writes: Vec<(BufferHandle, ResourceUsage)>,
+    pub accel_struct_reads: Vec<(AccelerationStructureHandle, ResourceUsage)>,
+    pub accel_struct_writes: Vec<(AccelerationStructureHandle, ResourceUsage)>,
 
     /// CPU data symbols published by this node (write dependency).
     pub data_writes: Vec<String>,
@@ -71,6 +73,8 @@ impl NodeStorage {
             image_writes: Vec::new(),
             buffer_reads: Vec::new(),
             buffer_writes: Vec::new(),
+            accel_struct_reads: Vec::new(),
+            accel_struct_writes: Vec::new(),
             data_writes: Vec::new(),
             data_reads: Vec::new(),
             external_images: Vec::new(),
@@ -351,6 +355,9 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             id,
         );
         self.storage.external_accel_structs.push((handle, physical));
+        // Register write intent and data dependency for topological ordering.
+        self.storage.accel_struct_writes.push((handle, ResourceUsage::ACCEL_STRUCT_WRITE));
+        self.storage.data_writes.push(name.to_string());
         handle
     }
 
@@ -358,6 +365,8 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
         &mut self,
         name: &str,
     ) -> Option<AccelerationStructureHandle> {
+        // Register data read dependency for topological ordering.
+        self.storage.data_reads.push(name.to_string());
         // Check local scope first, then ancestor scopes.
         if let Some(id) = self.storage.symbols.resolve(name) {
             if let Some(data) = self.storage.symbols.get_data(id) {
@@ -372,6 +381,10 @@ impl<'a> InternalPassBuilder for PassRecorder<'a> {
             }
         }
         None
+    }
+
+    fn read_accel_struct(&mut self, handle: AccelerationStructureHandle, usage: ResourceUsage) {
+        self.storage.accel_struct_reads.push((handle, usage));
     }
 
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle {

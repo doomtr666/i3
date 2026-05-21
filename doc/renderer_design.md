@@ -36,76 +36,41 @@ graph TD
 
 ---
 
-## ECS ↔ GPU Sync Model
+## Scene ↔ GPU Sync Model
 
 ### Principle
 
-The scene lives in the ECS (transforms, materials, mesh refs, light components). The renderer does **not** own the scene — it **observes** it through a generic synchronization pass group that runs at the beginning of each frame.
+The renderer does **not** own the scene. It observes it through the `SceneProvider` trait, which the application implements. The renderer calls `sync()` each frame, then assembles the render graph.
 
-```mermaid
-graph LR
-    subgraph ECS ["ECS World"]
-        T["Transform"]
-        M["Material"]
-        MR["MeshRef"]
-        L["Light"]
-        S["Skinned"]
-    end
-
-    subgraph GPU ["GPU Buffers"]
-        OB["ObjectBuffer"]
-        MB["MaterialBuffer"]
-        DCB["DrawCommandBuf"]
-        LB["LightBuffer"]
-        SB["SkinningBuffer"]
-    end
-
-    T --> OB
-    M --> MB
-    MR --> DCB
-    L --> LB
-    S --> SB
-    
-    SB --> SC["Skinning Compute"]
-    SC --> BU["BLAS Update"]
-    BU --> TR["TLAS Rebuild"]
-```
-
-### The Sync Pass Group
-
-Instead of a monolithic `GpuScene` struct, the sync is a **series of FrameGraph passes** — generic enough that any ECS can feed it. The application provides a `SceneSnapshot` (or implements a trait) that the sync passes consume.
+> **Note**: L'intégration ECS n'est pas implémentée. L'application fournit directement une implémentation de `SceneProvider` (ex: `BasicScene` dans `examples/common`). Il n'y a pas de `EcsBridge`.
 
 ```rust
-/// Trait that the application (or ECS bridge) implements.
-/// The renderer consumes this to populate GPU buffers.
+/// Trait that the application implements to feed scene data to the renderer.
 pub trait SceneProvider {
-    fn object_count(&self) -> usize;
-    fn iter_objects(&self) -> impl Iterator<Item = &ObjectData>;
-    fn iter_dirty_objects(&self) -> impl Iterator<Item = (ObjectId, &ObjectData)>;
-    fn iter_lights(&self) -> impl Iterator<Item = &LightData>;
-    fn iter_skinned_meshes(&self) -> impl Iterator<Item = &SkinnedMeshData>;
+    fn iter_mesh_descriptors(&self, backend: &mut dyn RenderBackend)
+        -> impl Iterator<Item = (u32, GpuMeshDescriptor)>;
+    fn iter_instances(&self)   -> impl Iterator<Item = GpuInstanceData>;
+    fn iter_materials(&self)   -> impl Iterator<Item = (u32, MaterialData)>;
+    fn iter_lights(&self)      -> impl Iterator<Item = (LightId, &LightData)>;
+    fn iter_blas_instances(&self) -> impl Iterator<Item = TlasInstanceDesc>;
+    // ...
 }
 ```
 
-The sync passes:
+### The Sync Pass Group (`SyncGroup`)
 
-1. **ObjectSync** (CPU→GPU): Streams dirty transforms + material IDs into `ObjectBuffer`. Builds `DrawCommandBuffer` (indirect draw commands).
-2. **LightSync** (CPU→GPU): Streams dirty light data into `LightBuffer`.
-3. **SkinningCompute** (GPU compute): Reads bind poses + bone transforms, writes skinned vertex data. **Must complete before BLAS update.**
-4. **BLASUpdate** (GPU compute/RT): Rebuilds BLAS for skinned/deformed meshes using the skinned vertex output.
-5. **TLASRebuild** (GPU compute/RT): Rebuilds the top-level acceleration structure from all BLAS instances + transforms from `ObjectBuffer`.
+A series of FrameGraph passes that upload CPU scene deltas to GPU buffers each frame:
 
-> [!IMPORTANT]
-> **Ordering invariant**: SkinningCompute → BLASUpdate → TLASRebuild → Render passes. The FrameGraph's dependency tracking handles this automatically through declared resource reads/writes.
+1. **MeshRegistrySyncPass**: Streams mesh descriptors (BDA, AABB) into `MeshDescriptorBuffer` via staging + `copy_buffer`.
+2. **InstanceSyncPass**: Streams instance data (transform, prev_transform, mesh_idx, material_id) into `InstanceBuffer`.
+3. **MaterialSyncPass**: Streams material data into `MaterialBuffer`.
+4. **LightSync** (inline, no dedicated pass): Uploads `GpuLightData` array into `LightBuffer` via mapped write.
+5. **BlasUpdatePass** [RT-gated]: Builds newly created BLAS from `accel_struct_system.blas_cache`.
+6. **TlasRebuildPass** [RT-gated]: Rebuilds TLAS from all active BLAS instances + dirty-checked instance list.
 
-### Why Sync ≠ TLAS
+> **Ordering invariant**: BlasUpdatePass → TlasRebuildPass → shader passes. Handled by the frame graph's AS dependency tracking (SYNC-06).
 
-The acceleration structure pipeline **cannot be fully mutualized** with the raster geometry data:
-- BLAS geometry references the skinned vertex buffer, not the original mesh pool directly.
-- TLAS needs its own instance buffer with `VkAccelerationStructureInstanceKHR` layout, which differs from the raster `ObjectBuffer`.
-- TLAS rebuild is capability-gated (RT hardware required).
-
-The sync passes write **shared** data (ObjectBuffer, LightBuffer) that both raster and RT paths consume. But the accel struct construction is a separate sub-graph, activated only when RT features are enabled.
+> **Not implemented**: Skinning compute, per-frame BLAS rebuild for deformed meshes.
 
 ---
 
@@ -115,12 +80,15 @@ The sync passes write **shared** data (ObjectBuffer, LightBuffer) that both rast
 
 | Buffer | Content | Upload Strategy |
 |---|---|---|
-| **ObjectBuffer** | Per-instance: `world_transform`, `prev_transform`, `material_id`, `mesh_id`, `flags` | CPU streams dirty entries |
-| **MaterialBuffer** | Material table: `albedo_idx`, `normal_idx`, `roughmetal_idx`, `emissive_idx`, `params` | CPU streams dirty entries |
-| **MeshPool** | Single large vertex + index buffer. Sub-allocated per mesh asset. | Loaded once via `i3_io` |
-| **DrawCommandBuffer** | `VkDrawIndexedIndirectCommand` + instance data | Rebuilt by ObjectSync or GPU cull |
-| **LightBuffer** | `position`, `direction`, `color`, `radius`, `type`, `shadow_params` | CPU streams dirty entries |
-| **SkinningBuffer** | Bone transforms per skinned instance | CPU uploads per frame |
+| **MeshDescriptorBuffer** | BDA + AABB + stride par mesh | Staging + copy si dirty |
+| **InstanceBuffer** | `world_transform`, `prev_transform`, `mesh_idx`, `material_id` | Staging + copy si dirty |
+| **MaterialBuffer** | `base_color_factor`, `emissive`, `metallic`, `roughness`, `tex_indices` | Staging + copy si dirty |
+| **LightBuffer** | `position`, `radius`, `color`, `intensity`, `direction`, `light_type` | Mapped write chaque frame |
+| **DrawCommandBuffer** | `VkDrawIndexedIndirectCommand` (5×u32) par instance | Écrit par DrawCallGenPass compute |
+| **CommonBuffer** | UBO : matrices VP, inv_VP, prev_VP, screen size, camera pos, near/far | Mapped write chaque frame |
+| **ExposureBuffer** | `current_exposure` (f32) — EMA avec history | Écrit par AverageLuminancePass |
+
+> **Non implémenté** : SkinningBuffer, BindPoseBuffer.
 
 ### Bindless Resource Model
 
@@ -148,35 +116,56 @@ graph TD
 
 ## Render Graph Structure
 
-Each frame, the renderer records the following pass tree:
+Passes enregistrées par frame (état actuel — 2026-05-21) :
 
-```mermaid
-graph TD
-    DRG["DefaultRenderGraph"] --> SG["SyncGroup"]
-    SG --> OS["ObjectSync"]
-    SG --> LS["LightSync"]
-    SG --> SC["SkinningCompute"]
-    SG --> BU["BLASUpdate [RT]"]
-    SG --> TR["TLASRebuild [RT]"]
-
-    DRG --> GC["GPUCull"]
-    
-    DRG --> GG["GeometryGroup"]
-    GG --> ZP["ZPrePass"]
-    GG --> GBP["GBufferPass"]
-
-    DRG --> CG["ClusterGroup"]
-    CG --> CB["ClusterBuild"]
-    CG --> LC["LightCull"]
-
-    DRG --> DR["DeferredResolve"]
-    
-    DRG --> FG["ForwardGroup"]
-    FG --> FT["ForwardTransparent"]
-
-    DRG --> PPG["PostProcessGroup"]
-    PPG --> TM["ToneMap"]
 ```
+SyncGroup
+  ├─ MeshRegistrySyncPass      CPU→GPU: MeshDescriptorBuffer (BDA, AABB)
+  ├─ InstanceSyncPass          CPU→GPU: InstanceBuffer (transform, material_id)
+  ├─ MaterialSyncPass          CPU→GPU: MaterialBuffer
+  ├─ LightSync (inline)        CPU→GPU: LightBuffer
+  ├─ BlasUpdatePass [RT]       GPU: build new BLAS
+  └─ TlasRebuildPass [RT]      GPU: rebuild TLAS
+
+DrawCallGenPass                  GPU compute: frustum+backface cull → DrawCommandBuffer
+
+GBufferPass                      Raster: albedo/normal/roughmetal/emissive/depth
+
+ClusterBuildPass                 Compute: cluster AABB from depth min/max
+LightCullPass                    Compute: light→cluster assignment
+
+HiZBuildPass                     Compute: hierarchical Z (multi-dispatch)
+
+AoGroup (GTAO ou RTAO)
+  ├─ GtaoPass / RtaoPass       Compute/RT: raw AO noisy
+  └─ GtaoTemporalPass / RtaoTemporalPass   Compute: EMA temporal accumulation
+
+SssrPass                         Compute: stochastic SSR sample + TAA history
+
+HdrMipGenPass                    Compute: HDR mip chain (pour bloom + SPD)
+
+BloomGroup
+  ├─ BloomDownPass
+  ├─ BloomUpPass
+  └─ BloomCompositePass
+
+HistogramBuildPass               Compute: log-luminance histogram (256 bins)
+AverageLuminancePass             Compute: average luminance + exposure EMA
+
+DeferredResolvePass              Graphics (fullscreen): PBR + clustered lights + AO + RT shadows
+SkyPass                          Compute: sky + atmosphere
+
+TonemapPass                      Graphics (fullscreen): tonemap + bloom + FXAA
+
+DebugDrawPass                    Graphics: wireframe/gizmos (debug only)
+EguiPass                         Graphics: UI
+```
+
+**Passes non encore implémentées** (dans `workplan.md`) :
+- ZPrePass — pas de depth pre-pass, l'overdraw n'est pas optimisé
+- ForwardTransparent — pas de transparents
+- GPU frustum culling en deux passes — `DrawCallGenPass` fait uniquement frustum+backface, pas de HiZ occlusion culling
+- Skinning compute + BLAS per-frame rebuild
 
 ---
 
@@ -200,7 +189,8 @@ graph TD
 Grid: TILE_X × TILE_Y × NUM_DEPTH_SLICES
   TILE_X = ceil(screen_width / TILE_SIZE)    (TILE_SIZE = 64)
   TILE_Y = ceil(screen_height / TILE_SIZE)
-  NUM_DEPTH_SLICES = 24 (tunable)
+  NUM_DEPTH_SLICES = 16   (CLUSTER_GRID_Z dans constants.rs)
+  MAX_LIGHTS_PER_CLUSTER = 512
 ```
 
 Depth slicing — logarithmic (Infinity Ward):
@@ -229,31 +219,17 @@ for (uint i = 0; i < count; i++) {
 
 ---
 
-## Skinning & Acceleration Structures
+## Acceleration Structures
 
-### Compute Skinning Pipeline
+### BLAS / TLAS Management (implémenté)
 
-Skinned meshes require vertex transformation on the GPU before both rasterization (indirect draw) and ray tracing (BLAS build):
+- **Static meshes**: BLAS est build lors du chargement via `backend.create_blas()`. Le handle est stocké dans `AccelStructSystem.blas_cache`.
+- **TLAS**: Rebuild par frame si la liste d'instances change (dirty check). `TlasRebuildPass` compare `instances` vs `instances_cache`.
+- **Ordering**: `BlasUpdatePass` → `TlasRebuildPass` → shader passes. Garanti par les dépendances AS dans le frame graph (SYNC-06 corrigé).
 
-```mermaid
-graph TD
-    BB["BoneBuffer (CPU)"] --> SC["SkinningCompute"]
-    BPB["BindPoseBuffer (Persistent)"] --> SC
-    SC -- "SkinnedVertexBuffer" --> MP["MeshPool (Raster)"]
-    SC -- "SkinnedVertexBuffer" --> BU["BLASUpdate (RT)"]
-```
+> **Non implémenté** : Skinning compute. Les BLAS skinned (rebuild per-frame depuis le buffer skinné) ne sont pas supportés.
 
-The `MeshPool` for skinned meshes points to the **skinned output buffer**, not the bind pose. This is a sub-allocation within the same large vertex pool.
-
-### BLAS / TLAS Management
-
-- **Static meshes**: BLAS is built once when the mesh is loaded. Stored alongside the `MeshPool` entry.
-- **Skinned meshes**: BLAS is rebuilt each frame from the skinned vertex output.
-- **TLAS**: Rebuilt each frame from all active BLAS instances + transforms from `ObjectBuffer`.
-- The TLAS instance buffer uses `VkAccelerationStructureInstanceKHR`, separate from the raster draw commands.
-
-> [!IMPORTANT]
-> The accel struct sub-graph is **capability-gated**. When RT hardware is not available, the entire BLAS/TLAS sub-graph is not recorded into the FrameGraph, and the deferred resolve uses raster-only lighting.
+> **Capability-gated** : si `backend.capabilities().ray_tracing == false`, les passes BlasUpdate et TlasRebuild ne sont pas ajoutées au graph, et le deferred resolve n'utilise pas les RT shadows.
 
 ---
 
@@ -343,92 +319,64 @@ crates/
 
 ---
 
-## API Surface
+## API Surface (implémentée)
 
 ```rust
 /// The application implements this to feed scene data to the renderer.
 pub trait SceneProvider {
-    fn object_count(&self) -> usize;
-    fn iter_objects(&self) -> impl Iterator<Item = &ObjectData>;
-    fn iter_dirty_objects(&self) -> impl Iterator<Item = (ObjectId, &ObjectData)>;
-    fn iter_lights(&self) -> impl Iterator<Item = &LightData>;
-    fn iter_skinned_meshes(&self) -> impl Iterator<Item = &SkinnedMeshData>;
+    fn iter_mesh_descriptors(&self, backend: &mut dyn RenderBackend)
+        -> Box<dyn Iterator<Item = (u32, GpuMeshDescriptor)> + '_>;
+    fn iter_instances(&self)   -> Box<dyn Iterator<Item = GpuInstanceData> + '_>;
+    fn iter_materials(&self)   -> Box<dyn Iterator<Item = (u32, MaterialData)> + '_>;
+    fn iter_lights(&self)      -> Box<dyn Iterator<Item = (LightId, &LightData)> + '_>;
+    fn iter_blas_instances(&self) -> Box<dyn Iterator<Item = TlasInstanceDesc> + '_>;
+    fn sun(&self)              -> LightData;
+    fn light_count(&self)      -> usize;
+    fn mesh(&self, id: u32)    -> &Mesh;
 }
 
-/// The default render graph. Records into a FrameGraph each frame.
 pub struct DefaultRenderGraph { ... }
 
 impl DefaultRenderGraph {
-    pub fn new(backend: &mut dyn RenderBackend, compiler: &SlangCompiler) -> Self;
+    pub fn new(backend: &mut dyn RenderBackend, config: RenderConfig) -> Self;
 
-    /// Records the full render graph for one frame.
-    pub fn declare(
-        &self,
-        graph: &mut FrameGraph,
-        scene: &dyn SceneProvider,
-        window: WindowHandle,
-    );
+    /// CPU sync: upload scene deltas to GPU, rebuild AS if needed.
+    pub fn sync(&mut self, backend: &mut dyn RenderBackend,
+                window: WindowHandle, scene: &dyn SceneProvider);
+
+    /// Per-frame render: declare, compile, execute.
+    pub fn render(&mut self, backend: &mut dyn RenderBackend,
+                  window: WindowHandle, scene: &dyn SceneProvider);
 }
 ```
 
-Usage from the application:
+Usage from the application (example from `examples/viewer`) :
 
 ```rust
-fn render(&mut self) {
-    let mut graph = FrameGraph::new();
-    self.render_graph.declare(&mut graph, &self.ecs_bridge, self.window);
-    let compiled = graph.compile();
-    compiled.execute(&mut self.backend).unwrap();
-}
-```
-
-The application's ECS bridge implements `SceneProvider`:
-
-```rust
-struct EcsBridge<'a> { world: &'a World }
-
-impl<'a> SceneProvider for EcsBridge<'a> {
-    fn iter_dirty_objects(&self) -> impl Iterator<Item = (ObjectId, &ObjectData)> {
-        self.world.query::<(&Transform, &Material, &Changed)>()
-            .map(|(entity, (t, m, _))| (entity.into(), ObjectData { ... }))
-    }
-    // ...
+fn on_frame(&mut self, backend: &mut dyn RenderBackend) {
+    self.render_graph.sync(backend, self.window, &self.scene);
+    self.render_graph.render(backend, self.window, &self.scene);
 }
 ```
 
 ---
 
-## Implementation Plan — Phased
+## État d'implémentation (2026-05-21)
 
-### Phase 1: Foundation
-Create `i3_renderer` crate. Define `SceneProvider`, GPU buffer structs, sync passes. Single debug fullscreen pass (output depth as color). Validate pipeline end-to-end.
-
-### Phase 2: Geometry
-ZPrePass + GBuffer with indirect draw. Baker outputs GPU-ready vertex data. Static scene with hardcoded materials.
-
-### Phase 3: Clustered Lighting
-Cluster build + light cull compute. Deferred resolve. Validate with point lights.
-
-### Phase 4: Forward Transparency
-Forward sub-graph, sorted blend, same clustered light data.
-
-### Phase 5: Post-Processing
-Tone mapping → Bloom → TAA (incremental).
-
-### Phase 6: Skinning + Accel Structs
-Compute skinning. BLAS/TLAS build passes. Capability-gated.
-
-### Phase 7: RT Extensions
-RT shadows → RT emissive → GI (DDGI / probes).
-
-### Phase 8: Polish
-Decals, particle systems, volumetrics, debug rendering.
-
----
-
-## Open Questions
-
-1. **GPU Culling timing**: Phase 1 with CPU frustum culling, or include GPU cull from the start? CPU-side is simpler to bootstrap but adds a throwaway path.
-2. **Mesh storage**: Single large vertex/index pool with sub-allocation (required for efficient indirect draw). Confirm this as the approach.
-3. **ECS choice**: Should `i3_renderer` be ECS-agnostic via the `SceneProvider` trait, or should we commit to a specific ECS crate (e.g., `hecs`, `bevy_ecs`)?
-4. **Bindless capacity**: Default max texture array size? 4096 is safe for most drivers, 16384 for modern hardware.
+| Phase | Description | État |
+|---|---|---|
+| Sync CPU→GPU | MeshRegistry, Instance, Material, Light, BLAS/TLAS | ✅ Implémenté |
+| GBuffer | Indirect draw, albedo/normal/roughmetal/emissive/depth | ✅ Implémenté |
+| Clustered shading | Cluster build + light cull + deferred resolve | ✅ Implémenté |
+| AO | GTAO + temporal accumulation, RTAO + temporal [RT] | ✅ Implémenté |
+| SSR | SSSR stochastique avec history TAA | ✅ Implémenté |
+| Bloom | Jimenez dual-pass down/up + composite | ✅ Implémenté |
+| Exposition | Histogramme log-lum + EMA auto-exposure | ✅ Implémenté |
+| Sky | Sky pass (atmosphere) | ✅ Implémenté |
+| Tonemap + FXAA | ACES/filmic + anti-aliasing | ✅ Implémenté |
+| Debug | DebugDrawPass, GUI egui | ✅ Implémenté |
+| ZPrePass | Depth pre-pass avant GBuffer | ❌ Non implémenté |
+| Forward transparent | Transparents + sorted blend | ❌ Non implémenté |
+| GPU occlusion culling | HiZ 2nd-pass cull | ❌ Non implémenté (frustum+backface seulement) |
+| Skinning | Compute skinning + BLAS rebuild | ❌ Non implémenté |
+| GI / probes | DDGI, RT GI | ❌ Non implémenté |

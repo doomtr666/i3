@@ -11,15 +11,29 @@ use crate::graph::symbol_table::FrameBlackboard;
 use crate::graph::types::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SyncPtr — raw pointer wrapper that is Send + Sync for parallel execute
+// SyncPtr — shared read-only pointer wrapper for parallel execute
+//
+// SAFETY invariant (must be upheld at every use site):
+//   (1) The pointed-to NodeStorage is alive for the duration of the execute()
+//       call — guaranteed because the tree lives in CompiledGraph::_root, which
+//       is kept alive for the whole call.
+//   (2) Each node_id in the HashMap maps to a *distinct* NodeStorage.
+//       NEXT_NODE_ID is a monotone atomic counter so node_ids are globally
+//       unique; collect_node_map_sync visits every node exactly once.
+//   (3) No NodeStorage is mutated during execute() — all access is read-only
+//       (&*ptr); the only mutation path (pass.execute) takes &self.
+//
+// These three conditions together make concurrent access from rayon workers
+// data-race-free, even though *const T is !Send + !Sync.
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub(crate) struct SyncPtr<T>(pub(crate) *mut T);
+pub(crate) struct SyncPtr<T>(pub(crate) *const T);
 
 impl<T> Clone for SyncPtr<T> {
     fn clone(&self) -> Self { *self }
 }
 impl<T> Copy for SyncPtr<T> {}
+// SAFETY: see invariant comment above.
 unsafe impl<T> Send for SyncPtr<T> {}
 unsafe impl<T> Sync for SyncPtr<T> {}
 
@@ -91,7 +105,7 @@ impl CompiledGraph {
 
         // 4. Build node_id → NodeStorage pointer map for O(1) lookup.
         let mut node_map: HashMap<u64, SyncPtr<NodeStorage>> = HashMap::new();
-        Self::collect_node_map_sync(&mut self._root, &mut node_map);
+        Self::collect_node_map_sync(&self._root, &mut node_map);
 
         // 4.5. Prepare all active passes.
         let mut prepared_passes: Vec<Option<B::PreparedPass>> =
@@ -108,7 +122,7 @@ impl CompiledGraph {
             }
 
             if let Some(node_ptr) = node_map.get(&flat.node_id) {
-                let node = unsafe { &mut *node_ptr.0 };
+                let node = unsafe { &*node_ptr.0 };
                 let desc = crate::graph::backend::PassDescriptor {
                     name: &node.name,
                     pipeline: flat.pipeline,
@@ -178,7 +192,7 @@ impl CompiledGraph {
                     if let Some(prepared) = &prepared_passes[*pass_idx] {
                         let flat = &self.flat_passes[*pass_idx];
                         if let Some(node_ptr) = node_map.get(&flat.node_id) {
-                            let node = unsafe { &mut *node_ptr.0 };
+                            let node = unsafe { &*node_ptr.0 };
                             tracing::debug!(pass = %flat.name, domain = ?flat.domain, queue = ?flat.queue, "Executing pass");
                             let (_sem, cb, _present_req) =
                                 backend.record_pass(prepared, node.pass.as_ref().unwrap().as_ref(), frame_data);
@@ -195,7 +209,7 @@ impl CompiledGraph {
                             if let Some(prepared) = &prepared_passes[pass_idx] {
                                 let flat = &self.flat_passes[pass_idx];
                                 if let Some(node_ptr) = node_map.get(&flat.node_id) {
-                                    let node = unsafe { &mut *node_ptr.0 };
+                                    let node = unsafe { &*node_ptr.0 };
                                     let (_sem, cb, present_req) = backend.record_pass(
                                         prepared,
                                         node.pass.as_ref().unwrap().as_ref(),
@@ -234,9 +248,9 @@ impl CompiledGraph {
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    fn collect_node_map_sync(node: &mut NodeStorage, map: &mut HashMap<u64, SyncPtr<NodeStorage>>) {
-        map.insert(node.node_id, SyncPtr(node as *mut NodeStorage));
-        for child in &mut node.children {
+    fn collect_node_map_sync(node: &NodeStorage, map: &mut HashMap<u64, SyncPtr<NodeStorage>>) {
+        map.insert(node.node_id, SyncPtr(node as *const NodeStorage));
+        for child in &node.children {
             Self::collect_node_map_sync(child, map);
         }
     }

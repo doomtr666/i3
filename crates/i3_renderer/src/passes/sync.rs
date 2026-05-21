@@ -99,9 +99,21 @@ impl RenderPass for MeshRegistrySyncPass {
                 ];
                 for (id, desc) in &self.mesh_descriptors {
                     let idx = *id as usize;
-                    if idx < count {
-                        flat_descriptors[idx] = *desc;
+                    if idx >= MAX_MESHES as usize {
+                        tracing::warn!(
+                            "MeshRegistrySyncPass: mesh id {} >= MAX_MESHES ({}), descriptor skipped",
+                            idx, MAX_MESHES
+                        );
+                        continue;
                     }
+                    if idx >= flat_descriptors.len() {
+                        tracing::warn!(
+                            "MeshRegistrySyncPass: mesh id {} out of staging range ({}), descriptor skipped",
+                            idx, flat_descriptors.len()
+                        );
+                        continue;
+                    }
+                    flat_descriptors[idx] = *desc;
                 }
 
                 unsafe {

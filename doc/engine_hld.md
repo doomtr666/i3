@@ -19,14 +19,16 @@ graph TD
 
     Crates --> GF["i3_gfx (Core & Frame Graph)"]
     Crates --> VB["i3_vulkan_backend (Vulkan 1.3)"]
-    Crates --> DB["i3_dx12_backend (Future)"]
     Crates --> NB["i3_null_backend (Validation Oracle)"]
     Crates --> SL["i3_slang (Compiler & Reflection)"]
     Crates --> RD["i3_renderer (Deferred Clustered)"]
     Crates --> BK["i3_baker (Asset Toolchain)"]
     Crates --> IO["i3_io (VFS & Asset Loading)"]
-    Crates --> BN["i3_bundle (Bundle Format)"]
+    Crates --> BN["i3_bundle (Bundle Inspector CLI)"]
     Crates --> EG["i3_egui (Egui integration)"]
+    Crates --> BM["i3_brickmap (SDF Clipmap Brickmap)"]
+    Crates --> VX["i3_voxel (SDF Scene & BVH)"]
+    Crates --> MT["i3_math (AABB, Ray, Math utils)"]
 ```
 
 ## 2. Core Components

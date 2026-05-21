@@ -61,7 +61,7 @@ graph TD
 | SYNC-02 | i3_gfx | Low | `queue_family: u32` in `ResourceState` leaks Vulkan indices into the abstract layer. Should be `queue_type: QueueType`; translation to `vk::QueueFamily` index belongs in the backend. |
 | SYNC-03 | i3_gfx | Low | `load_ops: HashMap<u64, LoadOp>` in `PassSyncData` is a renderpass concern mixed into the sync plan. Consider splitting into a separate `PassRenderInfo` or at minimum document the coupling. |
 | SYNC-04 | i3_gfx | Low | `SyncPlanner::image_seed` / `buffer_seed` are `pub`. Replace with explicit `fn seed_image()` / `fn seed_buffer()` / `fn clear_seeds()` methods. |
-| SYNC-05 | i3_gfx | Low | `layout` field in `ResourceState` is meaningless for buffers. Either introduce separate `ImageState`/`BufferState` types or document the field as image-only. |
+| SYNC-05 | i3_gfx | **DONE** | ~~`layout` field in `ResourceState` is meaningless for buffers.~~ Field documented with docstring: "Meaningful only for images. Always `Undefined` for buffers and AS." |
 | SYNC-06 | i3_gfx / i3_vulkan_backend | **DONE** | ~~Present barrier managed by sync planner via `builder.present_image()`.~~ |
 | GFX-07 | i3_gfx | **DONE** | ~~Multi-queue async compute/transfer.~~ Working, no validation errors. |
 | GFX-MQ-01 | i3_vulkan_backend | **DONE** | ~~`begin_frame` per-queue timeline wait before pool reset.~~ Compute and transfer semaphore waits added at `submission.rs:159-205`. |
@@ -86,9 +86,9 @@ graph TD
 | RN-06 | Medium | No forward transparency pass. |
 | RN-07 | Info | No RT support (BLAS/TLAS). Planned for future phases. |
 | RN-08 | **DONE** | ~~`sync.rs` dirty-check: length check first, then zip.~~ Already correct in code; marked done. |
-| RN-09 | Low | `LightData` in `scene.rs` needs `repr(C)` padding audit for GPU compatibility. |
+| RN-09 | **DONE** | ~~`LightData` repr(C) padding audit.~~ `LightType` now `#[repr(u32)]`; field order corrected to match GPU shader layout (position, radius, color, intensity, direction, light_type). |
 | RN-10 | **DONE** | ~~`Arc<Mutex<AccelStructSystem>>`~~ Replaced with direct field ownership. Passes populated by `sync()`, no blackboard needed. |
-| RN-11 | Low | `unsafe ptr::copy_nonoverlapping` in `sync.rs` lacks bounds checking and casts through `*const u8`. Audit and tighten. |
+| RN-11 | **DONE** | ~~`unsafe ptr::copy_nonoverlapping` in `sync.rs` lacks bounds checking.~~ Replaced with two explicit index guards (MAX_MESHES bound + staging range bound) and `tracing::warn!` on skip. |
 | RN-12 | **DONE** | ~~TLAS rebuilt every frame.~~ `TlasRebuildPass` now caches the instance list and skips `build_tlas` when unchanged. |
 
 ### 2.3 Frame Graph API Ergonomics (i3_gfx)
@@ -122,12 +122,12 @@ builder.descriptor_set(0, |d| {
 
 | ID | Component | Severity | Description |
 |---|---|---|
-| BK-01 | i3_baker | Medium | Dead `PipelineNode` abstraction review. |
+| BK-01 | i3_baker | **DONE** | ~~Dead `PipelineNode` abstraction review.~~ `PipelineNode` is absent from `crates/i3_baker/src/` — already removed. |
 | BK-05 | i3_baker | Low | No tangent recalculation when Assimp metadata is missing. |
 | BN-01 | i3_bundle | Medium | Show fragmentation info in bundle inspector (gaps, padding, overhead). |
 | BN-02 | i3_bundle | Low | Missing `compact`/`defragment` command for optimized production bundles. |
 | EG-I01 | i3_egui | Medium | Support user textures beyond the font atlas. |
-| EG-I02 | i3_egui | Medium | Scissoring not implemented in `execute()`. |
+| EG-I02 | i3_egui | **DONE** | ~~Scissoring not implemented.~~ `ctx.set_scissor()` is called per `clipped_primitive` in `EguiPass::execute()`. |
 | EG-I03 | i3_egui | Low | VB/IB re-allocated every frame. Use persistent or ring buffers. |
 
 ---
@@ -166,26 +166,9 @@ builder.descriptor_set(0, |d| {
 ---
 
 ## 4. Documentation & Quality
-- Update `engine_hld.md` to reflect current workspace structure.
-- Update `frame_graph_design.md` — many sections are now outdated (see §5).
+- **[DONE]** Update `engine_hld.md` to reflect current workspace structure (added i3_brickmap, i3_voxel, i3_math; removed non-existent i3_dx12_backend).
+- **[DONE]** Update `frame_graph_design.md` — PassBuilder API, PassContext, FrameBlackboard, Compile phase, Execute phase, Temporal Symbols, Multi-Queue status, Memory Aliasing (marked not implemented), Debugging section, removed stale API Specification.
+- **[DONE]** Update `renderer_design.md` — SceneProvider trait, actual render graph pass tree, GBuffer layout, CLUSTER_GRID_Z, AS section, implementation state table.
+- **[DONE]** Update `sdf.md` — 10 levels, u8-packed atlas, 9³ bricks/183 DWORDs, CLIPMAP_GRID=[32,32,32].
+- **[DONE]** Delete `doc/ssr.md` (replaced by sssr.md).
 - Implement VFS unit tests and renderer-level NullBackend integration tests.
-
----
-
-## 5. Documentation Gaps (frame_graph_design.md vs Code)
-
-`doc/frame_graph_design.md` was written before the implementation and is partially outdated.
-
-| Topic | Doc says | Code reality |
-|---|---|---|
-| `RenderPass::domain()` | Required method returning `PassDomain` | Removed — domain auto-inferred from resource declarations |
-| `RenderPass::prefer_async()` | Not mentioned | Present in trait; default = `true`; controls async queue routing |
-| `CommandBatch` / `BatchStep` | Not mentioned | Core submission primitive; `BatchStep::{Command,Wait,Signal}` drives sub-batch splitting |
-| Multi-queue sync | Timeline semaphores described abstractly | Concrete: ordered `BatchStep` steps, sub-batch splitting at `Signal` boundaries, per-queue `cpu_timeline` |
-| Memory aliasing | Described as "from day one" | **Not yet implemented** (GFX-06) |
-| `PassContext` | Enum with `Gpu`/`Cpu` variants | Implemented as a trait |
-| `PassBuilder::add_node()` | FnOnce closure API | Actual API: `add_pass(&mut dyn RenderPass)` / `add_owned_pass<P: RenderPass>` |
-| `graph.setup()` / `is_setup` | Present | **Removed** (GFX-09 done): `declare()` is per-frame; `FrameBlackboard` handles per-frame data |
-| `FrameBlackboard` | Not mentioned | **Implemented** (GFX-09): `frame.consume::<T>("key")` in `execute()` |
-| Symbol outputs | Not mentioned | **Implemented** (GFX-09): `declare_image_output` / `declare_buffer_output` / `import_buffer` promote symbols to parent scope |
-| `DefaultRenderGraph` topology | Not mentioned | `render()` still rebuilds each frame; `mark_dirty()` + cached `CompiledGraph` is GFX-10 |

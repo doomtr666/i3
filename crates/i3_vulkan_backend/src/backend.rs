@@ -986,32 +986,37 @@ impl RenderBackendInternal for VulkanBackend {
         // The external_to_physical maps are cleared in begin_frame and repopulated by
         // process_externals_recursive before this call, so they contain exactly the
         // resources active this frame.
-        self.sync_planner.image_seed.clear();
-        self.sync_planner.buffer_seed.clear();
+        self.sync_planner.clear_seeds();
         for (&virtual_id, &physical_id) in &self.external_to_physical {
             if let Some(img) = self.images.get(physical_id) {
-                self.sync_planner.image_seed.insert(
-                    virtual_id,
-                    i3_gfx::graph::sync::ResourceState {
-                        layout: crate::sync_planner::translate_layout_to_abstract(img.last_layout),
-                        access: crate::sync_planner::translate_access_to_abstract(img.last_access),
-                        stage: crate::sync_planner::translate_stages_to_abstract(img.last_stage),
-                        queue_family: img.last_queue_family,
-                    },
+                let queue = crate::sync::get_queue_type_from_family_info(
+                    img.last_queue_family,
+                    self.graphics_family,
+                    self.compute_family,
+                    self.transfer_family,
                 );
+                self.sync_planner.seed_image(virtual_id, i3_gfx::graph::sync::ResourceState {
+                    layout: crate::sync_planner::translate_layout_to_abstract(img.last_layout),
+                    access: crate::sync_planner::translate_access_to_abstract(img.last_access),
+                    stage: crate::sync_planner::translate_stages_to_abstract(img.last_stage),
+                    queue,
+                });
             }
         }
         for (&virtual_id, &physical_id) in &self.external_buffer_to_physical {
             if let Some(buf) = self.buffers.get(physical_id) {
-                self.sync_planner.buffer_seed.insert(
-                    virtual_id,
-                    i3_gfx::graph::sync::ResourceState {
-                        layout: i3_gfx::graph::sync::ImageLayout::Undefined,
-                        access: crate::sync_planner::translate_access_to_abstract(buf.last_access),
-                        stage: crate::sync_planner::translate_stages_to_abstract(buf.last_stage),
-                        queue_family: buf.last_queue_family,
-                    },
+                let queue = crate::sync::get_queue_type_from_family_info(
+                    buf.last_queue_family,
+                    self.graphics_family,
+                    self.compute_family,
+                    self.transfer_family,
                 );
+                self.sync_planner.seed_buffer(virtual_id, i3_gfx::graph::sync::ResourceState {
+                    layout: i3_gfx::graph::sync::ImageLayout::Undefined,
+                    access: crate::sync_planner::translate_access_to_abstract(buf.last_access),
+                    stage: crate::sync_planner::translate_stages_to_abstract(buf.last_stage),
+                    queue,
+                });
             }
         }
 
@@ -1024,7 +1029,15 @@ impl RenderBackendInternal for VulkanBackend {
         // Commit final states back to physical resources.
         // begin_frame() already waited for the previous frame's GPU completion,
         // so these planned-end states are safe to commit now for next-frame seeding.
+        let gfx_family      = crate::sync::get_queue_family(self, i3_gfx::graph::types::QueueType::Graphics);
+        let compute_family  = crate::sync::get_queue_family(self, i3_gfx::graph::types::QueueType::AsyncCompute);
+        let transfer_family = crate::sync::get_queue_family(self, i3_gfx::graph::types::QueueType::Transfer);
         for (&virtual_id, &final_state) in &abstract_plan.final_states {
+            let target_family = match final_state.queue {
+                i3_gfx::graph::types::QueueType::Graphics     => gfx_family,
+                i3_gfx::graph::types::QueueType::AsyncCompute => compute_family,
+                i3_gfx::graph::types::QueueType::Transfer     => transfer_family,
+            };
             if let Some(&physical_id) = self.external_to_physical.get(&virtual_id) {
                 if let Some(img) = self.images.get_mut(physical_id) {
                     img.last_layout =
@@ -1033,7 +1046,7 @@ impl RenderBackendInternal for VulkanBackend {
                         crate::sync_planner::translate_access_from_abstract(final_state.access);
                     img.last_stage =
                         crate::sync_planner::translate_stages_from_abstract(final_state.stage);
-                    img.last_queue_family = final_state.queue_family;
+                    img.last_queue_family = target_family;
                 }
             }
             if let Some(&physical_id) = self.external_buffer_to_physical.get(&virtual_id) {
@@ -1042,7 +1055,7 @@ impl RenderBackendInternal for VulkanBackend {
                         crate::sync_planner::translate_access_from_abstract(final_state.access);
                     buf.last_stage =
                         crate::sync_planner::translate_stages_from_abstract(final_state.stage);
-                    buf.last_queue_family = final_state.queue_family;
+                    buf.last_queue_family = target_family;
                 }
             }
         }

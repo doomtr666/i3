@@ -10,3 +10,4 @@ i3_voxel = { path = "../i3_voxel" }
 half     = { workspace = true }
 rayon    = { workspace = true }
 nalgebra = { workspace = true }
+tracing  = { workspace = true }

@@ -129,63 +129,120 @@ Inspired by compiler theory (SSA/Phi-nodes), the graph treats all dependencies a
 pub trait RenderPass {
     fn name(&self) -> &str;
     
-    /// Called once during graph initialization. 
-    /// Can consume services from the Global Scope.
-    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &GlobalScope);
+    /// Called once when the graph is initialized.
+    /// Use to load pipelines, create persistent GPU resources, consume AssetLoader.
+    /// `globals` is a PassBuilder connected to the global scope (services).
+    fn init(&mut self, backend: &mut dyn RenderBackend, globals: &mut PassBuilder);
 
-    /// Define per-frame dependencies and state.
+    /// Declare per-frame resource usage and resolve symbols.
+    /// Called every frame (or on dirty flag).
     fn declare(&mut self, builder: &mut PassBuilder);
 
-    /// Execute the node commands. Only valid for Leaf nodes.
-    fn execute(&self, ctx: &mut dyn PassContext);
+    /// Record GPU commands. `frame` holds per-frame typed data (matrices, etc.).
+    fn execute(&self, ctx: &mut dyn PassContext, frame: &FrameBlackboard);
 }
 ```
 
-**PassBuilder API**:
+**PassBuilder API** (implémenté dans `i3_gfx/src/graph/pass.rs`) :
 
 ```rust
 impl PassBuilder {
-    // --- Scoped Symbol Table ---
-    /// Register a typed symbol in the current scope.
+    // ── Scoped Symbol Table ──────────────────────────────────────────────────
+    /// Publish typed data into the frame blackboard (consumed by other passes).
     fn publish<T: Send + Sync + 'static>(&mut self, name: &str, data: T);
-    
-    /// Resolve a typed symbol from the current or parent scope.
-    fn consume<T: Send + Sync + 'static>(&mut self, name: &str) -> &T;
+    /// Consume typed data from the global or frame scope (panics if missing).
+    fn consume<T: Send + Sync + 'static>(&mut self, name: &str) -> Arc<T>;
 
-    // --- GPU Intents (GPU Leaf only) ---
-    fn read_image(&mut self, res: ImageHandle, usage: ResourceUsage);
-    fn write_image(&mut self, res: ImageHandle, usage: ResourceUsage);
-    fn read_buffer(&mut self, res: BufferHandle, usage: ResourceUsage);
-    fn write_buffer(&mut self, res: BufferHandle, usage: ResourceUsage);
-
-    // --- Resource Management ---
+    // ── Resource Declaration ─────────────────────────────────────────────────
+    /// Declare a transient image (per-frame, not persisted across frames).
     fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
-    fn resolve_image(&mut self, name: &str) -> ImageHandle;
-    fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
+    /// Declare a persistent output image (survives frame end, re-used next frame).
+    fn declare_image_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    /// Declare a ping-pong history image (current + previous version maintained).
+    fn declare_image_history_output(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
+    /// Declare a transient buffer.
+    fn declare_buffer(&mut self, name: &str, desc: BufferDesc) -> BufferHandle;
 
-    // --- Recursion (Node Tree) ---
-    fn add_pass(&mut self, pass: &mut dyn RenderPass);
-    fn add_owned_pass<P: RenderPass + 'static>(&mut self, pass: P);
+    // ── Resource Import ──────────────────────────────────────────────────────
+    /// Import a physical GPU buffer as a named symbol (master importer, creates write intent).
+    fn import_buffer(&mut self, name: &str, buf: BackendBuffer) -> BufferHandle;
+    /// Import a physical GPU image as a named symbol.
+    fn import_image(&mut self, name: &str, img: BackendImage) -> ImageHandle;
+    /// Import the swapchain backbuffer (special case).
+    fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
+    /// Register the physical backing for an already-declared image handle.
+    fn register_external_image(&mut self, handle: ImageHandle, image: BackendImage);
+
+    // ── Symbol Resolution ────────────────────────────────────────────────────
+    /// Look up a named image; returns INVALID + error log if not found.
+    fn resolve_image(&mut self, name: &str) -> ImageHandle;
+    /// Look up a named buffer; returns INVALID + error log if not found.
+    fn resolve_buffer(&mut self, name: &str) -> BufferHandle;
+    /// Look up previous-frame version of a history image.
+    fn read_image_history(&mut self, name: &str) -> ImageHandle;
+    /// Look up previous-frame version of a history buffer.
+    fn read_buffer_history(&mut self, name: &str) -> BufferHandle;
+    /// Try to resolve an acceleration structure by name.
+    fn try_resolve_acceleration_structure(&mut self, name: &str)
+        -> Option<AccelerationStructureHandle>;
+
+    // ── Usage Declaration ────────────────────────────────────────────────────
+    fn read_image(&mut self, h: ImageHandle, usage: ResourceUsage);
+    fn write_image(&mut self, h: ImageHandle, usage: ResourceUsage);
+    fn read_buffer(&mut self, h: BufferHandle, usage: ResourceUsage);
+    fn write_buffer(&mut self, h: BufferHandle, usage: ResourceUsage);
+    fn import_acceleration_structure(&mut self, name: &str, h: BackendAccelerationStructure);
+    fn write_acceleration_structure(&mut self, h: BackendAccelerationStructure, usage: ResourceUsage);
+    fn read_acceleration_structure(&mut self, h: AccelerationStructureHandle, usage: ResourceUsage);
+
+    // ── Descriptor Sets (at declare time) ────────────────────────────────────
+    /// Pre-build a descriptor set layout binding list (consumed during execute).
+    fn descriptor_set(&mut self, set_index: u32, f: impl FnOnce(&mut DescriptorSetBuilder));
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    fn get_image_desc(&self, h: ImageHandle) -> ImageDesc;
+    fn get_buffer_desc(&self, h: BufferHandle) -> BufferDesc;
 }
 ```
-```
 
-**PassContext** (adapts based on domain):
+**FrameBlackboard** — typed per-frame data injected before `execute()`:
 
 ```rust
-pub enum PassContext<'a> {
-    Gpu {
-        cmd: &'a mut CommandRecorder,
-        resources: &'a ResourceRegistry,
-    },
-    Cpu {
-        resources: &'a ResourceRegistry,
-    },
+impl FrameBlackboard {
+    fn consume<T: Send + Sync + 'static>(&self, name: &str) -> Arc<T>;
 }
+// Typical entries: "Common" → CommonData (matrices, screen size),
+//                 "BindlessSet" → DescriptorSetHandle,
+//                 "PrevViewProjection" → Mat4
 ```
 
-> [!IMPORTANT]
-> **Open question:** Should `read`/`write` return a scoped handle that the pass uses in `execute()`, or is `ResourceId` sufficient everywhere? Scoped handles add safety but add complexity.
+**PassContext** (implémenté dans `i3_gfx/src/graph/backend.rs`) :
+
+```rust
+pub trait PassContext {
+    fn bind_pipeline_raw(&mut self, pipeline: BackendPipeline);
+    fn bind_descriptor_set(&mut self, set: u32, ds: DescriptorSetHandle);
+    fn create_descriptor_set(&mut self, pipeline: BackendPipeline,
+        set_index: u32, writes: &[DescriptorWrite]) -> DescriptorSetHandle;
+    fn push_bytes(&mut self, stage: ShaderStageFlags, offset: u32, data: &[u8]);
+    fn push_constant_data<T: Pod>(&mut self, stage: ShaderStageFlags, offset: u32, data: &T);
+    fn draw(&mut self, vertex_count: u32, first: u32);
+    fn draw_indexed(&mut self, index_count: u32, first_index: u32, vertex_offset: i32);
+    fn draw_indexed_indirect(&mut self, buffer: BufferHandle, draw_count: u32, stride: u32);
+    fn dispatch(&mut self, x: u32, y: u32, z: u32);
+    fn dispatch_indirect(&mut self, buffer: BufferHandle, offset: u64);
+    fn copy_buffer(&mut self, src: BufferHandle, dst: BufferHandle,
+        src_offset: u64, dst_offset: u64, size: u64);
+    fn map_buffer(&mut self, buffer: BufferHandle) -> *mut u8;
+    fn unmap_buffer(&mut self, buffer: BufferHandle);
+    fn build_blas(&mut self, blas: BackendAccelerationStructure, update: bool);
+    fn build_tlas(&mut self, tlas: BackendAccelerationStructure,
+        instances: &[TlasInstanceDesc], update: bool);
+    fn bind_vertex_buffer(&mut self, slot: u32, buffer: BufferHandle);
+    fn bind_index_buffer(&mut self, buffer: BufferHandle, index_type: IndexType);
+    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32);
+}
+```
 
 ---
 
@@ -193,43 +250,28 @@ pub enum PassContext<'a> {
 
 Sequential, pure data computation. No GPU API calls. **Must be fast** (target: <100μs for ~100 passes).
 
-### Steps:
-1. **Tree Flattening** — recursively traverse the Node Tree to produce a linear execution candidate.
-2. **Symbol Resolution** — resolve all `consume()` calls to their respective `publish()` or `acquire()` origins across scopes.
-3. **Dependency Graph** — build DAG from symbol read/write declarations.
-4. **Topological Sort** — determine final execution order.
-5. **Dead Node Elimination** — symbols that are never consumed (and don't have side effects like `present`) are culled.
-6. **Barrier Resolution** — for each GPU symbol, compute `(usage_before, usage_after)` at transition points.
-7. **Memory Aliasing** — compute lifetime intervals based on symbol scope. Assign overlapping memory blocks within `MemoryPools`.
-8. **Queue Assignment** — assign nodes to queues; insert cross-queue sync points (timeline semaphores).
+### Steps (implémentés) :
+1. **Tree Flattening** — `flatten_recursive` traverse le Node Tree, produit un `Vec<FlatPass>` avec les dépendances data (image/buffer/AS reads/writes).
+2. **Dependency Graph** — `has_dependency(a, b)` analyse les RAW, WAW, WAR entre passes.
+3. **Topological Sort** — Kahn par niveaux (`topological_sort_levels`), retourne des groupes de passes indépendantes.
+4. **Barrier Resolution** — `SyncPlanner::simulate_pass` calcule les transitions de layout/access/stage pour images, buffers et AS. Émet des `AbstractTransition` (traduits en `VkImageMemoryBarrier2`, `VkBufferMemoryBarrier2`, `VkMemoryBarrier2` dans le backend Vulkan).
 
-### Output: `CompiledGraph`
+### Étapes non encore implémentées :
+- **Dead Node Elimination** — `is_output` est en place comme fondation mais le culling des nœuds sans consommateur n'est pas actif (GFX-08).
+- **Memory Aliasing** — `AliasingPlan` décrit dans ce document n'est pas implémenté. Toutes les ressources transientes sont allouées indépendamment (GFX-06).
+
+### Output : `CompiledGraph` (implémenté)
 
 ```rust
 pub struct CompiledGraph {
-    /// Ordered list of execution steps.
-    steps: Vec<ExecutionStep>,
-    /// Memory aliasing plan for transient resources.
-    aliasing_plan: AliasingPlan,
-    /// Cross-queue synchronization points.
-    sync_points: Vec<SyncPoint>,
-}
-
-pub enum ExecutionStep {
-    /// Insert barriers (system-generated, no user code).
-    Barriers(BarrierBatch),
-    /// Execute a single pass.
-    ExecutePass { pass_index: usize, queue: QueueType },
-    /// Execute multiple independent passes in parallel.
-    ExecuteParallel { pass_indices: Vec<usize>, queue: QueueType },
-    /// Cross-queue sync point.
-    Signal(SyncPoint),
-    Wait(SyncPoint),
+    /// Passes in topological order, grouped by independence level.
+    pub levels: Vec<Vec<usize>>,   // level → [pass_indices]
+    /// Per-pass pre/post barrier plans.
+    pub sync_plan: SyncPlan,       // pass_sync[i].pre_transitions
 }
 ```
 
-> [!IMPORTANT]
-> **Open question:** Barrier batching strategy. Option A: one barrier batch per pass transition. Option B: merge adjacent barriers into larger batches. B is more GPU-efficient but more complex to implement.
+L'exécution est pilotée par `CompiledGraph::execute` qui itère les niveaux, lance les passes du même niveau en parallèle via `rayon`, et injecte les barrières avant chaque passe.
 
 ---
 
@@ -283,28 +325,7 @@ For `Graphics` domain passes, the system **automatically** handles rendering sco
 
 ### Intra-Pass Parallel Recording (Secondary Command Buffers)
 
-For heavy passes (e.g., 12k objects in GBuffer), the pass can request **parallel recording via secondary CBs**. The primary CB handles begin/end rendering; secondaries declare draw calls in parallel.
-
-```rust
-fn execute(&self, ctx: &mut PassContext) {
-    // System has already called vkCmdBeginRendering on the primary CB.
-    // Request parallel recording via secondaries:
-    ctx.parallel_record(&self.objects, 1000, |sub_ctx, chunk| {
-        for obj in chunk {
-            sub_ctx.draw(obj);
-        }
-    });
-    // → N secondary CBs recorded in parallel (rayon, thread-local pools)
-    // → Primary CB calls vkCmdExecuteCommands(secondaries)
-    // → System calls vkCmdEndRendering
-}
-```
-
-**Key points:**
-- Secondaries inherit rendering state via `VkCommandBufferInheritanceRenderingInfo` (Vulkan 1.3 — no VkRenderPass compatibility needed).
-- Thread-local command pools: one `VkCommandPool` per thread per frame, zero contention.
-- Chunking granularity is controlled by the pass author (e.g., 1000 objects/secondary).
-- If the pass doesn't call `parallel_record()`, it records directly into the primary CB (no secondary overhead).
+> **Non implémenté.** Les secondary CBs et `ctx.parallel_record()` sont décrits dans ce document comme objectif architectural futur. Actuellement, chaque passe enregistre dans un seul command buffer primaire.
 
 The pass **never** creates/destroys resources or inserts barriers. It only records draw/dispatch/copy commands through the `PassContext`.
 
@@ -342,28 +363,23 @@ pub enum SymbolLifetime {
 }
 ```
 
-### Temporal Symbols (History)
+### Temporal Symbols (History) — implémenté
 
-To support temporal algorithms (TAA, GI feedback), symbols can declare a **history depth**. 
-
-- **Versioning**: The engine maintains a ring buffer of `depth + 1` versions.
-- **Reference**: Nodes access versions relative to the current frame.
+Pour les algorithmes temporels (RTAO, SSSR, exposition), les ressources peuvent garder leur état d'une frame à l'autre via deux primitives :
 
 ```rust
 fn declare(&mut self, builder: &mut PassBuilder) {
-    // Read previous frame's result symbol
-    let prev_color = builder.read_history("ColorBuffer", -1, ShaderReadOnly);
-    // Write current frame's result symbol
-    builder.write("ColorBuffer", ColorAttachment);
+    // Déclare la version courante ET maintient la version précédente automatiquement.
+    self.ao_resolved = builder.declare_image_history_output("AO_Resolved", hist_desc);
+    // Accès en lecture à la version précédente.
+    self.ao_history = builder.read_image_history("AO_Resolved");
+    
+    // Alternative : lire l'état précédent d'un buffer (e.g., ExposureBuffer).
+    self.prev_exposure = builder.read_buffer_history("ExposureBuffer");
 }
 ```
 
-**Initialization & First Frame:**
-- On the very first frame (or after a reset), history versions are effectively "empty" or "black".
-- The engine can provide a `is_first_frame()` hint so the pass can skip history sampling or use a different path.
-
-**Automatic Versioning (Double/Triple Buffering):**
-Even if `history_depth` is 0, resources are internally versioned by the engine to support **Frame Overlap** (N frames in flight). This is transparent: the pass always gets the "correct" version for its frame index. Explicit `history_depth` is only for when the *content* of the resource must be preserved across frames.
+Le frame graph maintient une paire (current, previous) pour chaque ressource history. Ping-pong automatique à chaque frame.
 
 ### Resolution Change
 
@@ -459,6 +475,8 @@ Composition is achieved through nesting. A Node can contain children, effectivel
 
 ## Multi-Queue Model
 
+> **État actuel** : toutes les passes s'exécutent sur la **graphics queue** unique. La structure (`QueueAffinity`, timeline semaphores, multi-queue submit) est en place dans le backend Vulkan, mais le compilateur n'assigne pas encore de passes à l'async compute queue. Architecture cible ci-dessous.
+
 ```
 ┌─────────────────────────────────────────────────┐
 │  Graphics Queue    ┃  Compute Queue  ┃ Transfer │
@@ -484,6 +502,8 @@ Composition is achieved through nesting. A Node can contain children, effectivel
 ---
 
 ## Memory Aliasing
+
+> **Non implémenté (GFX-06).** L'aliasing mémoire est décrit ci-dessous comme objectif architectural. Actuellement, chaque ressource transiente est allouée indépendamment — aucun partage d'offset mémoire n'est effectué.
 
 Transient resources with non-overlapping lifetimes within a frame share the same logical offsets in a `MemoryPool`.
 
@@ -516,16 +536,18 @@ Reliability is paramount. Conflict detection happens during the **Compile** phas
 - **Undeclared Access**: Debug builds of the `RenderContext` check that every resource used in `execute()` was properly declared.
 - **Type Safety**: `compile()` returns `Result<CompiledGraph, GraphError>`, allowing the engine to gracefully handle or report failures without crashing.
 
+> **État actuel** : cycle detection est implémentée (Kahn's algorithm). `resolve_image`/`resolve_buffer` log une erreur et retournent un handle invalide si le symbole est absent — pas de panic. L'accès à une ressource non déclarée n'est pas vérifié en debug pour l'instant (GFX-08).
+
 ---
 
 ## Debugging & Profiling
 
 The Frame Graph provides observability by default.
 
-- **GPU Timestamps**: The system can inject `vkCmdWriteTimestamp` queries before/after every pass. This provides per-pass GPU timing without manual instrumentation.
-- **RenderDoc Integration**: Pass names are propagated to `vkCmdBeginDebugUtilsLabel`. Resources are named in Vulkan based on their Graph name.
-- **Visualizer**: The `CompiledGraph` can be exported as a `.dot` file for visualization in Graphviz.
-- **Validation Layers**: The graph's explicit synchronization logic should eliminate validation errors. If they occur, they are likely bugs in the graph compiler itself.
+- **RenderDoc Integration** — ✅ implémenté : Pass names are propagated to `vkCmdBeginDebugUtilsLabel`. Resources are named in Vulkan based on their Graph name.
+- **Validation Layers** — ✅ : The graph's explicit synchronization logic eliminates validation errors. If they occur, they are likely bugs in the graph compiler itself.
+- **GPU Timestamps** — ❌ non implémenté : `vkCmdWriteTimestamp` injection is not yet in place.
+- **Graph Visualizer** — ❌ non implémenté : `.dot` / Graphviz export is not implemented. The NullBackend can log pass names and barrier transitions to stdout.
 
 ---
 
@@ -553,129 +575,41 @@ The Frame Graph doesn't know what a `VkImage` or `ID3D12Resource` is. It operate
 
 ---
 
-## API Specification
+## Implémentation réelle — pointeurs vers le code
 
-### 1. The Pass Trait
-This is the only thing the user implements.
+> Cette section remplace les spécifications d'API obsolètes. Se référer directement aux sources.
 
-```rust
-pub trait RenderPass {
-    fn name(&self) -> &str;
-    fn domain(&self) -> PassDomain; // Graphics, Compute, Transfer
+| Concept | Fichier source |
+|---------|---------------|
+| `RenderPass` trait | `crates/i3_gfx/src/graph/pass.rs` |
+| `PassBuilder` impl | `crates/i3_gfx/src/graph/pass.rs` |
+| `FrameBlackboard` | `crates/i3_gfx/src/graph/blackboard.rs` |
+| `PassContext` trait | `crates/i3_gfx/src/graph/backend.rs` |
+| `RenderBackend` trait | `crates/i3_gfx/src/graph/backend.rs` |
+| `FrameGraph` / `CompiledGraph` | `crates/i3_gfx/src/graph/graph.rs` |
+| `SyncPlanner` (barrier resolution) | `crates/i3_gfx/src/graph/sync.rs` |
+| Vulkan backend | `crates/i3_vulkan_backend/src/` |
+| NullBackend (CI oracle) | `crates/i3_null_backend/src/` |
+| Renderer passes | `crates/i3_renderer/src/passes/` |
 
-    /// Declare intents. No hardware access allowed.
-    /// This is called whenever the graph needs rebuilding (including resizes).
-    fn declare(&mut self, builder: &mut PassBuilder);
+### NullBackend (implémenté)
 
-    /// declare commands. Logical access via ctx.
-    fn execute(&self, ctx: &mut PassContext);
-}
-```
+`i3_null_backend` est un `RenderBackend` qui n'appelle aucune API GPU. Il log les barrières et les commandes, ce qui permet de valider la logique de synchronisation du frame graph en CI sans pilote Vulkan.
 
-### 2. PassBuilder & FrameGraph API
-Unified Symbol interaction.
+### Tests d'intégration (implémentés)
 
-```rust
-pub trait PassBuilder {
-    // Symbol Management
-    fn publish<T>(&mut self, name: &str, data: T);
-    fn consume<T>(&mut self, name: &str) -> &T;
-    
-    // GPU Generation
-    fn declare_image(&mut self, name: &str, desc: ImageDesc) -> ImageHandle;
-    fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
-
-    // Intents (Leaf only)
-    fn read(&mut self, handle: ImageHandle, usage: ResourceUsage);
-    fn write(&mut self, handle: ImageHandle, usage: ResourceUsage);
-
-    // Tree Construction
-    fn add_node(&mut self, name: &str, setup: impl FnOnce(&mut PassBuilder));
-}
-
-impl FrameGraph {
-    /// Entry point for external symbol binding.
-    fn bind_external<T>(&mut self, name: &str, data: T);
-    
-    /// Root node recording.
-    fn declare(&mut self, setup: impl FnOnce(&mut PassBuilder));
-}
-```
-
-### 3. PassContext (Execution Phase)
-The bridge to the HRI.
-
-```rust
-pub trait PassContext {
-    fn set_pipeline(&mut self, pipeline: PipelineHandle);
-    fn draw(&mut self, count: u32, first: u32);
-    fn dispatch(&mut self, x: u32, y: u32, z: u32);
-    
-    /// Queue commands
-    fn present(&mut self, image: ImageHandle);
-}
-```
-
-### 4. The HRI Backend Trait
-What i3fx must implement for each API.
-
-```rust
-pub trait HriBackend {
-    fn create_texture(&mut self, desc: &ResourceDesc) -> HriTexture;
-    fn create_buffer(&mut self, desc: &ResourceDesc) -> HriBuffer;
-    
-    /// The "Magic" function that turns logical transitions into API barriers.
-    fn apply_barriers(&mut self, batch: &BarrierBatch, cmdbuf: &mut NativeCmdBuf);
-    
-    fn begin_rendering(&mut self, attachments: &[RenderingAttachment], cmdbuf: &mut NativeCmdBuf);
-    fn end_rendering(&mut self, cmdbuf: &mut NativeCmdBuf);
-
-    /// Submit command buffers and return a handle to track GPU completion.
-    fn submit(&mut self, cmdbufs: &[NativeCmdBuf]) -> PendingSubmission;
-
-    /// Process finished submissions and release associated resources.
-    fn collect_garbage(&mut self);
-}
-```
+Les tests contre le NullBackend se trouvent dans `crates/i3_gfx/tests/` et `crates/i3_null_backend/tests/`. Ils couvrent : cycle detection, topological sort, barrier resolution pour les patterns read-after-write / write-after-write / layout transitions.
 
 ---
 
-## Asynchronous Submission & Lifetime
+## Fonctionnalités futures (non implémentées)
 
-Submission is the boundary where logical passes become asynchronous GPU work.
-
-1.  **Multi-Framing**: The system maintains a ring buffer of `MemoryPool` objects.
-2.  **Safety**: A `MemoryPool` used in Frame N is **locked** until GPU completion. 
-3.  **Reuse**: The pool is reset once `collect_garbage()` detects completion.
-4.  **Symbol Tracking**: Persistent symbols (history) are managed via versioning in the root symbol table.
-
----
-
-
-## Verification Plan
-
-This is a design document — no code to test yet. Verification will consist of:
-
-### 1. The Design Review
-- User reviews and approves architecture before any implementation.
-- Iterate on open questions until all are resolved.
-
-### 2. NullBackend Strategy (The "Oracle")
-A specialized `HriBackend` that performs no hardware work but logs every action.
-- **Validation**: Ensures that barriers are logically correct (no read-after-write without sync).
-- **Visualization**: Generates Mermaid or DOT diagrams of the compiled graph and memory aliasing plan.
-- **Unit Testing**: Allows testing the Frame Graph Runtime in CI without a GPU/Vulkan driver.
-
-### 3. Integration Testing
-- **Simple Triangle**: Minimal Graphics pass to verify HRI command recording.
-- **Async Compute**: Verify cross-queue timeline semaphore signals and waits.
-- **Temporal Stress Test**: Verify history depth ring-buffer rotation and resize behavior.
-
----
-
-## Areas for Refinement
-
-1. **Hot reload**: Can passes be swapped at runtime? Supported by per-frame rebuild.
-2. **Cyclic dependencies** (future): Temporal reprojection nodes.
+| Feature | Ticket | Priorité |
+|---------|--------|----------|
+| Memory aliasing intra-frame | GFX-06 | Moyen |
+| Dead node elimination | GFX-08 | Moyen |
+| Async compute queue assignment | — | Bas |
+| GPU Timestamps per-pass | — | Bas |
+| DOT/Graphviz graph export | — | Bas |
 
 ---

@@ -45,13 +45,27 @@ impl<'a> PassBuilder<'a> {
     }
 
     /// Resolves an ImageHandle from the symbol table by name.
+    /// Logs an error and returns `ImageHandle::INVALID` if the symbol is not found.
     pub fn resolve_image(&mut self, name: &str) -> ImageHandle {
-        *self.consume::<ImageHandle>(name)
+        match self.try_consume::<ImageHandle>(name) {
+            Some(h) => *h,
+            None => {
+                tracing::error!("resolve_image: symbol '{}' not found — pass will be misconfigured", name);
+                ImageHandle::INVALID
+            }
+        }
     }
 
     /// Resolves a BufferHandle from the symbol table by name.
+    /// Logs an error and returns `BufferHandle::INVALID` if the symbol is not found.
     pub fn resolve_buffer(&mut self, name: &str) -> BufferHandle {
-        *self.consume::<BufferHandle>(name)
+        match self.try_consume::<BufferHandle>(name) {
+            Some(h) => *h,
+            None => {
+                tracing::error!("resolve_buffer: symbol '{}' not found — pass will be misconfigured", name);
+                BufferHandle::INVALID
+            }
+        }
     }
 
     /// Resolves an AccelerationStructureHandle by name, or returns None if not published.
@@ -85,20 +99,28 @@ impl<'a> PassBuilder<'a> {
         self.inner.declare_present_image(handle);
     }
 
+    /// Declares that this pass writes an acceleration structure.
+    /// Auto-imports the physical handle as a virtual symbol so the sync planner
+    /// can track write→read hazards and emit the required memory barriers.
     pub fn write_acceleration_structure(
         &mut self,
-        _handle: crate::graph::backend::BackendAccelerationStructure,
+        handle: crate::graph::backend::BackendAccelerationStructure,
         _usage: ResourceUsage,
     ) {
-        // AS dependencies are handled via sync passes or manual barriers in backend.
+        let name = format!("_as_{}", handle.0);
+        self.inner.import_acceleration_structure(&name, handle);
     }
 
+    /// Declares that this pass reads an acceleration structure.
+    /// `handle` must be obtained from `try_resolve_acceleration_structure` or
+    /// `import_acceleration_structure`. The sync planner uses this to generate
+    /// the `AS_BUILD → RAY_TRACING_SHADER` memory barrier.
     pub fn read_acceleration_structure(
         &mut self,
-        _handle: crate::graph::types::AccelerationStructureHandle,
+        handle: crate::graph::types::AccelerationStructureHandle,
         _usage: ResourceUsage,
     ) {
-        // AS read intent — sync handled by build passes ordering.
+        self.inner.read_accel_struct(handle, ResourceUsage::ACCEL_STRUCT_READ);
     }
 
     /// Imports an existing physical acceleration structure into the frame graph.
@@ -467,6 +489,12 @@ pub(crate) trait InternalPassBuilder {
         &mut self,
         name: &str,
     ) -> Option<crate::graph::types::AccelerationStructureHandle>;
+
+    fn read_accel_struct(
+        &mut self,
+        handle: crate::graph::types::AccelerationStructureHandle,
+        usage: crate::graph::types::ResourceUsage,
+    );
 
     fn acquire_backbuffer(&mut self, window: WindowHandle) -> ImageHandle;
 

@@ -103,7 +103,7 @@ impl RenderPass for RtaoPass {
             .try_resolve_acceleration_structure("TLAS")
             .unwrap_or(AccelerationStructureHandle::INVALID);
         if self.tlas_handle != AccelerationStructureHandle::INVALID {
-            builder.read_acceleration_structure(self.tlas_handle, ResourceUsage::SHADER_READ);
+            builder.read_acceleration_structure(self.tlas_handle, ResourceUsage::ACCEL_STRUCT_READ);
         }
     }
 

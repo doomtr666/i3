@@ -230,6 +230,8 @@ impl FrameGraph {
                 image_writes: node.image_writes.clone(),
                 buffer_reads: node.buffer_reads.clone(),
                 buffer_writes: node.buffer_writes.clone(),
+                accel_struct_reads: node.accel_struct_reads.clone(),
+                accel_struct_writes: node.accel_struct_writes.clone(),
                 data_reads: node.data_reads.clone(),
                 data_writes: node.data_writes.clone(),
                 prefer_async: node.prefer_async,
@@ -342,6 +344,18 @@ impl FrameGraph {
         // CPU data WAW
         for name in &a.data_writes {
             if b.data_writes.iter().any(|wn| wn == name) { return true; }
+        }
+        // AS RAW: a writes an AS, b reads it
+        for (h, _) in &a.accel_struct_writes {
+            if b.accel_struct_reads.iter().any(|(rh, _)| rh.0 == h.0) { return true; }
+        }
+        // AS WAW: both write the same AS
+        for (h, _) in &a.accel_struct_writes {
+            if b.accel_struct_writes.iter().any(|(wh, _)| wh.0 == h.0) { return true; }
+        }
+        // AS WAR: a reads, b writes
+        for (h, _) in &a.accel_struct_reads {
+            if b.accel_struct_writes.iter().any(|(wh, _)| wh.0 == h.0) { return true; }
         }
         false
     }
