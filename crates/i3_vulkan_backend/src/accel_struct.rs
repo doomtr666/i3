@@ -207,6 +207,14 @@ pub fn create_blas(
     };
 
     let id = backend.accel_structs.insert(physical);
+    // Register buf → blas reverse mapping so destroy_buffer() can auto-evict this BLAS.
+    for geom in &info.geometries {
+        for buf_id in [geom.vertex_buffer.0, geom.index_buffer.0] {
+            if buf_id != BackendBuffer::INVALID.0 {
+                backend.buf_to_blas.entry(buf_id).or_default().push(id);
+            }
+        }
+    }
     tracing::debug!(target: "blas_dbg", "create  arena={id:#018x}  addr={address:#018x}");
     BackendAccelerationStructure(id)
 }
@@ -214,6 +222,19 @@ pub fn create_blas(
 pub fn destroy_blas(backend: &mut VulkanBackend, handle: BackendAccelerationStructure) {
     if let Some(pas) = backend.accel_structs.remove(handle.0) {
         tracing::debug!(target: "blas_dbg", "destroy arena={:#018x}  addr={:#018x}", handle.0, pas.address);
+        // Unregister from reverse mapping.
+        if let Some(bi) = &pas.build_info {
+            for geom in &bi.geometries {
+                for buf_id in [geom.vertex_buffer.0, geom.index_buffer.0] {
+                    if let Some(v) = backend.buf_to_blas.get_mut(&buf_id) {
+                        v.retain(|&id| id != handle.0);
+                        if v.is_empty() {
+                            backend.buf_to_blas.remove(&buf_id);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(alloc) = pas.allocation {
             let threshold = backend.graphics.as_ref().map(|g| g.cpu_timeline).unwrap_or(0);
             backend.pending_deletes.push(crate::backend::PendingDelete::AccelStruct {
@@ -224,7 +245,7 @@ pub fn destroy_blas(backend: &mut VulkanBackend, handle: BackendAccelerationStru
             });
         }
     } else {
-        tracing::warn!(target: "blas_dbg", "destroy arena={:#018x} — handle not found in arena (double-free?)", handle.0);
+        tracing::debug!(target: "blas_dbg", "destroy arena={:#018x} — handle not in arena (already auto-evicted)", handle.0);
     }
 }
 

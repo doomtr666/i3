@@ -267,6 +267,42 @@ pub fn destroy_buffer(backend: &mut VulkanBackend, handle: BackendBuffer) {
                 buffer: buf.buffer,
                 alloc,
             });
+
+            // Auto-evict any BLAS whose geometry references this buffer.
+            // The BLAS holds a VkDeviceAddress into the buffer; freeing the buffer
+            // while the BLAS is still in use causes a GPU page fault (Device Lost).
+            if let Some(blas_ids) = backend.buf_to_blas.remove(&handle.0) {
+                for blas_id in blas_ids {
+                    if let Some(pas) = backend.accel_structs.remove(blas_id) {
+                        tracing::debug!(target: "blas_dbg",
+                            "auto-evict blas arena={:#018x} addr={:#018x}: geometry buffer destroyed first",
+                            blas_id, pas.address);
+                        // Clean up sibling buffer entries in buf_to_blas.
+                        if let Some(bi) = &pas.build_info {
+                            for geom in &bi.geometries {
+                                for other_id in [geom.vertex_buffer.0, geom.index_buffer.0] {
+                                    if other_id != handle.0 {
+                                        if let Some(v) = backend.buf_to_blas.get_mut(&other_id) {
+                                            v.retain(|&id| id != blas_id);
+                                            if v.is_empty() {
+                                                backend.buf_to_blas.remove(&other_id);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(blas_alloc) = pas.allocation {
+                            backend.pending_deletes.push(crate::backend::PendingDelete::AccelStruct {
+                                threshold,
+                                handle: pas.handle,
+                                buffer: pas.buffer,
+                                alloc: blas_alloc,
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 }

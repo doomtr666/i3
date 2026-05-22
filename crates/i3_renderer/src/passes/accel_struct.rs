@@ -16,13 +16,14 @@ impl AccelStructSystem {
         }
     }
 
-    /// Destroys all cached acceleration structures and clears state.
+    /// Clears cached acceleration structure handles and destroys the TLAS.
+    ///
+    /// BLASes are auto-evicted by the backend when their geometry buffers are destroyed
+    /// (`destroy_buffer(VB)` → `destroy_blas` cascade). By the time this is called,
+    /// all geometry VBs have already been freed, so explicit `destroy_blas` calls are
+    /// no-ops. We just clear the cache and destroy the TLAS (which has no geometry VBs).
     pub fn reset(&mut self, backend: &mut dyn RenderBackend) {
-        for (_, &handle) in &self.blas_cache {
-            backend.destroy_blas(handle);
-        }
         self.blas_cache.clear();
-
         if let Some(handle) = self.tlas.take() {
             backend.destroy_tlas(handle);
         }

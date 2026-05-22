@@ -149,6 +149,10 @@ impl RenderBackend for NullBackend {
         info!(handle = handle.0, "Destroyed Null TLAS");
     }
 
+    fn is_blas_valid(&self, _handle: BackendAccelerationStructure) -> bool {
+        true
+    }
+
     fn create_window(
         &mut self,
         desc: i3_gfx::graph::backend::WindowDesc,

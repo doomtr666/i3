@@ -928,31 +928,13 @@ impl DefaultRenderGraph {
                 }));
             }
 
-            // 2a. Evict BLAS for tombstoned or removed mesh slots.
-            //     A slot is alive only if it has a valid vertex buffer AND non-zero index count.
-            //     backend.destroy_blas defers physical destruction until the GPU is done.
-            {
-                let live: std::collections::HashSet<u32> = self
-                    .scene_mesh_descriptors
-                    .iter()
-                    .filter(|(_, desc)| desc.vertex_buffer_address != 0 && desc.index_count >= 3)
-                    .map(|(id, _)| *id)
-                    .collect();
-                let stale: Vec<u32> = self
-                    .accel_struct_system
-                    .blas_cache
-                    .keys()
-                    .filter(|id| !live.contains(*id))
-                    .copied()
-                    .collect();
-                for id in stale {
-                    if let Some(blas) = self.accel_struct_system.blas_cache.remove(&id) {
-                        tracing::debug!(target: "blas_dbg",
-                            "sync evict  mesh_id={id:>6}  arena={:#018x}", blas.0);
-                        backend.destroy_blas(blas);
-                    }
-                }
-            }
+            // 2a. Prune BLAS handles that were auto-evicted by the backend.
+            //     When destroy_buffer(VB) is called, the backend invalidates any BLAS
+            //     whose geometry referenced that buffer. Stale cache entries are safe
+            //     to remove here — the backend already scheduled physical destruction.
+            self.accel_struct_system
+                .blas_cache
+                .retain(|_, &mut blas| backend.is_blas_valid(blas));
 
             // 2b. Create new BLAS for any live mesh not yet in cache.
             let mut builds = Vec::new();

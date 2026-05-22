@@ -94,6 +94,9 @@ pub struct VulkanBackend {
     pub recycled_semaphores: Vec<vk::Semaphore>,
 
     pub accel_structs: ResourceArena<PhysicalAccelerationStructure>,
+    /// Reverse mapping: geometry buffer arena-id → [blas arena-id, ...]
+    /// Used to auto-evict BLASes when their geometry VB/IB is destroyed.
+    pub(crate) buf_to_blas: HashMap<u64, Vec<u64>>,
 
     // Transient Pools
     pub(crate) transient_image_pool: HashMap<ImageDesc, Vec<u64>>,
@@ -213,6 +216,7 @@ impl VulkanBackend {
             bindless_set_layout: vk::DescriptorSetLayout::null(),
             bindless_set_handle: 0,
             accel_structs: ResourceArena::new(),
+            buf_to_blas: HashMap::new(),
         })
     }
 
@@ -666,6 +670,10 @@ impl RenderBackend for VulkanBackend {
 
     fn destroy_tlas(&mut self, handle: BackendAccelerationStructure) {
         crate::accel_struct::destroy_tlas(self, handle)
+    }
+
+    fn is_blas_valid(&self, handle: BackendAccelerationStructure) -> bool {
+        self.accel_structs.get(handle.0).is_some()
     }
 
     fn create_graphics_pipeline(&mut self, desc: &GraphicsPipelineCreateInfo) -> BackendPipeline {

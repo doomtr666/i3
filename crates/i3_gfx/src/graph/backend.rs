@@ -414,6 +414,9 @@ pub trait RenderBackend {
     fn destroy_blas(&mut self, handle: BackendAccelerationStructure);
     fn create_tlas(&mut self, info: &TlasCreateInfo) -> BackendAccelerationStructure;
     fn destroy_tlas(&mut self, handle: BackendAccelerationStructure);
+    /// Returns true if the BLAS arena slot is still occupied.
+    /// Returns false if the handle was auto-evicted (geometry VB destroyed) or explicitly destroyed.
+    fn is_blas_valid(&self, handle: BackendAccelerationStructure) -> bool;
 
     /// Upload raw bytes to a buffer.
     fn upload_buffer(
