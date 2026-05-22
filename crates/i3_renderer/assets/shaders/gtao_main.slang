@@ -73,6 +73,11 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
     float3x3 viewRot = float3x3(pc.view[0].xyz, pc.view[1].xyz, pc.view[2].xyz);
     float3 N = normalize(mul(viewRot, N_world));
 
+    // Normal offset bias to prevent self-occlusion (acne) from highly detailed normal maps
+    // Shift the origin slightly along the view-space normal.
+    // This is virtually free compared to 4 extra depth fetches for the geometric normal!
+    P += N * (pc.radius * 0.05f);
+
     // Screen-space radius: invProjection[0][0] = tan(fovx/2)
     float tan_half_fov = abs(pc.invProjection[0][0]);
     float ss_radius = clamp(
@@ -102,10 +107,9 @@ void computeMain(uint3 dispatchId: SV_DispatchThreadID)
         float2 dir_ss = float2(cos(slice_angle), sin(slice_angle));
 
         // 3D slice direction in view space (screen y is flipped)
-        float3 dir_view = normalize(float3(
-            dir_ss.x * tan_half_fov,
-            -dir_ss.y * abs(pc.invProjection[1][1]),
-            0.0f));
+        // Since step sizes are in pixels and pixels are square, the view-space direction
+        // is exactly proportional to (dir_ss.x, -dir_ss.y, 0) without further projection distortion.
+        float3 dir_view = normalize(float3(dir_ss.x, -dir_ss.y, 0.0f));
 
         // Project N onto the slice plane (remove axisVec component)
         float3 axis_vec = normalize(cross(dir_view - dot(dir_view, V) * V, V));
