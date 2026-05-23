@@ -1208,6 +1208,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "i3_noise"
+version = "0.1.0"
+
+[[package]]
 name = "i3_null_backend"
 version = "0.1.0"
 dependencies = [
