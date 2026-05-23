@@ -150,4 +150,37 @@ impl AABB {
             max: new_max,
         }
     }
+
+    pub fn is_in_frustum(&self, vp: &nalgebra::Matrix4<f32>) -> bool {
+        let min = self.min;
+        let max = self.max;
+        let corners = [
+            [min.x, min.y, min.z],
+            [max.x, min.y, min.z],
+            [min.x, max.y, min.z],
+            [max.x, max.y, min.z],
+            [min.x, min.y, max.z],
+            [max.x, min.y, max.z],
+            [min.x, max.y, max.z],
+            [max.x, max.y, max.z],
+        ];
+        // For each of the 6 clip planes, if ALL corners are outside → cull.
+        for plane in 0..6_usize {
+            let all_outside = corners.iter().all(|&[x, y, z]| {
+                let c = vp * nalgebra::Vector4::new(x, y, z, 1.0);
+                match plane {
+                    0 => c.x < -c.w,
+                    1 => c.x > c.w,
+                    2 => c.y < -c.w,
+                    3 => c.y > c.w,
+                    4 => c.z < 0.0, // near (reverse-Z)
+                    _ => c.z > c.w, // far
+                }
+            });
+            if all_outside {
+                return false;
+            }
+        }
+        true
+    }
 }

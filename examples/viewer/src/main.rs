@@ -14,40 +14,6 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-// ─── CPU frustum cull (mirrors the GPU shader logic) ─────────────────────────
-// Returns true = AABB is (at least partially) inside the frustum.
-
-fn frustum_cull_cpu(min: [f32; 3], max: [f32; 3], vp: &glm::Mat4) -> bool {
-    let corners = [
-        [min[0], min[1], min[2]],
-        [max[0], min[1], min[2]],
-        [min[0], max[1], min[2]],
-        [max[0], max[1], min[2]],
-        [min[0], min[1], max[2]],
-        [max[0], min[1], max[2]],
-        [min[0], max[1], max[2]],
-        [max[0], max[1], max[2]],
-    ];
-    // For each of the 6 clip planes, if ALL corners are outside → cull.
-    for plane in 0..6_usize {
-        let all_outside = corners.iter().all(|&[x, y, z]| {
-            let c = vp * glm::vec4(x, y, z, 1.0);
-            match plane {
-                0 => c.x < -c.w,
-                1 => c.x > c.w,
-                2 => c.y < -c.w,
-                3 => c.y > c.w,
-                4 => c.z < 0.0, // near (reverse-Z)
-                _ => c.z > c.w, // far
-            }
-        });
-        if all_outside {
-            return false;
-        }
-    }
-    true
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct DeferredGltfApp {
@@ -310,7 +276,11 @@ impl ExampleApp for DeferredGltfApp {
             if self.debug_gui.show_culling_debug {
                 let col = [0.0_f32, 1.0, 0.2, 0.85]; // green = frustum-visible
                 for (idx, inst) in self.render_graph.cached_instances.iter().enumerate() {
-                    if !frustum_cull_cpu(inst.world_aabb_min, inst.world_aabb_max, &vp) {
+                    let aabb = i3_math::AABB::new(
+                        nalgebra::Point3::from(inst.world_aabb_min),
+                        nalgebra::Point3::from(inst.world_aabb_max),
+                    );
+                    if !aabb.is_in_frustum(&vp) {
                         continue;
                     }
 

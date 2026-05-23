@@ -33,6 +33,7 @@ pub struct BasicScene {
     next_light_id: u64,
     bounds: BoundingBox,
     mesh_aabbs: Vec<BoundingBox>,
+    free_mesh_ids: Vec<u32>,
 }
 
 impl BasicScene {
@@ -52,6 +53,7 @@ impl BasicScene {
             next_light_id: 0,
             bounds: BoundingBox::empty(),
             mesh_aabbs: Vec::new(),
+            free_mesh_ids: Vec::new(),
         };
 
         // Add default material at index 0
@@ -110,16 +112,28 @@ impl BasicScene {
             .upload_buffer(ib, ib_bytes, 0)
             .expect("Failed to upload mesh indices");
 
-        let id = self.meshes.len() as u32;
-        self.meshes.push(Mesh {
+        let id = if let Some(reused) = self.free_mesh_ids.pop() {
+            reused
+        } else {
+            self.meshes.len() as u32
+        };
+
+        let mesh = Mesh {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
             vertex_count,
             index_type: IndexType::Uint16,
             stride: 48, // Match GBufferVertex [f32; 12]
-        });
-        self.mesh_aabbs.push(aabb);
+        };
+
+        if (id as usize) < self.meshes.len() {
+            self.meshes[id as usize] = mesh;
+            self.mesh_aabbs[id as usize] = aabb;
+        } else {
+            self.meshes.push(mesh);
+            self.mesh_aabbs.push(aabb);
+        }
 
         let _ = vertex_count; // Reserved for future validation
         id
@@ -183,17 +197,20 @@ impl BasicScene {
         let id = mesh_id as usize;
         if id < self.meshes.len() {
             let mesh = &self.meshes[id];
-            backend.destroy_buffer(mesh.vertex_buffer);
-            backend.destroy_buffer(mesh.index_buffer);
-            // Tombstone so existing mesh IDs remain stable
-            self.meshes[id] = Mesh {
-                vertex_buffer: BackendBuffer::INVALID,
-                index_buffer: BackendBuffer::INVALID,
-                index_count: 0,
-                vertex_count: 0,
-                index_type: IndexType::Uint32,
-                stride: 48,
-            };
+            if mesh.vertex_buffer != BackendBuffer::INVALID {
+                backend.destroy_buffer(mesh.vertex_buffer);
+                backend.destroy_buffer(mesh.index_buffer);
+                // Tombstone so existing mesh IDs remain stable
+                self.meshes[id] = Mesh {
+                    vertex_buffer: BackendBuffer::INVALID,
+                    index_buffer: BackendBuffer::INVALID,
+                    index_count: 0,
+                    vertex_count: 0,
+                    index_type: IndexType::Uint32,
+                    stride: 48,
+                };
+                self.free_mesh_ids.push(mesh_id);
+            }
         }
     }
 
@@ -248,16 +265,28 @@ impl BasicScene {
         });
         backend.upload_buffer(ib, ib_bytes, 0).expect("ib upload");
 
-        let id = self.meshes.len() as u32;
-        self.meshes.push(Mesh {
+        let id = if let Some(reused) = self.free_mesh_ids.pop() {
+            reused
+        } else {
+            self.meshes.len() as u32
+        };
+
+        let mesh = Mesh {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
             vertex_count,
             index_type: IndexType::Uint32,
             stride: 48,
-        });
-        self.mesh_aabbs.push(aabb);
+        };
+
+        if (id as usize) < self.meshes.len() {
+            self.meshes[id as usize] = mesh;
+            self.mesh_aabbs[id as usize] = aabb;
+        } else {
+            self.meshes.push(mesh);
+            self.mesh_aabbs.push(aabb);
+        }
         id
     }
 
@@ -299,20 +328,32 @@ impl BasicScene {
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
 
-        let id = self.meshes.len() as u32;
+        let id = if let Some(reused) = self.free_mesh_ids.pop() {
+            reused
+        } else {
+            self.meshes.len() as u32
+        };
 
-        self.meshes.push(Mesh {
+        let mesh = Mesh {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
             vertex_count: vertices.len() as u32,
             index_type: IndexType::Uint32,
             stride: 48,
-        });
-        self.mesh_aabbs.push(BoundingBox {
+        };
+        let aabb = BoundingBox {
             min: [-0.5, -0.5, -0.5],
             max: [0.5, 0.5, 0.5],
-        });
+        };
+
+        if (id as usize) < self.meshes.len() {
+            self.meshes[id as usize] = mesh;
+            self.mesh_aabbs[id as usize] = aabb;
+        } else {
+            self.meshes.push(mesh);
+            self.mesh_aabbs.push(aabb);
+        }
 
         id
     }
@@ -354,20 +395,32 @@ impl BasicScene {
         });
         backend.upload_buffer(ib, ib_bytes, 0).unwrap();
 
-        let id = self.meshes.len() as u32;
+        let id = if let Some(reused) = self.free_mesh_ids.pop() {
+            reused
+        } else {
+            self.meshes.len() as u32
+        };
 
-        self.meshes.push(Mesh {
+        let mesh = Mesh {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: indices.len() as u32,
             vertex_count: vertices.len() as u32,
             index_type: IndexType::Uint32,
             stride: 48,
-        });
-        self.mesh_aabbs.push(BoundingBox {
+        };
+        let aabb = BoundingBox {
             min: [-0.5, -0.5, -0.5],
             max: [0.5, 0.5, 0.5],
-        });
+        };
+
+        if (id as usize) < self.meshes.len() {
+            self.meshes[id as usize] = mesh;
+            self.mesh_aabbs[id as usize] = aabb;
+        } else {
+            self.meshes.push(mesh);
+            self.mesh_aabbs.push(aabb);
+        }
 
         id
     }
@@ -435,18 +488,29 @@ impl BasicScene {
             .upload_buffer(ib, &mesh_asset.index_data, 0)
             .expect("Failed to upload baked mesh indices");
 
-        let id = self.meshes.len() as u32;
+        let id = if let Some(reused) = self.free_mesh_ids.pop() {
+            reused
+        } else {
+            self.meshes.len() as u32
+        };
+        
         let index_type = IndexType::Uint32;
-
-        self.meshes.push(Mesh {
+        let mesh = Mesh {
             vertex_buffer: vb,
             index_buffer: ib,
             index_count: mesh_asset.header.index_count,
             vertex_count: mesh_asset.header.vertex_count,
             index_type,
             stride: mesh_asset.header.vertex_stride,
-        });
-        self.mesh_aabbs.push(mesh_asset.bounds);
+        };
+
+        if (id as usize) < self.meshes.len() {
+            self.meshes[id as usize] = mesh;
+            self.mesh_aabbs[id as usize] = mesh_asset.bounds;
+        } else {
+            self.meshes.push(mesh);
+            self.mesh_aabbs.push(mesh_asset.bounds);
+        }
 
         // Register UUID mapping
         self.mesh_uuid_to_index.insert(mesh_uuid, id);

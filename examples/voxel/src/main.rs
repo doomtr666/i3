@@ -158,6 +158,16 @@ impl ExampleApp for VoxelApp {
 
         let p = self.camera.position;
         let cam_pos = Point3::new(p.x, p.y, p.z);
+        let view = self.camera.view_matrix();
+        let (width, height) = self.backend.window_size(self.window).unwrap_or((1280, 720));
+        let projection = nalgebra_glm::perspective_rh_zo(
+            width as f32 / height as f32,
+            std::f32::consts::FRAC_PI_4,
+            1000.0,
+            0.1,
+        );
+        let vp = projection * view;
+
         let mut sink = VoxelSink {
             backend: &mut self.backend,
             scene: &mut self.scene,
@@ -165,7 +175,9 @@ impl ExampleApp for VoxelApp {
             rock_mat: self.rock_mat,
             dirt_mat: self.dirt_mat,
         };
-        self.voxel_octree.update(cam_pos, &mut sink, FRAME_BUDGET);
+
+        self.voxel_octree
+            .update(cam_pos, &vp, &mut sink, FRAME_BUDGET);
     }
 
     fn render(&mut self) {
