@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
-use libnoise::prelude::*;
+use i3_noise::FbmBuilder;
 use nalgebra::{UnitQuaternion, vector};
+use std::sync::Arc;
 
 use examples_common::basic_scene::BasicScene;
 use examples_common::camera_controller::CameraController;
@@ -19,7 +20,6 @@ use std::f32::consts::FRAC_PI_4;
 mod voxel_gbuffer_pass;
 use voxel_gbuffer_pass::VoxelGBufferPass;
 
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
@@ -373,16 +373,22 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // TerrainBox centré au milieu XZ de la scène, à mi-hauteur Y.
     // half_extents.x/z > half_xz pour éviter les artefacts DC aux bords.
     // amplitude = 300 m → reliefs de type collines/montagnes basses.
-    let amplitude = 3000.0_f32;
+    let amplitude = 1000.0_f32;
     let terrain_half_y = 4000.0_f32; // doit être > amplitude
 
-    // FBM : 9 octaves pour avoir du détail sur plusieurs km
-    let generator = Source::perlin(42).fbm(11, 1.0, 2.0, 0.5);
+    let generator = Arc::new(
+        FbmBuilder::new()
+            .seed(0)
+            .octaves(9)
+            .lacunarity(2.0)
+            .gain(0.5)
+            .build(),
+    );
 
     let mut sdf_scene = SdfScene::new();
     sdf_scene.add(
         &Transform::new(
-            vector![half_xz, terrain_world_y, half_xz],
+            vector![half_xz, terrain_world_y + 1000.0, half_xz],
             UnitQuaternion::identity(),
             1.0,
         ),

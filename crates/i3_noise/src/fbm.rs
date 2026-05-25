@@ -1,5 +1,6 @@
 use crate::{VecGenerator, VecPosition, VecSample};
 
+#[derive(Clone)]
 pub struct FbmVec<T> {
     pub source: T,
     pub octaves: usize,

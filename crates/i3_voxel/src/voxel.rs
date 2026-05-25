@@ -1,12 +1,13 @@
-use crate::sdf::{SdfNode, SdfScene};
+use crate::sdf::{SdfNode, SdfScene, SdfSample};
 use i3_math::AABB;
+use i3_noise::VecPosition;
 
 use nalgebra::{Point3, Vector3, point};
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-pub(crate) const VOXEL_BLOCK_WIDTH: i32 = 31;
+pub(crate) const VOXEL_BLOCK_WIDTH: i32 = 29;
 const VOXEL_BLOCK_PADDED_WIDTH: i32 = VOXEL_BLOCK_WIDTH + 2;
 const VOXEL_BLOCK_PADDED_WIDTH2: i32 = VOXEL_BLOCK_PADDED_WIDTH * VOXEL_BLOCK_PADDED_WIDTH;
 const VOXEL_BLOCK_PADDED_SIZE: i32 =
@@ -25,8 +26,8 @@ const BISECTION_STEPS: usize = 8;
 const VERTEX_MAP_EMPTY: u32 = u32::MAX;
 
 thread_local! {
-    static SDF_SCRATCH: RefCell<Vec<f32>> =
-        RefCell::new(vec![0.0_f32; VOXEL_SDF_CACHE_SIZE]);
+    static SDF_SCRATCH: RefCell<Vec<SdfSample>> =
+        RefCell::new(vec![SdfSample::default(); VOXEL_SDF_CACHE_SIZE]);
     static VERTEX_SCRATCH: RefCell<(Vec<VoxelVertex>, Vec<bool>)> =
         RefCell::new((
             vec![VoxelVertex::default(); VOXEL_BLOCK_PADDED_SIZE as usize],
@@ -79,13 +80,32 @@ fn check_intersection(v: &[f32; 8]) -> bool {
 
 fn fill_sdf_cache_impl(
     sdf_nodes: &[&SdfNode],
-    cache: &mut [f32],
+    cache: &mut [SdfSample],
     wp: &impl Fn(i32, i32, i32) -> Point3<f32>,
 ) {
+    let mut temp = [SdfSample::default(); 8];
     for z in -1..=(VOXEL_BLOCK_WIDTH + 1) {
         for y in -1..=(VOXEL_BLOCK_WIDTH + 1) {
-            for x in -1..=(VOXEL_BLOCK_WIDTH + 1) {
-                cache[sdf_cache_idx(x, y, z)] = SdfScene::value(sdf_nodes, &wp(x, y, z));
+            let mut x = -1;
+            while x <= VOXEL_BLOCK_WIDTH + 1 {
+                let mut vpos = VecPosition::default();
+                for i in 0..8 {
+                    if x + i <= VOXEL_BLOCK_WIDTH + 1 {
+                        let p = wp(x + i, y, z);
+                        vpos.x[i as usize] = p.x;
+                        vpos.y[i as usize] = p.y;
+                        vpos.z[i as usize] = p.z;
+                    }
+                }
+                
+                SdfScene::fill_cache_vec(sdf_nodes, &vpos, &mut temp);
+                
+                for i in 0..8 {
+                    if x + i <= VOXEL_BLOCK_WIDTH + 1 {
+                        cache[sdf_cache_idx(x + i, y, z)] = temp[i as usize];
+                    }
+                }
+                x += 8;
             }
         }
     }
@@ -93,7 +113,7 @@ fn fill_sdf_cache_impl(
 
 fn compute_vertices_impl(
     sdf_nodes: &[&SdfNode],
-    sdf_cache: &[f32],
+    sdf_cache: &[SdfSample],
     verts: &mut [VoxelVertex],
     valid: &mut [bool],
     wp: &impl Fn(i32, i32, i32) -> Point3<f32>,
@@ -108,7 +128,7 @@ fn compute_vertices_impl(
                     let iy = ((i >> 1) & 1) as i32;
                     let iz = ((i >> 2) & 1) as i32;
                     corners[i] = wp(x + ix, y + iy, z + iz);
-                    values[i] = sdf_cache[sdf_cache_idx(x + ix, y + iy, z + iz)];
+                    values[i] = sdf_cache[sdf_cache_idx(x + ix, y + iy, z + iz)].value;
                 }
 
                 if !check_intersection(&values) {
@@ -138,12 +158,12 @@ fn compute_vertices_impl(
                             for _ in 0..BISECTION_STEPS {
                                 let mid = (lo + hi) * 0.5;
                                 let p = v1 + mid * (v2 - v1);
-                                let fmid = SdfScene::value(sdf_nodes, &p);
+                                let fmid = SdfScene::sample(sdf_nodes, &p).value;
                                 if flo * fmid <= 0.0 { hi = mid; } else { lo = mid; flo = fmid; }
                             }
                             v1 + ((lo + hi) * 0.5) * (v2 - v1)
                         };
-                        accumulated_normal += SdfScene::normal(sdf_nodes, &q);
+                        accumulated_normal += SdfScene::sample(sdf_nodes, &q).gradient;
                         center_of_mass += q.coords;
                         count += 1.0;
                     }
@@ -167,7 +187,7 @@ fn compute_vertices_impl(
 }
 
 fn compute_indices_impl(
-    sdf_cache: &[f32],
+    sdf_cache: &[SdfSample],
     verts: &[VoxelVertex],
     valid: &[bool],
     vertex_map: &mut [u32],
@@ -177,10 +197,10 @@ fn compute_indices_impl(
     for z in 0..=VOXEL_BLOCK_WIDTH {
         for y in 0..=VOXEL_BLOCK_WIDTH {
             for x in 0..=VOXEL_BLOCK_WIDTH {
-                let sv   = sdf_cache[sdf_cache_idx(x,     y,     z    )];
-                let xp_v = sdf_cache[sdf_cache_idx(x + 1, y,     z    )];
-                let yp_v = sdf_cache[sdf_cache_idx(x,     y + 1, z    )];
-                let zp_v = sdf_cache[sdf_cache_idx(x,     y,     z + 1)];
+                let sv   = sdf_cache[sdf_cache_idx(x,     y,     z    )].value;
+                let xp_v = sdf_cache[sdf_cache_idx(x + 1, y,     z    )].value;
+                let yp_v = sdf_cache[sdf_cache_idx(x,     y + 1, z    )].value;
+                let zp_v = sdf_cache[sdf_cache_idx(x,     y,     z + 1)].value;
                 let ccw = !is_solid(sv);
 
                 emit_quad(verts, valid, vertex_map, packed_vertices, packed_indices,
@@ -257,7 +277,7 @@ pub(crate) fn generate_mesh_from_sdf(
         return;
     }
 
-    crate::sdf::clear_terrain_cache();
+
 
     SDF_SCRATCH.with(|sc| {
         VERTEX_SCRATCH.with(|vc| {

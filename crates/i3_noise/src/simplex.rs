@@ -1,5 +1,6 @@
 use crate::scalar_generator::{ScalarGenerator, ScalarPosition, ScalarSample};
 
+#[derive(Clone)]
 pub struct Simplex {
     seed: u32,
 }

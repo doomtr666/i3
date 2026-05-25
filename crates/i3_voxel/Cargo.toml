@@ -8,6 +8,6 @@ workspace = true
 
 [dependencies]
 i3_math = { path = "../i3_math" }
+i3_noise = { path = "../i3_noise" }
 nalgebra = { workspace = true }
-libnoise = { workspace = true }
 rayon = { workspace = true }

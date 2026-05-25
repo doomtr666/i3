@@ -1,23 +1,23 @@
 use i3_math::{AABB, Transform};
-use libnoise::Generator;
+use i3_noise::{VecGenerator, VecPosition};
 use nalgebra::{Point3, Vector2, Vector3};
 use std::sync::Arc;
-use std::cell::RefCell;
-use std::collections::HashMap;
 
-thread_local! {
-    static TERRAIN_CACHE: RefCell<HashMap<(u32, u32), f32>> = RefCell::new(HashMap::new());
+#[derive(Clone, Copy)]
+pub struct SdfSample {
+    pub value: f32,
+    pub gradient: Vector3<f32>,
 }
 
-pub fn clear_terrain_cache() {
-    TERRAIN_CACHE.with(|cache| {
-        cache.borrow_mut().clear();
-    });
+impl Default for SdfSample {
+    fn default() -> Self {
+        Self {
+            value: f32::MAX,
+            gradient: Vector3::zeros(),
+        }
+    }
 }
 
-const SDF_NORMAL_EPS: f32 = 0.001;
-
-#[derive(Clone)]
 pub enum SdfPrimitive {
     Sphere {
         radius: f32,
@@ -40,8 +40,25 @@ pub enum SdfPrimitive {
     TerrainBox {
         half_extents: Vector3<f32>,
         amplitude: f32,
-        sampler: Arc<dyn Fn(f32, f32) -> f32 + Send + Sync>,
+        generator: Arc<dyn VecGenerator + Send + Sync>,
     },
+}
+
+impl Clone for SdfPrimitive {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Sphere { radius } => Self::Sphere { radius: *radius },
+            Self::Box { half_extents } => Self::Box { half_extents: *half_extents },
+            Self::Capsule { half_height, radius } => Self::Capsule { half_height: *half_height, radius: *radius },
+            Self::Cylinder { half_height, radius } => Self::Cylinder { half_height: *half_height, radius: *radius },
+            Self::Torus { major_radius, minor_radius } => Self::Torus { major_radius: *major_radius, minor_radius: *minor_radius },
+            Self::TerrainBox { half_extents, amplitude, generator } => Self::TerrainBox {
+                half_extents: *half_extents,
+                amplitude: *amplitude,
+                generator: generator.clone(),
+            },
+        }
+    }
 }
 
 impl SdfPrimitive {
@@ -51,7 +68,7 @@ impl SdfPrimitive {
                 Point3::new(-radius, -radius, -radius),
                 Point3::new(*radius, *radius, *radius),
             ),
-            SdfPrimitive::Box { half_extents } => AABB::new(
+            SdfPrimitive::Box { half_extents } | SdfPrimitive::TerrainBox { half_extents, .. } => AABB::new(
                 Point3::new(-half_extents.x, -half_extents.y, -half_extents.z),
                 Point3::new(half_extents.x, half_extents.y, half_extents.z),
             ),
@@ -84,93 +101,194 @@ impl SdfPrimitive {
                     major_radius + minor_radius,
                 ),
             ),
-            SdfPrimitive::TerrainBox { half_extents, .. } => AABB::new(
-                Point3::new(-half_extents.x, -half_extents.y, -half_extents.z),
-                Point3::new(half_extents.x, half_extents.y, half_extents.z),
-            ),
         }
     }
 
-    fn local_value(&self, position: &Point3<f32>) -> f32 {
+    fn local_sample(&self, position: &Point3<f32>) -> SdfSample {
         match self {
-            SdfPrimitive::Sphere { radius } => position.coords.norm() - radius,
+            SdfPrimitive::Sphere { radius } => {
+                let d = position.coords.norm();
+                let gradient = if d > 1e-6 { position.coords / d } else { Vector3::y() };
+                SdfSample { value: d - radius, gradient }
+            }
             SdfPrimitive::Box { half_extents } => {
-                let local_p = position.coords;
+                let p = position.coords;
+                let d = Vector3::new(p.x.abs() - half_extents.x, p.y.abs() - half_extents.y, p.z.abs() - half_extents.z);
+                let out_d = Vector3::new(d.x.max(0.0), d.y.max(0.0), d.z.max(0.0));
+                let in_d = d.x.max(d.y).max(d.z).min(0.0);
+                let value = out_d.norm() + in_d;
 
-                let q = Vector3::new(
-                    local_p.x.abs() - half_extents.x,
-                    local_p.y.abs() - half_extents.y,
-                    local_p.z.abs() - half_extents.z,
-                );
-
-                let outside_dist = Vector3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).norm();
-                let inside_dist = q.x.max(q.y).max(q.z).min(0.0);
-
-                outside_dist + inside_dist
+                let gradient = if out_d.norm_squared() > 1e-6 {
+                    Vector3::new(
+                        if d.x > 0.0 { p.x.signum() * out_d.x } else { 0.0 },
+                        if d.y > 0.0 { p.y.signum() * out_d.y } else { 0.0 },
+                        if d.z > 0.0 { p.z.signum() * out_d.z } else { 0.0 },
+                    ).normalize()
+                } else {
+                    let mut g = Vector3::zeros();
+                    if d.x > d.y && d.x > d.z { g.x = p.x.signum(); }
+                    else if d.y > d.z { g.y = p.y.signum(); }
+                    else { g.z = p.z.signum(); }
+                    g
+                };
+                SdfSample { value, gradient }
             }
-            SdfPrimitive::Capsule {
-                half_height,
-                radius,
-            } => {
-                let clamped_y = position.y.clamp(-*half_height, *half_height);
-                let closest_point = Point3::new(0.0, clamped_y, 0.0);
-
-                (position - closest_point).norm() - radius
+            SdfPrimitive::Capsule { half_height, radius } => {
+                let p = position.coords;
+                let clamped_y = p.y.clamp(-*half_height, *half_height);
+                let closest = Vector3::new(0.0, clamped_y, 0.0);
+                let diff = p - closest;
+                let d = diff.norm();
+                let gradient = if d > 1e-6 { diff / d } else { Vector3::x() };
+                SdfSample { value: d - radius, gradient }
             }
+            SdfPrimitive::Cylinder { half_height, radius } => {
+                let p = position.coords;
+                let dxz = Vector2::new(p.x, p.z);
+                let l = dxz.norm();
+                let d = Vector2::new(l - radius, p.y.abs() - half_height);
+                let out_d = Vector2::new(d.x.max(0.0), d.y.max(0.0));
+                let in_d = d.x.max(d.y).min(0.0);
+                let value = out_d.norm() + in_d;
 
-            SdfPrimitive::Cylinder {
-                half_height,
-                radius,
-            } => {
-                let d_xz = Vector3::new(position.x, 0.0, position.z).norm() - radius;
-                let d_y = position.y.abs() - half_height;
-
-                let outside_dist = Vector2::new(d_xz.max(0.0), d_y.max(0.0)).norm();
-                let inside_dist = d_xz.max(d_y).min(0.0);
-
-                outside_dist + inside_dist
-            }
-
-            SdfPrimitive::Torus {
-                major_radius,
-                minor_radius,
-            } => {
-                let q_x = Vector3::new(position.x, 0.0, position.z).norm() - major_radius;
-                let q = Vector2::new(q_x, position.y);
-
-                q.norm() - minor_radius
-            }
-
-            SdfPrimitive::TerrainBox {
-                half_extents,
-                amplitude,
-                sampler,
-            } => {
-                let q = Vector3::new(
-                    position.x.abs() - half_extents.x,
-                    position.y.abs() - half_extents.y,
-                    position.z.abs() - half_extents.z,
-                );
-                let box_d = Vector3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).norm()
-                    + q.x.max(q.y).max(q.z).min(0.0);
-
-                let nx = (position.x / half_extents.x + 1.0) * 0.5;
-                let nz = (position.z / half_extents.z + 1.0) * 0.5;
-
-                let h = TERRAIN_CACHE.with(|cache| {
-                    let mut cache = cache.borrow_mut();
-                    let key = (nx.to_bits(), nz.to_bits());
-                    if let Some(&val) = cache.get(&key) {
-                        val
+                let gradient = if out_d.norm_squared() > 1e-6 {
+                    let g2 = Vector2::new(
+                        if d.x > 0.0 { out_d.x } else { 0.0 },
+                        if d.y > 0.0 { p.y.signum() * out_d.y } else { 0.0 }
+                    ).normalize();
+                    let dxz_norm = if l > 1e-6 { dxz / l } else { Vector2::x() };
+                    Vector3::new(g2.x * dxz_norm.x, g2.y, g2.x * dxz_norm.y)
+                } else {
+                    if d.x > d.y {
+                        let dxz_norm = if l > 1e-6 { dxz / l } else { Vector2::x() };
+                        Vector3::new(dxz_norm.x, 0.0, dxz_norm.y)
                     } else {
-                        let val = sampler(nx, nz) * amplitude;
-                        cache.insert(key, val);
-                        val
+                        Vector3::new(0.0, p.y.signum(), 0.0)
                     }
-                });
+                };
+                SdfSample { value, gradient }
+            }
+            SdfPrimitive::Torus { major_radius, minor_radius } => {
+                let p = position.coords;
+                let dxz = Vector2::new(p.x, p.z);
+                let l = dxz.norm();
+                let q = Vector2::new(l - major_radius, p.y);
+                let d = q.norm();
+                let value = d - minor_radius;
 
-                let terrain_d = position.y - h;
-                terrain_d.max(box_d)
+                let gradient = if d > 1e-6 && l > 1e-6 {
+                    let dq = q / d;
+                    let dxz_norm = dxz / l;
+                    Vector3::new(dq.x * dxz_norm.x, dq.y, dq.x * dxz_norm.y)
+                } else {
+                    Vector3::y()
+                };
+                SdfSample { value, gradient }
+            }
+            SdfPrimitive::TerrainBox { half_extents, amplitude, generator } => {
+                let p = position.coords;
+                let mut vpos = VecPosition::default();
+                let nx = (p.x / half_extents.x + 1.0) * 0.5;
+                let nz = (p.z / half_extents.z + 1.0) * 0.5;
+                vpos.x[0] = nx;
+                vpos.y[0] = 0.0;
+                vpos.z[0] = nz;
+                
+                let res = generator.eval_vec(&vpos, 0.0);
+                let h = res.value[0] * amplitude;
+                
+                // Box intersection logic
+                let d = Vector3::new(p.x.abs() - half_extents.x, p.y.abs() - half_extents.y, p.z.abs() - half_extents.z);
+                let out_d = Vector3::new(d.x.max(0.0), d.y.max(0.0), d.z.max(0.0));
+                let in_d = d.x.max(d.y).max(d.z).min(0.0);
+                let box_v = out_d.norm() + in_d;
+
+                let box_g = if out_d.norm_squared() > 1e-6 {
+                    Vector3::new(
+                        if d.x > 0.0 { p.x.signum() * out_d.x } else { 0.0 },
+                        if d.y > 0.0 { p.y.signum() * out_d.y } else { 0.0 },
+                        if d.z > 0.0 { p.z.signum() * out_d.z } else { 0.0 },
+                    ).normalize()
+                } else {
+                    let mut g = Vector3::zeros();
+                    if d.x > d.y && d.x > d.z { g.x = p.x.signum(); }
+                    else if d.y > d.z { g.y = p.y.signum(); }
+                    else { g.z = p.z.signum(); }
+                    g
+                };
+
+                let terrain_v = p.y - h;
+                let dh_dx = amplitude * res.dx[0] * (0.5 / half_extents.x);
+                let dh_dz = amplitude * res.dz[0] * (0.5 / half_extents.z);
+                let mut terrain_g = Vector3::new(-dh_dx, 1.0, -dh_dz);
+                terrain_g.try_normalize_mut(1e-6);
+
+                if terrain_v > box_v {
+                    SdfSample { value: terrain_v, gradient: terrain_g }
+                } else {
+                    SdfSample { value: box_v, gradient: box_g }
+                }
+            }
+        }
+    }
+
+    fn local_sample_vec(&self, pos: &VecPosition, out: &mut [SdfSample; 8]) {
+        match self {
+            SdfPrimitive::TerrainBox { half_extents, amplitude, generator } => {
+                let mut vpos = VecPosition::default();
+                for i in 0..8 {
+                    let nx = (pos.x[i] / half_extents.x + 1.0) * 0.5;
+                    let nz = (pos.z[i] / half_extents.z + 1.0) * 0.5;
+                    vpos.x[i] = nx;
+                    vpos.y[i] = 0.0;
+                    vpos.z[i] = nz;
+                }
+                
+                let res = generator.eval_vec(&vpos, 0.0);
+                
+                for i in 0..8 {
+                    let px = pos.x[i];
+                    let py = pos.y[i];
+                    let pz = pos.z[i];
+                    
+                    let h = res.value[i] * amplitude;
+                    
+                    let d = Vector3::new(px.abs() - half_extents.x, py.abs() - half_extents.y, pz.abs() - half_extents.z);
+                    let out_d = Vector3::new(d.x.max(0.0), d.y.max(0.0), d.z.max(0.0));
+                    let in_d = d.x.max(d.y).max(d.z).min(0.0);
+                    let box_v = out_d.norm() + in_d;
+
+                    let box_g = if out_d.norm_squared() > 1e-6 {
+                        Vector3::new(
+                            if d.x > 0.0 { px.signum() * out_d.x } else { 0.0 },
+                            if d.y > 0.0 { py.signum() * out_d.y } else { 0.0 },
+                            if d.z > 0.0 { pz.signum() * out_d.z } else { 0.0 },
+                        ).normalize()
+                    } else {
+                        let mut g = Vector3::zeros();
+                        if d.x > d.y && d.x > d.z { g.x = px.signum(); }
+                        else if d.y > d.z { g.y = py.signum(); }
+                        else { g.z = pz.signum(); }
+                        g
+                    };
+
+                    let terrain_v = py - h;
+                    let dh_dx = amplitude * res.dx[i] * (0.5 / half_extents.x);
+                    let dh_dz = amplitude * res.dz[i] * (0.5 / half_extents.z);
+                    let mut terrain_g = Vector3::new(-dh_dx, 1.0, -dh_dz);
+                    terrain_g.try_normalize_mut(1e-6);
+
+                    if terrain_v > box_v {
+                        out[i] = SdfSample { value: terrain_v, gradient: terrain_g };
+                    } else {
+                        out[i] = SdfSample { value: box_v, gradient: box_g };
+                    }
+                }
+            }
+            _ => {
+                for i in 0..8 {
+                    out[i] = self.local_sample(&Point3::new(pos.x[i], pos.y[i], pos.z[i]));
+                }
             }
         }
     }
@@ -180,12 +298,12 @@ impl SdfPrimitive {
     pub fn terrain_box(
         half_extents: Vector3<f32>,
         amplitude: f32,
-        generator: impl Generator<2> + Send + Sync + 'static,
+        generator: Arc<dyn VecGenerator + Send + Sync>,
     ) -> Self {
         SdfPrimitive::TerrainBox {
             half_extents,
             amplitude,
-            sampler: Arc::new(move |x: f32, z: f32| generator.sample([x as f64, z as f64]) as f32),
+            generator,
         }
     }
 }
@@ -215,16 +333,12 @@ impl SdfNode {
     pub fn material_id(&self) -> u32           { self.material_id }
 }
 
-// ─── BVH ─────────────────────────────────────────────────────────────────────
-
 pub struct BvhNode {
     pub aabb:     AABB,
     pub left:     u32,     // index in bvh_nodes[]; u32::MAX = leaf
     pub right:    u32,
     pub prim_idx: u32,     // index in nodes[]; valid only when left == u32::MAX
 }
-
-// ─── SdfScene ─────────────────────────────────────────────────────────────────
 
 pub struct SdfScene {
     nodes:     Vec<SdfNode>,
@@ -256,47 +370,32 @@ impl SdfScene {
         self.bvh_nodes.clear();
     }
 
-    /// Build (or rebuild) the BVH. Call once after all primitives are added.
     pub fn build_bvh(&mut self) {
-        self.bvh_nodes.clear();
-        if self.nodes.is_empty() {
-            return;
-        }
+        if self.nodes.is_empty() { return; }
         let mut indices: Vec<u32> = (0..self.nodes.len() as u32).collect();
-        Self::bvh_build(&self.nodes, &mut indices, &mut self.bvh_nodes);
+        let mut out_bvh = Vec::with_capacity(self.nodes.len() * 2);
+        Self::bvh_build(&self.nodes, &mut indices, &mut out_bvh);
+        self.bvh_nodes = out_bvh;
     }
-
-    /// Query nodes whose world AABB intersects `query`. Uses BVH if built, else linear scan.
-    pub fn get_nodes(&self, aabb: &AABB) -> Vec<&SdfNode> {
-        if !self.bvh_nodes.is_empty() {
-            self.bvh_query(aabb)
-        } else {
-            self.nodes
-                .iter()
-                .filter(|n| n.world_aabb.intersects(aabb))
-                .collect()
-        }
-    }
-
-    // ── BVH internals ────────────────────────────────────────────────────────
 
     fn bvh_build(nodes: &[SdfNode], indices: &mut [u32], out: &mut Vec<BvhNode>) -> u32 {
         let idx = out.len() as u32;
-
-        // Compute union AABB of all primitives in this subset
-        let mut union_aabb = nodes[indices[0] as usize].world_aabb;
-        for &i in &indices[1..] {
-            union_aabb = union_aabb.union(&nodes[i as usize].world_aabb);
-        }
-
         if indices.len() == 1 {
-            out.push(BvhNode { aabb: union_aabb, left: u32::MAX, right: 0, prim_idx: indices[0] });
+            let prim_idx = indices[0];
+            out.push(BvhNode {
+                aabb: nodes[prim_idx as usize].world_aabb.clone(),
+                left: u32::MAX, right: u32::MAX, prim_idx,
+            });
             return idx;
         }
 
-        // Split along the longest axis by centroid median
+        let mut union_aabb = nodes[indices[0] as usize].world_aabb.clone();
+        for &i in indices.iter().skip(1) {
+            union_aabb = union_aabb.union(&nodes[i as usize].world_aabb);
+        }
+
         let ext = union_aabb.extent();
-        let axis = if ext.x >= ext.y && ext.x >= ext.z { 0usize }
+        let axis = if ext.x >= ext.y && ext.x >= ext.z { 0 }
                    else if ext.y >= ext.z { 1 }
                    else { 2 };
 
@@ -309,7 +408,6 @@ impl SdfScene {
         let mid = indices.len() / 2;
         let (left_idx, right_idx) = indices.split_at_mut(mid);
 
-        // Reserve slot for this internal node before recursing
         out.push(BvhNode { aabb: union_aabb, left: 0, right: 0, prim_idx: u32::MAX });
         let left  = Self::bvh_build(nodes, left_idx, out);
         let right = Self::bvh_build(nodes, right_idx, out);
@@ -318,7 +416,7 @@ impl SdfScene {
         idx
     }
 
-    fn bvh_query<'a>(&'a self, query: &AABB) -> Vec<&'a SdfNode> {
+    pub fn get_nodes<'a>(&'a self, query: &AABB) -> Vec<&'a SdfNode> {
         let mut result = Vec::new();
         if self.bvh_nodes.is_empty() {
             return result;
@@ -335,7 +433,6 @@ impl SdfScene {
                 continue;
             }
             if node.left == u32::MAX {
-                // Leaf
                 result.push(&self.nodes[node.prim_idx as usize]);
             } else {
                 stack[top] = node.left;
@@ -355,40 +452,67 @@ impl SdfScene {
         &mut self.nodes
     }
 
-    pub fn value(nodes: &[&SdfNode], position: &Point3<f32>) -> f32 {
-        let mut solid_dist = f32::MAX;
-        let mut empty_dist = f32::MAX;
+    pub fn sample(nodes: &[&SdfNode], position: &Point3<f32>) -> SdfSample {
+        let mut solid = SdfSample { value: f32::MAX, gradient: Vector3::zeros() };
+        let mut empty = SdfSample { value: f32::MAX, gradient: Vector3::zeros() };
 
         for node in nodes {
             let local_p = node.transform.inv_transform_point(position);
-            let dist = node.primitive.local_value(&local_p) * node.transform.scale();
+            let mut s = node.primitive.local_sample(&local_p);
+            
+            s.value *= node.transform.scale();
+            s.gradient = node.transform.transform_normal(&s.gradient);
 
             if node.subtract {
-                empty_dist = empty_dist.min(dist);
+                if s.value < empty.value { empty = s; }
             } else {
-                solid_dist = solid_dist.min(dist);
+                if s.value < solid.value { solid = s; }
             }
         }
 
-        solid_dist.max(-empty_dist)
+        if solid.value > -empty.value {
+            solid
+        } else {
+            SdfSample { value: -empty.value, gradient: -empty.gradient }
+        }
     }
 
-    pub fn normal(nodes: &[&SdfNode], position: &Point3<f32>) -> Vector3<f32> {
-        let k0 = Vector3::new(1.0, -1.0, -1.0);
-        let k1 = Vector3::new(-1.0, -1.0, 1.0);
-        let k2 = Vector3::new(-1.0, 1.0, -1.0);
-        let k3 = Vector3::new(1.0, 1.0, 1.0);
+    pub fn fill_cache_vec(nodes: &[&SdfNode], pos: &VecPosition, out: &mut [SdfSample; 8]) {
+        let mut solid = [SdfSample { value: f32::MAX, gradient: Vector3::zeros() }; 8];
+        let mut empty = [SdfSample { value: f32::MAX, gradient: Vector3::zeros() }; 8];
+        let mut temp = [SdfSample::default(); 8];
 
-        let p = position.coords;
+        for node in nodes {
+            let mut local_pos = VecPosition::default();
+            for i in 0..8 {
+                let p = Point3::new(pos.x[i], pos.y[i], pos.z[i]);
+                let local_p = node.transform.inv_transform_point(&p);
+                local_pos.x[i] = local_p.x;
+                local_pos.y[i] = local_p.y;
+                local_pos.z[i] = local_p.z;
+            }
 
-        let f0 = Self::value(nodes, &Point3::from(p + k0 * SDF_NORMAL_EPS));
-        let f1 = Self::value(nodes, &Point3::from(p + k1 * SDF_NORMAL_EPS));
-        let f2 = Self::value(nodes, &Point3::from(p + k2 * SDF_NORMAL_EPS));
-        let f3 = Self::value(nodes, &Point3::from(p + k3 * SDF_NORMAL_EPS));
+            node.primitive.local_sample_vec(&local_pos, &mut temp);
 
-        let n = k0 * f0 + k1 * f1 + k2 * f2 + k3 * f3;
+            for i in 0..8 {
+                temp[i].value *= node.transform.scale();
+                temp[i].gradient = node.transform.transform_normal(&temp[i].gradient);
 
-        n.try_normalize(1e-6).unwrap_or_else(|| Vector3::y())
+                if node.subtract {
+                    if temp[i].value < empty[i].value { empty[i] = temp[i]; }
+                } else {
+                    if temp[i].value < solid[i].value { solid[i] = temp[i]; }
+                }
+            }
+        }
+
+        for i in 0..8 {
+            if solid[i].value > -empty[i].value {
+                out[i] = solid[i];
+            } else {
+                out[i] = SdfSample { value: -empty[i].value, gradient: -empty[i].gradient };
+            }
+        }
     }
 }
 
