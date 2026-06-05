@@ -1236,6 +1236,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "i3_sdf"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "i3_gfx",
+ "i3_io",
+ "i3_math",
+ "i3_voxel",
+ "nalgebra",
+ "rayon",
+ "tracing",
+]
+
+[[package]]
 name = "i3_slang"
 version = "0.1.0"
 dependencies = [
@@ -2272,16 +2286,14 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 name = "sdf"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
  "examples_common",
- "half",
  "i3_baker",
- "i3_brickmap",
  "i3_egui",
  "i3_gfx",
  "i3_io",
  "i3_math",
  "i3_renderer",
+ "i3_sdf",
  "i3_voxel",
  "i3_vulkan_backend",
  "nalgebra-glm",

@@ -22,6 +22,8 @@ fn run() -> Result<()> {
     println!("cargo:rerun-if-changed=assets/sdf.bake.ron");
     println!("cargo:rerun-if-changed=assets/pipelines");
     println!("cargo:rerun-if-changed=assets/shaders");
+    println!("cargo:rerun-if-changed=../../crates/i3_sdf/assets/pipelines");
+    println!("cargo:rerun-if-changed=../../crates/i3_sdf/assets/shaders");
 
     ManifestBaker::from_file(
         Path::new(&manifest_dir).join("assets/sdf.bake.ron"),

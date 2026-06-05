@@ -1,304 +1,265 @@
-# SDF → Brickmap avec clipmap multi-niveaux
+# SDF Sparse Voxel Octree (`i3_sdf`)
 
-> **Note d'implémentation (2026-05-21)** — Ce document est le plan de conception original.
-> Il a été largement suivi mais présente plusieurs divergences avec le code actuel :
-> - **10 niveaux** implémentés (L0..L9), non 8.
-> - **Format atlas : u8-packed** (4 octets/DWORD). Les samples f16 du chemin CPU legacy (`BrickmapData`) ne sont plus uploadés vers le GPU.
-> - **Brick voxels : 9³ = 729** (BRICK\_SIZE=8 + 1 voxel de recouvrement pour le trilinear cross-brick), non 8³=512.
-> - **BRICK\_DWORDS = 183** (ceil(729/4)), non 128.
-> - **Grille par niveau : 32³ = 32 768 cellules** (CLIPMAP\_GRID=[32,32,32]). Couverture = 256 × voxel\_size par axe.
-> - Le **bake GPU compute** (`brickmap_bake.slang`) est implémenté et dispatché en indirect. Les passes `dirty` (détection) et `cull+alloc` (allocation GPU) sont la prochaine étape (plan GPU-driven dans `gpu_driven_plan.md`).
-> - La **DDA traversal** (`brickmap_clipmap.slang`) est implémentée et fonctionnelle.
-> - La **page\_table GPU** est un buffer `u32` (`PAGE_EMPTY = 0xFFFFFFFF`), initialisé par `BrickmapInitPass`.
+> **Status (2026-06)** — This document describes the **current** implementation in
+> the `i3_sdf` crate. It replaces the original multi-level *clipmap* brickmap design
+> (kept in git history). The clipmap was a fixed 10-level toroidal grid; the SVO is an
+> adaptive octree that concentrates detail where it is needed and renders a 2 km view.
 
-## Contexte
+## 1. Purpose
 
-L'exemple SDF actuel évalue toutes les primitives par ray marching analytique (évaluateur RPN). Avec ~10 primitives c'est correct, mais le passage à des centaines de primitives + un terrain fBm détaillé rend cette approche trop coûteuse.
+Render a Signed Distance Field scene (a CSG tree of analytic primitives) by
+**baking** the field into a sparse voxel octree of small bricks and **sphere-tracing**
+that octree on the GPU, instead of evaluating every primitive analytically at every
+ray step. The analytic path stays competitive for a handful of primitives; the SVO is
+the scalable path for complex scenes and (later) baked / streamed content.
 
-L'objectif est de pré-calculer le champ de distance sur une grille hiérarchique (brickmap clipmap) et de faire le ray marching par DDA sur cette grille plutôt que par évaluation analytique à chaque pas.
-
-## Architecture cible
+Everything — CPU tree, GPU buffers, compute/graphics passes, and the Slang shaders —
+lives in one crate (`crates/i3_sdf`). The demo (`examples/sdf`) only builds the scene,
+drives the camera, and wires the passes into the render graph.
 
 ```
-CPU : SdfScene + BVH des primitives
+CPU  SdfScene (BVH of primitives)         SvoTree (adaptive octree, this crate)
+        │                                     │  per-frame update(): split / merge
+        │  pack_scene / pack_bvh              │  emits GpuBrickJob list + node snapshot
+        ▼                                     ▼
+GPU  prims[]  bvh[]   node_pool[]   jobs[]   (CpuToGpu, ring-buffered ×3)
+        │                                     │
+        │  SvoBakePass (compute, 9³/brick)    │
+        ▼                                     ▼
+     sdf_atlas[]  mat_atlas[]  (GpuOnly, u8-packed bricks)
         │
-        ▼  BrickmapBaker (par frame, budget N bricks)
-        │
-GPU : Page table 3D (u16 → brick index)   ← Clipmap L0..L7
-      + Atlas 3D SDF (f16, 8×8×8 bricks)
-      + Atlas 3D material ID (u8)
-        │
-GPU Shader : DDA traversal → trilinear sample
-             Fallback analytique (RPN) au-delà du clipmap
+        ▼  SvoRenderPass (fullscreen fragment)
+     sphere-trace octree → trilinear SDF → G-buffer (albedo / normal / depth / …)
 ```
 
----
+## 2. The CPU octree — `svo.rs`
 
-## Étape 1 — BVH sur les primitives SDF (fondation CPU)
+### 2.1 Node and tree
 
-**Pourquoi :** Le baker doit, pour chaque brick, trouver quelles primitives l'influencent. Le scan linéaire O(n) actuel de `SdfScene::get_nodes()` ne scale pas. Un BVH réduit ça à O(log n) et bénéficie aussi au voxel octree existant.
-
-**Fichier : `crates/i3_voxel/src/sdf.rs`**
+A node is a cube AABB with one of three states:
 
 ```rust
-struct BvhNode {
-    aabb: AABB,
-    left: u32,              // 0xFFFFFFFF = feuille
-    right: u32,
-    primitive_index: u32,   // index dans nodes[] si feuille
-}
+enum SvoState { Free, Leaf, Split }
 
-// Ajouté à SdfScene :
-bvh_nodes: Vec<BvhNode>,
-
-impl SdfScene {
-    pub fn build_bvh(&mut self);
-    pub fn get_nodes_bvh(&self, query: &AABB) -> impl Iterator<Item = &SdfNode>;
+struct SvoNode {
+    aabb, depth, octant, parent,
+    state,
+    brick_slot,      // u32::MAX = no brick (empty / interior)
+    children_start,  // u32::MAX = leaf; else first of 8 consecutive children
 }
 ```
 
-Build : **median split** sur l'axe le plus long de l'AABB courant.  
-Remplace l'appel dans `octree.rs::OctreeNode::generate_mesh()`.
+`SvoTree` owns a flat `Vec<SvoNode>` plus free lists:
+- `free_groups` — recycled 8-node child groups (so `nodes` doesn't grow forever).
+- `brick_free` — recycled atlas brick slots.
+- `next_brick` — monotone slot allocator (used when `brick_free` is empty).
+- `pending_jobs: Vec<GpuBrickJob>` — bricks to bake this frame (drained by the setup pass).
 
-**Vérification :** rendu voxel identique avant/après, benchmark temps génération mesh avec 100+ primitives.
+The root is one cube (the demo uses **2048 m**, centred, `max_depth = 16`). Only the
+root must be cubic — `voxel_size = side / BRICK_SIZE` is applied uniformly on all axes.
 
----
+### 2.2 Per-frame update — `update(cam, vp, scene, lod_threshold, …, split_budget, merge_budget)`
 
-## Étape 2 — Brickmap baker CPU (1 niveau uniforme) — **implémenté**
+Two phases, each a single stack traversal, both budget-limited:
 
-**Crate `crates/i3_brickmap/`**
+**Phase 1 — merges.** For each `Split` node, compute `diag / dist` (projected size).
+Merge it (collapse its subtree back to a leaf) if it is **out of frustum** or its
+projected size dropped below `lod_threshold * 0.5` (hysteresis). Merging frees the
+subtree's node groups and brick slots back to the free lists.
 
-```
-Brick = 9×9×9 = 729 samples (BRICK_SIZE=8 + 1 voxel de recouvrement trilinear)
-Sample SDF GPU : u8, normalisé par half_diag, packé 4 voxels/DWORD (183 DWORDs/brick)
-Sample mat GPU : u8, packé 4 voxels/DWORD
-Page table GPU : u32 flat [z][y][x], 0xFFFFFFFF = brick vide (GpuOnly buffer)
+**Phase 2 — splits.** For each `Leaf`, split it (allocate 8 children) when **all** hold:
+- `depth < max_depth`
+- the node is **in frustum**
+- `near_surface(node)` — conservative "might contain a surface" (see 2.3)
+- `diag / dist > lod_threshold` — bounded screen-space LOD (depth ∝ log distance,
+  so it can never explode)
+- `side > EMPTY_CAP` **OR** `crosses_surface(node)` — the empty-space cap (see 2.4)
 
-// Chemin CPU legacy (BrickmapData, utilisé uniquement dans les tests) :
-Sample SDF CPU : f16 bits
-Page table CPU : Vec<u16>, 0xFFFF = vide
-```
+Candidates are sorted by `diag / dist` (closest/largest first) and truncated to the
+budget, so the most visually important refinement happens first when the budget is tight.
 
-**Types clés :**
+### 2.3 Two surface tests (the heart of the no-holes / no-crawl trade-off)
 
-```rust
-pub struct BrickmapBaker {
-    pub brick_size:   u32,         // 8
-    pub grid_dims:    [u32; 3],    // nombre de bricks par axe
-    pub world_origin: [f32; 3],
-    pub voxel_size:   f32,         // taille monde d'un voxel
-}
+The SDF is **1-Lipschitz** (exact primitive distances combined with `min`/`max` CSG),
+which makes two cheap, *correct* tests possible:
 
-pub struct BrickmapData {
-    pub page_table:  Vec<u16>,     // grid_dims.x × y × z
-    pub sdf_atlas:   Vec<u16>,     // brick_count × 512, f16 bits
-    pub mat_atlas:   Vec<u8>,      // brick_count × 512
-    pub brick_count: u32,
-}
+- **`near_surface(aabb)`** — `|sdf(center)| ≤ half_diagonal`. By Lipschitz, if any
+  point of the box is on the surface then this is true, so it has **no false
+  negatives**: it never culls a box that contains a surface → **no holes**. Used to
+  gate **subdivision** (descend toward every surface) and **baking** (`bake_or_cull`).
+  Its false *positives* (the empty shell within half-a-diagonal of a surface) are the
+  cost, paid by a generous atlas.
 
-impl BrickmapBaker {
-    pub fn bake_all(&self, sdf: &SdfScene) -> BrickmapData;
-    pub fn bake_batch(&self, sdf: &SdfScene, state: &mut BakeState, budget: usize);
-}
-```
+- **`crosses_surface(aabb)`** — samples a 3³ grid and requires a **strict** sign change
+  (a point with `sdf > +ε` *and* one with `sdf < -ε`, `ε = 1 mm`). True only when a
+  surface actually passes *through* the box. Used to decide whether to keep refining
+  **below `EMPTY_CAP`**. The strict `ε` is essential: the ground plane sits at `y = 0`,
+  which coincides with octree partition planes, so empty boxes just above the floor have
+  a face exactly at `sdf = 0`; a non-strict test would count that as "crossing" and
+  refine a fine empty shell (see 2.4).
 
-**Algorithme bake d'une brick `(bx, by, bz)` :**
-1. Calculer l'AABB monde + marge (2 × voxel_size)
-2. `sdf.get_nodes_bvh(aabb)` → primitives candidates
-3. Évaluer SDF au **centre** de la brick ; si `|sdf| > brick_half_diagonal × 2` → skip
-4. Évaluer les 8³ points, quantifier en f16 normalisé, écrire dans atlas
-5. Mettre à jour page_table
+### 2.4 `EMPTY_CAP` — keep empty space coarse
 
-**Dépendances `Cargo.toml` :**
-```toml
-i3_math  = { path = "../i3_math" }
-i3_voxel = { path = "../i3_voxel" }
-half     = "2"
-rayon    = { workspace = true }
-```
+A sphere-tracer skips a cell with one `boxExit` jump, but only if the cell has **no
+brick** (it is culled) or is **large**. If the conservative `near_surface` shell is
+refined to fine empty cells, the ray crawls through them one cell per step and exhausts
+its step budget → the finest LODs vanish. So:
 
-**Vérification :** dump atlas → slices PNG, isosurface d=0 visible pour sphère + terrain.
+> Below `EMPTY_CAP` (0.5 m), **only nodes a surface actually crosses keep refining**.
+> Empty-but-near nodes stop at `EMPTY_CAP`. Surfaces refine all the way to the LOD limit.
 
----
+`near_surface` still drives the *descent* (so thin features — the torus tube, a CSG
+niche — are reached), and `crosses_surface` takes over the *fine* refinement decision.
 
-## Étape 3 — Rendu GPU par DDA traversal (1 niveau)
+### 2.5 Baking decision — `bake_or_cull(node)`
 
-**Nouveau `examples/sdf/src/brickmap_pass.rs`**
+When a node becomes a leaf (after split / merge / `invalidate`), bake it iff
+`near_surface` (conservative → no holes). Otherwise free its brick slot. Empty leaves
+that are genuinely far from any surface get **no brick** and are skipped by the tracer.
 
-**Buffers GPU uploadés depuis `BrickmapData` :**
-```
-page_table_buf : StorageBuffer u16[], grid_dims.x×y×z × 2 bytes
-sdf_atlas_buf  : StorageBuffer u16[], brick_count × 512 × 2 bytes
-mat_atlas_buf  : StorageBuffer u8[],  brick_count × 512 bytes
-```
+### 2.6 Brick jobs — `emit_bake_job(node)`
 
-**Push constants :**
-```slang
-struct BrickmapPC {
-    float3 world_origin;  float voxel_size;
-    uint3  grid_dims;     uint  brick_count;
-};
-```
+Allocates a brick slot (reusing `brick_free`, else `next_brick`) and pushes a
+`GpuBrickJob` describing where to bake. `voxel_size = side / 8`. The SDF quantisation
+half-range is `half_diag = BAND_VOXELS * voxel_size` (**not** the geometric
+half-diagonal): normalising by ~3 voxels instead of ~7 gives finer u8 precision near
+the surface → smoother gradients/normals. A `retain` removes any stale job for the same
+slot (a slot can be freed and reused in one frame) so the GPU never double-writes a slot.
 
-**Shader `brickmap_gbuffer.slang` — algorithme :**
-```
-1. DDA coarse : avance brick par brick (t_delta = brick_world_size / |rd.axis|)
-2. Pour chaque brick :
-   a. page_table[bx,by,bz] == 0xFFFF ? → skip, DDA step suivant
-   b. DDA fine 8×8×8 à l'intérieur de la brick
-      - Interpolation trilinéaire du SDF
-      - Hit si sdf < 0.001
-3. Normal : 6 taps sur l'atlas, différences finies (step = voxel_size)
-4. Material : mat_atlas[brick_base + local_idx]
-5. Hors grille : fallback évaluateur RPN analytique existant
-```
+### 2.7 Edits & animation — `invalidate(region, scene)`
 
-**Vérification :** même visuel qu'analytique pour sphère + terrain, mesurer gain FPS.
+After the scene changes (dig/fill, the orbiting gem), every leaf overlapping `region`
+is re-evaluated by `bake_or_cull` — re-baked if still near a surface, freed if it became
+empty.
 
----
+## 3. GPU data — `gpu_scene.rs`, `gpu_buffers.rs`
 
-## Étape 4 — Clipmap multi-niveaux (**10 niveaux — implémenté**)
-
-Chaque brick = 8³ voxels + 1 voxel de recouvrement trilinear = 9³ = 729 samples. La couverture double à chaque niveau. 10 niveaux couvrent du détail millimétrique (1.25 cm) jusqu'à 2 km, avec fallback analytique au-delà.
-
-Grille : **32×32×32 bricks/niveau**. Couverture = 32 × 8 × voxel\_size = 256 × voxel\_size par axe.
-
-| Niveau | Voxel size | Brick size | Couverture (côté) | MAX\_BRICKS |
-|--------|-----------|-----------|-------------------|-------------|
-| L0     | 0.0125 m  | 0.10 m    | 3.2 m             | 8192        |
-| L1     | 0.025 m   | 0.20 m    | 6.4 m             | 8192        |
-| L2     | 0.05 m    | 0.40 m    | 12.8 m            | 8192        |
-| L3     | 0.10 m    | 0.80 m    | 25.6 m            | 8192        |
-| L4     | 0.20 m    | 1.60 m    | 51.2 m            | 8192        |
-| L5     | 0.40 m    | 3.20 m    | 102 m             | 8192        |
-| L6     | 0.80 m    | 6.40 m    | 205 m             | 8192        |
-| L7     | 1.60 m    | 12.8 m    | 410 m             | 8192        |
-| L8     | 4.00 m    | 32.0 m    | 1024 m            | 8192        |
-| L9     | 8.00 m    | 64.0 m    | 2048 m            | 8192        |
-
-**Mémoire GPU :**
-- Page tables : 10 × 32³ × 4 bytes (u32) = **10 MB**
-- Atlas SDF (u8-packed) : 10 × 8192 bricks × 183 DWORDs × 4 bytes = **60 MB**
-- Atlas material (u8-packed) : identique = **60 MB**
-- Total atlas : **≈ 130 MB** (constant, pas d'éviction LRU)
-
-**`crates/i3_brickmap/src/clipmap.rs` (implémenté) :**
-```rust
-pub const NUM_LEVELS: usize = 10;
-pub const CLIPMAP_GRID: [u32; 3] = [32, 32, 32];
-pub const LEVEL_VOXEL_SIZES: [f32; NUM_LEVELS] =
-    [0.0125, 0.025, 0.05, 0.10, 0.20, 0.40, 0.80, 1.60, 4.00, 8.00];
-pub const MAX_BRICKS_PER_LEVEL: usize = 8192;
-pub const GRID_VOL: usize = 32 * 32 * 32; // 32 768
-
-pub struct BrickmapClipmapState {
-    pub levels:               Vec<ClipmapLevel>,
-    pub invalidation_spheres: Vec<InvalidationSphere>,
-}
-```
-
-**Shader :** sélection de niveau par distance camera → brick, blend aux transitions de niveau.
-
----
-
-## Étape 5 — Mise à jour dynamique + hybride analytique
-
-**Dynamisme :**
-- Primitive change → invalider bricks dont l'AABB intersecte l'ancienne **ou** nouvelle AABB de la primitive
-- Re-enqueue dans `BakeState` avec priorité haute (`Dirty` state)
-- Rendu utilise le dernier état valide pendant le rebake
-
-**Hybride brickmap / analytique :**
-- `t > coverage_L7` → bascule vers RPN evaluator analytique existant
-- Sous-ensemble filtré par emprise visuelle pour limiter le coût analytique
-
-**Matériaux :**
-- `GpuMaterial[256]` : albedo + roughness + metallic, buffer partagé
-- Bricks stockent un `u8` material ID → lookup au hit
-
----
-
-## Étape Debug — Visualisation brickmap & clipmap
-
-Réutilise `debug_draw_pass`, `RendererDebugGui`, `DebugChannel` existants.
-
-### Canaux GPU (nouveaux `DebugChannel`)
-
-| Canal | Description |
-|-------|-------------|
-| `BrickmapLevel` | Couleur par niveau actif au pixel (L0=bleu → L7=rouge) |
-| `BrickmapSdfError` | Différence SDF brickmap vs analytique |
-| `BrickmapAllocated` | Vert = allouée, noir = vide/fallback |
-| `BrickmapFreshness` | Blanc = rebakée ce frame, rouge = ancienne |
-
-### Overlays fil-de-fer (debug_draw_pass)
-
-- Bricks allouées L0 : bleu clair
-- Bricks en cours de rebake : jaune
-- Bricks invalidées : rouge (1 frame)
-
-### Statistiques GUI (extra closure)
+### 3.1 Structures (mirror the Slang structs exactly)
 
 ```
-Brickmap — L0: 12 341 / 16K  [=====......] 128 rebaked/frame
-           ...
-Atlas : 48 231 / 262 144 bricks (18%)  ~48 MB SDF
-Brick budget : [slider 8..256]/frame
+GpuSvoNode (32 B)   aabb_min, first_child(u32::MAX=leaf), aabb_max, brick_offset(u32::MAX=none)
+GpuBrickJob (32 B)  brick_world_min, voxel_size, atlas_offset, half_diag, _pad
+GpuPrimitive(80 B)  inv-rotation rows + translation, inv_scale, data0..2, type, subtract, material
+GpuBvhNode (32 B)   aabb_min, left(u32::MAX=leaf), aabb_max, right_or_prim
 ```
 
-### Dump PNG (debug uniquement)
+### 3.2 Brick & atlas layout
 
-```rust
-#[cfg(debug_assertions)]
-pub fn dump_slice_png(&self, level: usize, y_world: f32, path: &str);
-```
+A brick is `(BRICK_SIZE+1)³ = 9³ = 729` voxels — the `+1` is a **one-voxel positive
+overlap** per axis so the trilinear sampler reads a same-LOD neighbour's first voxel
+without clamping (seamless same-LOD bricks). Voxels are **u8** (SDF and material),
+packed **4 per DWORD** → `BRICK_DWORDS = ceil(729/4) = 183` DWORDs/brick. A brick's byte
+offset in the atlas is `slot * BRICK_DWORDS * 4`.
 
----
+SDF decode: `sdf = (byte / 127.5 - 1) * half_diag`, with `half_diag = BAND_VOXELS *
+voxel_size` — **the bake and the render must use the same `half_diag`**.
 
-## Test de validation — Déformation dynamique
+### 3.3 Ring-buffered CPU→GPU buffers (`RING = 3`)
 
-### Creuser (clic gauche)
-- Raycaste contre la surface brickmap
-- Ajoute une soustraction sphérique `r = 2.0 m` au point de contact
-- Bricks dont l'AABB intersecte la sphère → `Dirty`, rebake prioritaire
-- **Attendu :** cratère visible en < 5 frames
+`node_pool`, `jobs`, `prims`, `bvh` are `CpuToGpu` and **triple-buffered**. The renderer
+keeps 3 frames in flight and `map_buffer` returns a single allocation, so writing frame
+N must not land on a buffer the GPU is still reading for frame N-1/N-2. The frame fence
+guarantees frame N-3 is done, so `buf[frame % 3]` is always free. The setup pass advances
+the ring slot once per frame and imports that slot under a stable name; the bake/render
+passes resolve by name and get the same slot.
 
-### Ajouter de la matière (clic droit)
-- Même logique, union sphérique `r = 1.5 m`
+The **atlas** (`sdf_atlas`, `mat_atlas`) is a single `GpuOnly` buffer — it is persistent
+(bricks accumulate across frames) and made consistent by single-queue ordering, so it
+must **not** be ring-buffered.
 
-### GUI
-```
-Tool radius : [slider 0.5..10.0 m]
-[ ] Dig (clic gauche)    [ ] Fill (clic droit)
-Dirty bricks : 1 247  →  rebaked this frame : 128
-```
+## 4. The three GPU passes — `passes/`
 
-### Critères
+1. **`SvoSetupPass`** (pre-G-buffer, compute domain, no dispatch). Drains the tree's
+   pending jobs and node snapshot, packs the SDF scene (`prims`, `bvh`), and uploads all
+   of them to the active ring slot via `map_buffer`. First frame: clears the atlas.
+   It **declares the CpuToGpu buffers it map-writes as `SHADER_WRITE`** — even though the
+   write is a host map — so the frame graph sees a real write→read dependency and
+   **serialises** setup → bake → render. Without it the graph (which records passes in
+   parallel on rayon threads) would run setup and bake concurrently and race the
+   `job_count` side-channel atomic → truncated dispatch → corruption.
 
-| Mesure | Cible |
-|--------|-------|
-| Latence visuelle creuser r=2m | < 5 frames |
-| Creuser r=10m | < 15 frames |
-| Trou net, pas de gradient corrompu | ✓ |
-| Frontière brickmap/analytique cohérente | ✓ |
-| Déformation persistante après déplacement caméra | ✓ |
+2. **`SvoBakePass`** (pre-G-buffer, compute). Dispatches `job_count` workgroups of
+   `[9,9,9] = 729` threads (`svo_bake.slang`). Each workgroup bakes one brick: every
+   thread evaluates the CSG SDF + nearest material at its voxel, writes to LDS; then 183
+   threads pack 4 voxels/DWORD into `sdf_atlas` / `mat_atlas`.
 
----
+3. **`SvoRenderPass`** (G-buffer, fullscreen fragment, `svo_render.slang`). Sphere-traces
+   the octree per pixel and writes the deferred G-buffer (albedo, octahedral normal,
+   rough/metal, emissive, HiZ, depth). Reads `node_pool`, `sdf_atlas`, `mat_atlas`, and
+   `prims` (the last only for the analytic debug modes).
 
-## Ordre d'implémentation
+The factory `create_svo_passes()` returns `(compute_passes, render_pass)` so the demo
+pushes the compute passes into `extra_pre_gbuffer_passes` and the render pass into
+`extra_gbuffer_passes`.
 
-1. `doc/sdf.md` — ce document ✓
-2. **Étape 1** : BVH dans `crates/i3_voxel/src/sdf.rs`
-3. **Étape 2** : Crate `crates/i3_brickmap/`, baker CPU, dump PNG
-4. **Étape Debug** : overlays + stats GUI (en parallèle des étapes suivantes)
-5. **Étape 3** : `brickmap_pass.rs` + `brickmap_gbuffer.slang`, 1 niveau
-6. **Étape 4** : Clipmap 8 niveaux + mise à jour incrémentale
-7. **Étape 5** : Dynamisme + hybride analytique/brickmap
+## 5. The ray-marcher — `svo_render.slang`
 
-## Critères de validation globaux
+`sampleSvo(p)` descends from the root, choosing the octant by `p > mid` per axis, until
+it reaches a leaf. It returns one of:
+- **surface leaf** (has a brick): trilinear SDF from the 8 corners + the analytic
+  trilinear **gradient** (used as the smooth normal — no finite differences, no
+  quantisation noise, no cross-brick sampling), plus `voxel_size` and material;
+- **empty leaf** (no brick) or **outside the tree**: the cell bounds, so the tracer can
+  skip exactly to the cell exit.
 
-- Visuellement identique au ray marcher analytique pour la scène de référence
-- FPS ×2 minimum sur terrain fBm dense
-- Caméra à 200 m/s sur 20 km², transitions de niveau invisibles
-- Creuser r=2m → visible en < 5 frames
-- Debug GUI : stats live + canaux `BrickmapLevel`, `BrickmapAllocated`, `BrickmapFreshness`
+The trace loop (start `t = near plane = 0.1`, ≤ 512 steps):
+- not inside the tree → stop (ray left the scene);
+- empty cell → `t += boxExit(p, rd, cell)` (skip the whole cell, no crawl);
+- surface, `sdf < voxel_size·0.08` → hit (refined to the zero-crossing along the
+  gradient to remove the threshold bulge);
+- else sphere-march `t += sdf·0.8`, **clamped to the leaf exit** so it never steps past a
+  surface that begins in a neighbouring finer leaf.
+
+> **Hard constraint:** the shader's `MAX_SVO_DEPTH` (currently **18**) bounds the descent
+> loop and **must be ≥ the tree's `max_depth`** (16). If it is smaller, nodes deeper than
+> the cap are unreachable and the finest-LOD cubes stop rendering (holes that appear as
+> you approach). This bit us hard — see `doc` memory.
+
+## 6. Constants
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `BRICK_SIZE` | 8 | voxels per brick axis (9³ with overlap) |
+| `BRICK_DWORDS` | 183 | u8 DWORDs per brick |
+| `BAND_VOXELS` | 3.0 | SDF quantisation half-range, in voxels (bake/render must match) |
+| `EMPTY_CAP` | 0.5 m | below this, only surface-crossing nodes keep refining |
+| `MAX_SVO_DEPTH` | 16 (CPU) / 18 (shader) | shader ≥ CPU, always |
+| `MAX_SVO_NODES` | 262 144 | node pool cap |
+| `MAX_SVO_BRICKS` | 49 152 | atlas cap (≈ 36 MB ×2 atlases) |
+| `RING` | 3 | CpuToGpu ring depth = frames in flight |
+| `BASE_SIZE` | 4.0 m | *(currently unused — reserved)* |
+
+## 7. Debug tooling (`debug_ui.rs`, shader `debug_flags`)
+
+Kept in tree (low-overhead): the assertion and slot tracking are `#[cfg(debug_assertions)]`
+only; the shader debug paths run only when their flag bit is set.
+
+- **CPU stats** (per-frame): node/brick occupancy %, splits/merges/bakes/culls,
+  `split wanted vs budget`, and ⚠ flags for node/brick cap exhaustion; per-depth histogram.
+- **Render modes** (mutually-exclusive triangulation tools):
+  - bit 0 SVO depth colours · bit 1 node AABBs · bit 2 error heat · bit 3 step-count heat
+  - **bit 4 — ground truth**: sphere-trace the analytic CSG, ignoring tree *and* atlas.
+  - **bit 5 — traversal + analytic**: use the octree traversal but sample analytic SDF at
+    the leaf (isolates traversal from brick content).
+  - **bit 6 — brick error**: at the brick hit, `|analytic SDF|` as heat (red = wrong brick).
+- **Freeze** toggles (tree / gem) to separate static vs dynamic issues.
+- **Invariant assertion** (`debug_check_invariants`): slot aliasing, tree-structure
+  consistency, and stale-slot detection (a leaf whose slot was last baked for a different
+  position) — panics with exact indices at the moment of corruption.
+
+These three render modes were what turned "it's broken" into a binary search across the
+data path (scene → traversal → brick content → tracer) and found every bug.
+
+## 8. Known limitations / next steps
+
+- **LOD seams (T-junctions)** between neighbour nodes of different depth are not blended;
+  acceptable for the flat floor (linear SDF is trilinear-exact) but visible on curved
+  surfaces at transitions. A blend (à la the old clipmap) is the quality lever.
+- **Error-driven refinement** (curvature/distance) is wired in spirit (`_sdf_weight`
+  reserved) but disabled — it was unbounded on sharp edges; needs a depth cap.
+- **Empty-shell cost**: the conservative bake spends bricks on a thin shell around
+  surfaces; a per-brick "empty" flag baked on the GPU could let the tracer skip baked
+  empties without holes.
+- **Perf**: per-pixel traversal dominates; the SVO only beats analytic brute force on
+  complex scenes. `near_surface`/`crosses_surface` (BVH + samples per candidate) could be
+  cached in the node if the CPU update becomes a bottleneck on large scenes.

@@ -1,6 +1,0 @@
-PipelineConfig(
-    name: "brickmap_cull",
-    shader: Path("../shaders/brickmap_cull.slang"),
-    search_paths: [],
-    graphics: None,
-)

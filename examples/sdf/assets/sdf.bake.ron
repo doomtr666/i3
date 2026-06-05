@@ -2,5 +2,6 @@ BakeManifest(
     bundle_name: "sdf",
     pipelines_dirs: [
         "pipelines",
+        "../../../crates/i3_sdf/assets/pipelines",
     ],
 )

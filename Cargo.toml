@@ -18,7 +18,7 @@ members = [
     "examples/voxel",
     "examples/deferred_stress",
     "examples/sdf",
-    "crates/i3_brickmap", "crates/i3_noise",
+    "crates/i3_brickmap", "crates/i3_noise", "crates/i3_sdf",
 ]
 resolver = "2"
 

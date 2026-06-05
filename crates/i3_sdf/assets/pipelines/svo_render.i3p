@@ -1,8 +1,8 @@
 PipelineConfig(
-    name: "brickmap_clipmap",
-    shader: Path("../shaders/brickmap_clipmap.slang"),
+    name: "svo_render",
+    shader: Path("../shaders/svo_render.slang"),
     search_paths: [
-        "../../../../crates/i3_renderer/assets/shaders",
+        "../../../i3_renderer/assets/shaders",
     ],
     graphics: Some(GraphicsConfig(
         rasterization: (
@@ -16,11 +16,11 @@ PipelineConfig(
         depth_stencil_format: Some(D32_FLOAT),
         topology: TriangleList,
         targets: [
-            (format: R8G8B8A8_SRGB),       // Albedo
-            (format: R16G16_SFLOAT),         // Normal octahedral
-            (format: R8G8_UNORM),            // RoughMetal
-            (format: R11G11B10_UFLOAT),      // Emissive
-            (format: R32_SFLOAT),            // HiZ mip 0
+            (format: R8G8B8A8_SRGB),
+            (format: R16G16_SFLOAT),
+            (format: R8G8_UNORM),
+            (format: R11G11B10_UFLOAT),
+            (format: R32_SFLOAT),
         ],
         vertex_layout: None,
     ))

@@ -71,7 +71,7 @@ impl BrickmapBaker {
 
         // Cull bricks whose centre is far from any surface
         let center = brick_aabb.center();
-        let center_sdf = SdfScene::value(&nodes, &center);
+        let center_sdf = SdfScene::sample(&nodes, &center).value;
         if center_sdf.abs() > half_diag * 2.0 {
             return None;
         }
@@ -93,7 +93,7 @@ impl BrickmapBaker {
                         brick_aabb.min.y + (sy as f32 + 0.5) * self.voxel_size,
                         brick_aabb.min.z + (sz as f32 + 0.5) * self.voxel_size,
                     );
-                    let d = SdfScene::value(&nodes, &p);
+                    let d = SdfScene::sample(&nodes, &p).value;
                     let norm = (d / half_diag).clamp(-1.0, 1.0);
                     sdf_samples.push(f16::from_f32(norm).to_bits());
                 }

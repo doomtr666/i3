@@ -1,0 +1,22 @@
+[package]
+name = "i3_sdf"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+i3_math  = { path = "../i3_math" }
+i3_voxel = { path = "../i3_voxel" }
+i3_gfx   = { path = "../i3_gfx" }
+i3_io    = { path = "../i3_io" }
+rayon    = { workspace = true }
+nalgebra = { workspace = true }
+tracing  = { workspace = true }
+
+[features]
+default = []
+debug-ui = ["egui"]
+
+[dependencies.egui]
+workspace = true
+optional = true

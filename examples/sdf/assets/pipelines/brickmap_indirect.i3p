@@ -1,6 +1,0 @@
-PipelineConfig(
-    name: "brickmap_indirect",
-    shader: Path("../shaders/brickmap_indirect.slang"),
-    search_paths: [],
-    graphics: None,
-)
