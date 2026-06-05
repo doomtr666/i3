@@ -2,7 +2,7 @@ use i3_math::{nalgebra::Point3, AABB};
 use i3_voxel::SdfScene;
 
 use crate::{
-    BAND_VOXELS, BRICK_DWORDS, BRICK_SIZE, EMPTY_CAP, MAX_SVO_BRICKS, MAX_SVO_DEPTH, MAX_SVO_NODES,
+    BRICK_BYTES, BRICK_SIZE, EMPTY_CAP, MAX_SVO_BRICKS, MAX_SVO_DEPTH, MAX_SVO_NODES,
     gpu_scene::{GpuBrickJob, GpuSvoNode},
 };
 
@@ -97,7 +97,7 @@ impl Default for SvoNode {
 impl SvoNode {
     pub fn to_gpu(&self) -> GpuSvoNode {
         let brick_offset = if self.brick_slot != u32::MAX {
-            self.brick_slot * BRICK_DWORDS as u32 * 4
+            self.brick_slot * BRICK_BYTES as u32
         } else {
             u32::MAX
         };
@@ -272,7 +272,7 @@ impl SvoTree {
             // ("clean block, wrong place"). Skip leaves with a pending job this
             // frame (they'll be baked before the GPU reads them).
             if n.state == SvoState::Leaf && n.brick_slot != u32::MAX {
-                let off = n.brick_slot * BRICK_DWORDS as u32 * 4;
+                let off = n.brick_slot * BRICK_BYTES as u32;
                 let pending = self.pending_jobs.iter().any(|j| j.atlas_offset == off);
                 if !pending {
                     let baked = self.slot_baked_min[n.brick_slot as usize];
@@ -423,10 +423,8 @@ impl SvoTree {
         self.frame.bakes += 1;
         let node = &self.nodes[node_idx as usize];
         let vs          = (node.aabb.max.x - node.aabb.min.x) / BRICK_SIZE as f32;
-        // Quantisation half-range = BAND_VOXELS voxels (not the brick half-diagonal)
-        // → finer u8 precision near the surface. Must match `BAND` in svo_render.slang.
-        let hd          = BAND_VOXELS * vs;
-        let atlas_offset = slot * BRICK_DWORDS as u32 * 4;
+        // Byte offset of this brick in the geometry atlas (8 bytes/voxel).
+        let atlas_offset = slot * BRICK_BYTES as u32;
 
         // A slot may get a stale job (from invalidate) and then be freed + reused
         // in the same frame.  Keep only the latest job per slot so the GPU never
@@ -441,8 +439,7 @@ impl SvoTree {
             brick_world_min: world_min,
             voxel_size:      vs,
             atlas_offset,
-            half_diag:       hd,
-            _pad:            [0; 2],
+            _pad:            [0; 3],
         });
     }
 
@@ -461,7 +458,7 @@ impl SvoTree {
             self.frame.culls += 1;
             let slot = self.nodes[node_idx as usize].brick_slot;
             if slot != u32::MAX {
-                let off = slot * BRICK_DWORDS as u32 * 4;
+                let off = slot * BRICK_BYTES as u32;
                 self.pending_jobs.retain(|j| j.atlas_offset != off);
                 self.brick_free.push(slot);
                 self.nodes[node_idx as usize].brick_slot = u32::MAX;
@@ -541,7 +538,7 @@ impl SvoTree {
                         // Without this, a stale invalidate job emitted before
                         // update() would survive the frame and bake ghost data
                         // into a slot that might later be reused by a different node.
-                        let off = slot * BRICK_DWORDS as u32 * 4;
+                        let off = slot * BRICK_BYTES as u32;
                         self.pending_jobs.retain(|j| j.atlas_offset != off);
                         self.brick_free.push(slot);
                     }
@@ -549,7 +546,7 @@ impl SvoTree {
                 }
                 SvoState::Split => {
                     if slot != u32::MAX {
-                        let off = slot * BRICK_DWORDS as u32 * 4;
+                        let off = slot * BRICK_BYTES as u32;
                         self.pending_jobs.retain(|j| j.atlas_offset != off);
                         self.brick_free.push(slot);
                     }

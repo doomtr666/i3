@@ -12,23 +12,21 @@ use super::SvoShared;
 // Same atlas format as brickmap: u8-packed, BRICK_DWORDS per brick.
 
 pub struct SvoBakePass {
-    shared:         Arc<SvoShared>,
-    pipeline:       Option<BackendPipeline>,
-    jobs_virt:      BufferHandle,
-    prims_virt:     BufferHandle,
-    sdf_atlas_virt: BufferHandle,
-    mat_atlas_virt: BufferHandle,
+    shared:          Arc<SvoShared>,
+    pipeline:        Option<BackendPipeline>,
+    jobs_virt:       BufferHandle,
+    prims_virt:      BufferHandle,
+    geom_atlas_virt: BufferHandle,
 }
 
 impl SvoBakePass {
     pub(crate) fn new(shared: Arc<SvoShared>, _inv: BufferHandle) -> Self {
         Self {
             shared,
-            pipeline:       None,
-            jobs_virt:      BufferHandle::INVALID,
-            sdf_atlas_virt: BufferHandle::INVALID,
-            mat_atlas_virt: BufferHandle::INVALID,
-            prims_virt:     BufferHandle::INVALID,
+            pipeline:        None,
+            jobs_virt:       BufferHandle::INVALID,
+            geom_atlas_virt: BufferHandle::INVALID,
+            prims_virt:      BufferHandle::INVALID,
         }
     }
 }
@@ -51,15 +49,13 @@ impl RenderPass for SvoBakePass {
     }
 
     fn declare(&mut self, builder: &mut PassBuilder) {
-        self.jobs_virt      = builder.resolve_buffer("SvoBakeJobs");
-        self.prims_virt     = builder.resolve_buffer("SvoPrims");
-        self.sdf_atlas_virt = builder.resolve_buffer("SvoSdfAtlas");
-        self.mat_atlas_virt = builder.resolve_buffer("SvoMatAtlas");
+        self.jobs_virt       = builder.resolve_buffer("SvoBakeJobs");
+        self.prims_virt      = builder.resolve_buffer("SvoPrims");
+        self.geom_atlas_virt = builder.resolve_buffer("SvoGeomAtlas");
 
-        builder.read_buffer(self.jobs_virt,       ResourceUsage::SHADER_READ);
-        builder.read_buffer(self.prims_virt,      ResourceUsage::SHADER_READ);
-        builder.write_buffer(self.sdf_atlas_virt, ResourceUsage::SHADER_WRITE);
-        builder.write_buffer(self.mat_atlas_virt, ResourceUsage::SHADER_WRITE);
+        builder.read_buffer(self.jobs_virt,        ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.prims_virt,       ResourceUsage::SHADER_READ);
+        builder.write_buffer(self.geom_atlas_virt, ResourceUsage::SHADER_WRITE);
     }
 
     fn execute(&self, ctx: &mut dyn PassContext, _frame: &FrameBlackboard) {
@@ -72,8 +68,7 @@ impl RenderPass for SvoBakePass {
         let set = ctx.create_descriptor_set(pl, 0, &[
             DescriptorWrite::storage_buffer(0, 0, self.jobs_virt),
             DescriptorWrite::storage_buffer(0, 1, self.prims_virt),
-            DescriptorWrite::storage_buffer(0, 2, self.sdf_atlas_virt),
-            DescriptorWrite::storage_buffer(0, 3, self.mat_atlas_virt),
+            DescriptorWrite::storage_buffer(0, 2, self.geom_atlas_virt),
         ]);
         ctx.bind_descriptor_set(0, set);
 

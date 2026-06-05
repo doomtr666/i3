@@ -26,10 +26,10 @@ GPU  prims[]  bvh[]   node_pool[]   jobs[]   (CpuToGpu, ring-buffered ×3)
         │                                     │
         │  SvoBakePass (compute, 9³/brick)    │
         ▼                                     ▼
-     sdf_atlas[]  mat_atlas[]  (GpuOnly, u8-packed bricks)
+     geom_atlas[]  (GpuOnly, 8 bytes/voxel: dist + normal + material)
         │
         ▼  SvoRenderPass (fullscreen fragment)
-     sphere-trace octree → trilinear SDF → G-buffer (albedo / normal / depth / …)
+     sphere-trace octree → tangent-plane SDF → G-buffer (albedo / normal / depth / …)
 ```
 
 ## 2. The CPU octree — `svo.rs`
@@ -120,11 +120,10 @@ that are genuinely far from any surface get **no brick** and are skipped by the 
 ### 2.6 Brick jobs — `emit_bake_job(node)`
 
 Allocates a brick slot (reusing `brick_free`, else `next_brick`) and pushes a
-`GpuBrickJob` describing where to bake. `voxel_size = side / 8`. The SDF quantisation
-half-range is `half_diag = BAND_VOXELS * voxel_size` (**not** the geometric
-half-diagonal): normalising by ~3 voxels instead of ~7 gives finer u8 precision near
-the surface → smoother gradients/normals. A `retain` removes any stale job for the same
-slot (a slot can be freed and reused in one frame) so the GPU never double-writes a slot.
+`GpuBrickJob` describing where to bake. `voxel_size = side / 8`; the brick's byte offset
+in the atlas is `slot * BRICK_BYTES` (`BRICK_BYTES = 729 * 8 = 5832`). A `retain` removes
+any stale job for the same slot (a slot can be freed and reused in one frame) so the GPU
+never double-writes a slot.
 
 ### 2.7 Edits & animation — `invalidate(region, scene)`
 
@@ -138,21 +137,47 @@ empty.
 
 ```
 GpuSvoNode (32 B)   aabb_min, first_child(u32::MAX=leaf), aabb_max, brick_offset(u32::MAX=none)
-GpuBrickJob (32 B)  brick_world_min, voxel_size, atlas_offset, half_diag, _pad
+GpuBrickJob (32 B)  brick_world_min, voxel_size, atlas_offset, _pad0, _pad1, _pad2
 GpuPrimitive(80 B)  inv-rotation rows + translation, inv_scale, data0..2, type, subtract, material
 GpuBvhNode (32 B)   aabb_min, left(u32::MAX=leaf), aabb_max, right_or_prim
 ```
 
-### 3.2 Brick & atlas layout
+> **Layout gotcha.** Mirror Slang structs with **scalar** trailing pads, never a
+> `uint3`/`float3`: a vec3 has 16-byte base alignment in std430, so a trailing `uint3`
+> pad would inflate `GpuBrickJob` to **48 B** on the GPU while the `#[repr(C)]` CPU struct
+> stays **32 B** → every `jobs[i>0]` reads shifted fields → uniform corruption.
+
+### 3.2 Brick & atlas layout — 8 bytes/voxel, gradient-augmented
 
 A brick is `(BRICK_SIZE+1)³ = 9³ = 729` voxels — the `+1` is a **one-voxel positive
-overlap** per axis so the trilinear sampler reads a same-LOD neighbour's first voxel
-without clamping (seamless same-LOD bricks). Voxels are **u8** (SDF and material),
-packed **4 per DWORD** → `BRICK_DWORDS = ceil(729/4) = 183` DWORDs/brick. A brick's byte
-offset in the atlas is `slot * BRICK_DWORDS * 4`.
+overlap** per axis so the sampler reads a same-LOD neighbour's first voxel without
+clamping (seamless same-LOD bricks). Each voxel is **8 bytes** (`BRICK_BYTES = 729*8 =
+5832`), byte offset `slot * BRICK_BYTES + vox*8`, little-endian:
 
-SDF decode: `sdf = (byte / 127.5 - 1) * half_diag`, with `half_diag = BAND_VOXELS *
-voxel_size` — **the bake and the render must use the same `half_diag`**.
+| bytes | field | encoding |
+|---|---|---|
+| 0–1 | signed distance | **snorm16** over `±BAND·voxel_size` (`BAND = 4`) |
+| 2–3 | octahedral normal X | snorm16 |
+| 4–5 | octahedral normal Y | snorm16 |
+| 6   | material id | u8 |
+| 7   | flags | u8 (edited / veg-hint / reserved) |
+
+Distance decode: `dist = snorm16 * BAND * voxel_size`. The bake and render share `BAND`.
+We deliberately **avoid `f16`** for distance — `f32tof16`/`f16tof32` on the Slang→SPIRV
+path produced garbage; snorm16-over-a-band is a reliable integer round-trip and gives
+~`voxel_size/8192` precision near the surface (finer than f16 there). Cells straddling
+the surface are within `±√3·voxel_size ≪ band`, so the reconstruction below is exact for
+them; far cells clamp to `±band` (a valid "far" value for sphere-marching).
+
+**Why store a normal per voxel (gradient-augmented bricks).** Plain trilinear blending of
+distance *values* is only C⁰ and O(h²). Instead each voxel stores its analytic normal
+`n_i = ∇d` (free at bake time, via central differences on the CSG field), defining a
+**tangent plane** `d_i(p) = d_i + n_i·(p − corner_i)`. Trilinearly blending the eight
+corner planes is exact for planar surfaces, Hermite-smooth (O(h³)) for curved ones, and
+the blended field stays 1-Lipschitz (`|Σ wᵢ nᵢ| ≤ 1`) so it is safe to sphere-trace. The
+blended normal `Σ wᵢ nᵢ` is reused directly as the shading normal — no finite differences
+on the quantised field. Net effect: far smoother surfaces/normals at a given brick
+density (or fewer bricks at a given error).
 
 ### 3.3 Ring-buffered CPU→GPU buffers (`RING = 3`)
 
@@ -163,9 +188,9 @@ guarantees frame N-3 is done, so `buf[frame % 3]` is always free. The setup pass
 the ring slot once per frame and imports that slot under a stable name; the bake/render
 passes resolve by name and get the same slot.
 
-The **atlas** (`sdf_atlas`, `mat_atlas`) is a single `GpuOnly` buffer — it is persistent
-(bricks accumulate across frames) and made consistent by single-queue ordering, so it
-must **not** be ring-buffered.
+The **atlas** (`geom_atlas`) is a single `GpuOnly` buffer — it is persistent (bricks
+accumulate across frames) and made consistent by single-queue ordering, so it must
+**not** be ring-buffered.
 
 ## 4. The three GPU passes — `passes/`
 
@@ -179,14 +204,14 @@ must **not** be ring-buffered.
    `job_count` side-channel atomic → truncated dispatch → corruption.
 
 2. **`SvoBakePass`** (pre-G-buffer, compute). Dispatches `job_count` workgroups of
-   `[9,9,9] = 729` threads (`svo_bake.slang`). Each workgroup bakes one brick: every
-   thread evaluates the CSG SDF + nearest material at its voxel, writes to LDS; then 183
-   threads pack 4 voxels/DWORD into `sdf_atlas` / `mat_atlas`.
+   `[9,9,9] = 729` threads (`svo_bake.slang`). Each **thread bakes one voxel directly** (no
+   LDS): it evaluates the CSG distance + nearest material, the analytic normal via central
+   differences, and `Store2`s the 8-byte voxel into `geom_atlas` at its byte offset.
 
 3. **`SvoRenderPass`** (G-buffer, fullscreen fragment, `svo_render.slang`). Sphere-traces
    the octree per pixel and writes the deferred G-buffer (albedo, octahedral normal,
-   rough/metal, emissive, HiZ, depth). Reads `node_pool`, `sdf_atlas`, `mat_atlas`, and
-   `prims` (the last only for the analytic debug modes).
+   rough/metal, emissive, HiZ, depth). Reads `node_pool`, `geom_atlas`, and `prims` (the
+   last only for the analytic debug modes).
 
 The factory `create_svo_passes()` returns `(compute_passes, render_pass)` so the demo
 pushes the compute passes into `extra_pre_gbuffer_passes` and the render pass into
@@ -196,9 +221,11 @@ pushes the compute passes into `extra_pre_gbuffer_passes` and the render pass in
 
 `sampleSvo(p)` descends from the root, choosing the octant by `p > mid` per axis, until
 it reaches a leaf. It returns one of:
-- **surface leaf** (has a brick): trilinear SDF from the 8 corners + the analytic
-  trilinear **gradient** (used as the smooth normal — no finite differences, no
-  quantisation noise, no cross-brick sampling), plus `voxel_size` and material;
+- **surface leaf** (has a brick): the **tangent-plane reconstruction** — load the 8 corner
+  voxels (distance + stored normal), form each corner's plane `d_i + n_i·(p − corner_i)`,
+  blend with trilinear weights for the distance, and blend the corner normals `Σ wᵢ nᵢ`
+  for the shading normal (returned directly, no finite differences). Plus `voxel_size` and
+  the dominant-corner material;
 - **empty leaf** (no brick) or **outside the tree**: the cell bounds, so the tracer can
   skip exactly to the cell exit.
 
@@ -220,12 +247,12 @@ The trace loop (start `t = near plane = 0.1`, ≤ 512 steps):
 | Constant | Value | Meaning |
 |---|---|---|
 | `BRICK_SIZE` | 8 | voxels per brick axis (9³ with overlap) |
-| `BRICK_DWORDS` | 183 | u8 DWORDs per brick |
-| `BAND_VOXELS` | 3.0 | SDF quantisation half-range, in voxels (bake/render must match) |
+| `VOXEL_BYTES` / `BRICK_BYTES` | 8 / 5832 | bytes per voxel / per brick |
+| `BAND` | 4.0 | distance snorm16 half-range, in voxels (bake/render must match) |
 | `EMPTY_CAP` | 0.5 m | below this, only surface-crossing nodes keep refining |
 | `MAX_SVO_DEPTH` | 16 (CPU) / 18 (shader) | shader ≥ CPU, always |
 | `MAX_SVO_NODES` | 262 144 | node pool cap |
-| `MAX_SVO_BRICKS` | 49 152 | atlas cap (≈ 36 MB ×2 atlases) |
+| `MAX_SVO_BRICKS` | 49 152 | atlas cap (≈ 286 MB, single atlas) |
 | `RING` | 3 | CpuToGpu ring depth = frames in flight |
 | `BASE_SIZE` | 4.0 m | *(currently unused — reserved)* |
 
@@ -252,29 +279,26 @@ data path (scene → traversal → brick content → tracer) and found every bug
 
 ## 8. Known limitations / next steps
 
-- **Gradient-augmented bricks (chosen quality direction).** Today a brick stores only
-  u8 SDF per voxel and the surface is reconstructed by *trilinear interpolation of values*
-  (C0, gradient magnitude drifts from 1). The plan is to **also store the analytic normal**
-  `n_i = ∇d` per voxel (we have it at bake time) and reconstruct per-corner tangent planes
-  `d_i(p) = d_i + n_i·(p − corner_i)`, then blend with the trilinear weights. Each `d_i`
-  has `|∇| = 1`, the convex blend keeps `|∇| ≤ 1` (1-Lipschitz → safe sphere-tracing), the
-  result is **exact for planes** (the floor needs no refinement) and Hermite-smooth for
-  curves, and the normal is read directly (true analytic normal, no finite differences,
-  no quantisation noise). This is the SVO-native answer to the old clipmap's level
-  blending — better quality per brick rather than blending across the partition. Cost:
-  +2–3 B/voxel (oct-encoded normal); likely a *net* brick reduction (smooth/flat surfaces
-  reconstruct well coarsely).
-- **Material**: now a proximity-weighted trilinear blend of the 8 corner materials
-  (`exp(-max(sd,0)/vs)`), ported from the clipmap — done (`sampleMaterial` in
-  `svo_render.slang`).
+- **Gradient-augmented bricks — done.** Each voxel now stores its analytic normal
+  alongside the distance (§3.2); the leaf reconstruction is the tangent-plane blend (§5).
+  Two non-obvious bugs were paid for on the way (both worth remembering): `f16` distance
+  intrinsics produced garbage on this Slang→SPIRV path (→ snorm16-over-a-band), and a
+  trailing `uint3` pad in `GpuBrickJob` inflated its std430 stride to 48 B vs the 32 B CPU
+  struct (→ scalar pads).
+- **Material**: proximity-weighted trilinear blend of the 8 corner materials
+  (`exp(-max(sd,0)/vs)`), ported from the clipmap — done (`sampleMaterial`).
+- **Error-driven refinement** (curvature/distance) is the next real feature: with the
+  tangent-plane reconstruction in place, the residual `|reconstructed − true|` (sampled at
+  cell midpoints, projected to pixels) gives a principled "refine until < 1 px" metric →
+  no LOD transitions by construction. Wired in spirit (`_sdf_weight` reserved) but disabled
+  — the earlier curvature term was unbounded on sharp edges; needs a depth cap.
 - **LOD seams (T-junctions)** between neighbour nodes of different depth are not blended;
-  acceptable for the flat floor (linear SDF is trilinear-exact) but visible on curved
-  surfaces. The gradient-augmented bricks above reduce this (better per-brick fit).
-- **Error-driven refinement** (curvature/distance) is wired in spirit (`_sdf_weight`
-  reserved) but disabled — it was unbounded on sharp edges; needs a depth cap.
-- **Empty-shell cost**: the conservative bake spends bricks on a thin shell around
-  surfaces; a per-brick "empty" flag baked on the GPU could let the tracer skip baked
-  empties without holes.
+  exact for the flat floor (linear ⇒ tangent-exact), mild on curves now that each brick
+  fits better. The error metric above is the proper fix.
+- **Empty-shell cost / grazing crawl**: the conservative bake spends bricks on a thin
+  shell around surfaces, and the tracer sphere-marches baked cells clamped to the leaf exit
+  → at grazing angles it can crawl and exhaust its 512-step budget. A per-brick "empty"
+  flag (skip via `boxExit` without holes) or a coarser empty cap would help.
 - **Perf**: per-pixel traversal dominates; the SVO only beats analytic brute force on
   complex scenes. `near_surface`/`crosses_surface` (BVH + samples per candidate) could be
   cached in the node if the CPU update becomes a bottleneck on large scenes.

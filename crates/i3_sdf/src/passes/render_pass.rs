@@ -15,8 +15,7 @@ pub struct SvoRenderPass {
     pipeline:       Option<BackendPipeline>,
 
     node_pool_virt:      BufferHandle,
-    sdf_atlas_virt:      BufferHandle,
-    mat_atlas_virt:      BufferHandle,
+    geom_atlas_virt:     BufferHandle,
     prims_virt:          BufferHandle,
     common_buffer:       BufferHandle,
     bindless_set:        DescriptorSetHandle,
@@ -35,8 +34,7 @@ impl SvoRenderPass {
             shared,
             pipeline:            None,
             node_pool_virt:      BufferHandle::INVALID,
-            sdf_atlas_virt:      BufferHandle::INVALID,
-            mat_atlas_virt:      BufferHandle::INVALID,
+            geom_atlas_virt:     BufferHandle::INVALID,
             prims_virt:          BufferHandle::INVALID,
             common_buffer:       BufferHandle::INVALID,
             bindless_set:        DescriptorSetHandle(0),
@@ -77,8 +75,7 @@ impl RenderPass for SvoRenderPass {
 
     fn declare(&mut self, builder: &mut PassBuilder) {
         self.node_pool_virt     = builder.resolve_buffer("SvoNodePool");
-        self.sdf_atlas_virt     = builder.resolve_buffer("SvoSdfAtlas");
-        self.mat_atlas_virt     = builder.resolve_buffer("SvoMatAtlas");
+        self.geom_atlas_virt    = builder.resolve_buffer("SvoGeomAtlas");
         self.prims_virt         = builder.resolve_buffer("SvoPrims");
         self.common_buffer      = builder.resolve_buffer("CommonBuffer");
         self.bindless_set       = *builder.consume::<DescriptorSetHandle>("BindlessSet");
@@ -91,8 +88,7 @@ impl RenderPass for SvoRenderPass {
         self.depth_buffer       = builder.resolve_image("DepthBuffer");
 
         builder.read_buffer(self.node_pool_virt, ResourceUsage::SHADER_READ);
-        builder.read_buffer(self.sdf_atlas_virt, ResourceUsage::SHADER_READ);
-        builder.read_buffer(self.mat_atlas_virt, ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.geom_atlas_virt, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.prims_virt,     ResourceUsage::SHADER_READ);
         builder.read_buffer(self.common_buffer,  ResourceUsage::SHADER_READ);
 
@@ -118,9 +114,8 @@ impl RenderPass for SvoRenderPass {
 
         let svo_set = ctx.create_descriptor_set(pl, 0, &[
             DescriptorWrite::storage_buffer(0, 0, self.node_pool_virt),
-            DescriptorWrite::storage_buffer(0, 1, self.sdf_atlas_virt),
-            DescriptorWrite::storage_buffer(0, 2, self.mat_atlas_virt),
-            DescriptorWrite::storage_buffer(0, 3, self.prims_virt),
+            DescriptorWrite::storage_buffer(0, 1, self.geom_atlas_virt),
+            DescriptorWrite::storage_buffer(0, 2, self.prims_virt),
         ]);
         ctx.bind_descriptor_set(0, svo_set);
 

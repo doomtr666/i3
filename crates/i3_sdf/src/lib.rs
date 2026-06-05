@@ -16,8 +16,17 @@ pub use debug_ui::{SvoParams, SvoDebugUi};
 
 // ─── Brick layout constants ───────────────────────────────────────────────────
 pub const BRICK_SIZE:   u32   = 8;
-pub const BRICK_VOXELS: usize = 729;  // (BRICK_SIZE+1)³ = 9³
-pub const BRICK_DWORDS: usize = 183;  // ceil(729/4)
+pub const BRICK_VOXELS: usize = 729;  // (BRICK_SIZE+1)³ = 9³, with +1 overlap
+
+/// Bytes per voxel in the geometry atlas. Layout (little-endian, 8-byte aligned):
+///   bytes 0-1  : signed distance      f16 (raw world units — no normalisation)
+///   bytes 2-3  : octahedral normal X  snorm16
+///   bytes 4-5  : octahedral normal Y  snorm16
+///   byte  6    : material id          u8
+///   byte  7    : flags                u8  (edited / veg-hint / reserved)
+/// Must match the (un)packing in svo_bake.slang / svo_render.slang.
+pub const VOXEL_BYTES: usize = 8;
+pub const BRICK_BYTES: usize = BRICK_VOXELS * VOXEL_BYTES;  // 729 * 8 = 5832
 
 // ─── SVO capacity constants ───────────────────────────────────────────────────
 pub const MAX_SVO_NODES:  u32 = 262144;
@@ -36,8 +45,3 @@ pub const BASE_SIZE: f32 = 4.0;
 /// (avoids step-budget exhaustion when close). Should be ≲ the smallest feature so
 /// `crosses_surface` still catches thin geometry (e.g. the torus tube) by this size.
 pub const EMPTY_CAP: f32 = 0.5;
-
-/// SDF quantisation half-range, in voxels. The brick stores sdf/(BAND·voxel_size)
-/// as u8. Tighter than the brick half-diagonal (~7 voxels) → finer precision near
-/// the surface → smoother gradients/normals. Must match `BAND` in svo_render.slang.
-pub const BAND_VOXELS: f32 = 3.0;

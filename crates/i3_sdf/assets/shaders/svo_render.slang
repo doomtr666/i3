@@ -18,9 +18,8 @@ struct GpuPrimitive
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<GpuSvoNode>   node_pool;
-[[vk::binding(1, 0)]] ByteAddressBuffer              sdf_atlas;
-[[vk::binding(2, 0)]] ByteAddressBuffer              mat_atlas;
-[[vk::binding(3, 0)]] StructuredBuffer<GpuPrimitive> prims;
+[[vk::binding(1, 0)]] ByteAddressBuffer              geom_atlas;   // 8 bytes/voxel
+[[vk::binding(2, 0)]] StructuredBuffer<GpuPrimitive> prims;
 
 // ─── Push constants ───────────────────────────────────────────────────────────
 struct SvoPC { uint node_count; uint debug_flags; uint prim_count; uint _pad; };
@@ -81,22 +80,30 @@ static const Material kMaterials[8] = {
     { float3(0.05, 0.05, 0.05), 0.80, 1.00 },
 };
 
-// ─── Atlas helpers (shared with bake shader) ──────────────────────────────────
-float loadSdfVoxel(uint base_bytes, uint vox, float half_diag)
+// ─── Voxel decode (8 bytes: snorm16 dist over ±BAND·vs + oct snorm16 normal +
+//     u8 mat + u8 flags). BAND must match svo_bake. ────────────────────────────
+static const float BAND = 4.0;
+struct Voxel { float dist; float3 normal; uint mat; };
+
+float snorm16decode(uint u) { int s = (int(u) << 16) >> 16; return max(float(s) / 32767.0, -1.0); }
+
+float3 octDecode(float2 e)
 {
-    uint dw  = vox / 4u;
-    uint bp  = vox % 4u;
-    uint pk  = sdf_atlas.Load(base_bytes + dw * 4u);
-    uint bv  = (pk >> (bp * 8u)) & 0xFFu;
-    return (float(bv) / 127.5 - 1.0) * half_diag;
+    float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0)
+        n.xy = (1.0 - abs(float2(n.y, n.x))) * float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
 }
 
-uint loadMatVoxel(uint base_bytes, uint vox)
+Voxel loadVoxel(uint base_bytes, uint vox, float band)
 {
-    uint dw = vox / 4u;
-    uint bp = vox % 4u;
-    uint pk = mat_atlas.Load(base_bytes + dw * 4u);
-    return (pk >> (bp * 8u)) & 0xFFu;
+    uint2 w = geom_atlas.Load2(base_bytes + vox * 8u);
+    Voxel v;
+    v.dist   = snorm16decode(w.x & 0xFFFFu) * band;   // ±BAND·vs world units
+    v.normal = octDecode(float2(snorm16decode((w.x >> 16u) & 0xFFFFu),
+                                snorm16decode( w.y         & 0xFFFFu)));
+    v.mat    = (w.y >> 16u) & 0xFFu;
+    return v;
 }
 
 // ─── SVO tree descent ─────────────────────────────────────────────────────────
@@ -129,55 +136,55 @@ SvoSample sampleSvo(float3 p)
         {
             float3 sz   = node.aabb_max - node.aabb_min;
             float  vs   = sz.x / float(BRICK_DIM);
-            float  hd   = 3.0 * vs;   // BAND_VOXELS — must match BAND_VOXELS in lib.rs
 
             // Empty (culled) leaf — no surface here. Return its bounds so the tracer
             // skips exactly to the cell exit instead of a fixed coarse step.
             if (node.brick_offset == ~0u)
-                return { INF, 0u, vs, hd, false, true, node.aabb_min, node.aabb_max, float3(0,1,0) };
+                return { INF, 0u, vs, 0.0, false, true, node.aabb_min, node.aabb_max, float3(0,1,0) };
 
             // Debug bit 5: traverse the tree but sample analytic SDF (bypass atlas).
             if ((pc.debug_flags & 32u) != 0u)
             {
                 uint m;
                 float dsdf = gtScene(p, m);
-                return { dsdf, m, vs, hd, true, true, node.aabb_min, node.aabb_max, float3(0,1,0) };
+                return { dsdf, m, vs, 0.0, true, true, node.aabb_min, node.aabb_max, float3(0,1,0) };
             }
 
-            // Trilinear lookup inside 9³ brick
+            // ── Gradient-augmented (tangent-plane) reconstruction ─────────────
+            // Each of the 8 corner voxels stores distance + analytic normal, so it
+            // defines a tangent plane d_i(p) = d_i + n_i·(p − corner_i). Trilinearly
+            // blending these gives a far better distance estimate than blending the
+            // values alone: exact for planes, Hermite-smooth for curves, and the
+            // blended field stays 1-Lipschitz (|Σ w_i n_i| ≤ 1) → safe to march.
             float3 lp   = (p - node.aabb_min) / vs - 0.5;
             lp          = clamp(lp, 0.0, float(BRICK_DIM) - 1e-4);
             int3   vi   = min(int3(floor(lp)), int3(BRICK_DIM - 1));
             float3 fr   = lp - float3(vi);
             uint   bd   = BRICK_DIM + 1u;
 
-            float s000 = loadSdfVoxel(node.brick_offset, uint(vi.x  ) + bd*(uint(vi.y  ) + bd*uint(vi.z  )), hd);
-            float s100 = loadSdfVoxel(node.brick_offset, uint(vi.x+1) + bd*(uint(vi.y  ) + bd*uint(vi.z  )), hd);
-            float s010 = loadSdfVoxel(node.brick_offset, uint(vi.x  ) + bd*(uint(vi.y+1) + bd*uint(vi.z  )), hd);
-            float s110 = loadSdfVoxel(node.brick_offset, uint(vi.x+1) + bd*(uint(vi.y+1) + bd*uint(vi.z  )), hd);
-            float s001 = loadSdfVoxel(node.brick_offset, uint(vi.x  ) + bd*(uint(vi.y  ) + bd*uint(vi.z+1)), hd);
-            float s101 = loadSdfVoxel(node.brick_offset, uint(vi.x+1) + bd*(uint(vi.y  ) + bd*uint(vi.z+1)), hd);
-            float s011 = loadSdfVoxel(node.brick_offset, uint(vi.x  ) + bd*(uint(vi.y+1) + bd*uint(vi.z+1)), hd);
-            float s111 = loadSdfVoxel(node.brick_offset, uint(vi.x+1) + bd*(uint(vi.y+1) + bd*uint(vi.z+1)), hd);
+            // World position of the vi corner's voxel centre.
+            float3 c000 = node.aabb_min + (float3(vi) + 0.5) * vs;
+            float  band = BAND * vs;
 
-            float sdf = lerp(
-                lerp(lerp(s000,s100,fr.x), lerp(s010,s110,fr.x), fr.y),
-                lerp(lerp(s001,s101,fr.x), lerp(s011,s111,fr.x), fr.y),
-                fr.z);
+            float  dacc = 0.0;     // blended tangent-plane distance
+            float3 nacc = float3(0,0,0);
+            uint   mat  = 0u;
+            float  mbest = -1.0;
+            [unroll] for (uint c = 0u; c < 8u; c++)
+            {
+                uint ix = c & 1u, iy = (c >> 1u) & 1u, iz = (c >> 2u) & 1u;
+                Voxel v = loadVoxel(node.brick_offset, (uint(vi.x)+ix) + bd*((uint(vi.y)+iy) + bd*(uint(vi.z)+iz)), band);
+                float wx = (ix == 0u) ? (1.0 - fr.x) : fr.x;
+                float wy = (iy == 0u) ? (1.0 - fr.y) : fr.y;
+                float wz = (iz == 0u) ? (1.0 - fr.z) : fr.z;
+                float w  = wx * wy * wz;
+                float3 corner = c000 + float3(ix, iy, iz) * vs;
+                dacc += w * (v.dist + dot(v.normal, p - corner));   // tangent plane
+                nacc += w * v.normal;
+                if (w > mbest) { mbest = w; mat = v.mat; }          // material = dominant corner
+            }
 
-            // Analytic gradient of the trilinear field (smooth within the cell,
-            // no finite-difference quantisation noise, no cross-brick sampling).
-            float gx = lerp(lerp(s100-s000, s110-s010, fr.y), lerp(s101-s001, s111-s011, fr.y), fr.z);
-            float gy = lerp(lerp(s010-s000, s110-s100, fr.x), lerp(s011-s001, s111-s101, fr.x), fr.z);
-            float gz = lerp(lerp(s001-s000, s101-s100, fr.x), lerp(s011-s010, s111-s110, fr.x), fr.y);
-            float3 grad = float3(gx, gy, gz);   // unnormalized; / vs is constant
-
-            // Nearest-sample material
-            int3   vi2   = clamp(vi + int3(fr > 0.5), 0, int3(BRICK_DIM - 1));
-            uint   vf    = uint(vi2.x) + bd*(uint(vi2.y) + bd*uint(vi2.z));
-            uint   mat   = loadMatVoxel(node.brick_offset, vf);
-
-            return { sdf, mat, vs, hd, true, true, node.aabb_min, node.aabb_max, grad };
+            return { dacc, mat, vs, 0.0, true, true, node.aabb_min, node.aabb_max, nacc };
         }
 
         // descend to octant
@@ -220,12 +227,12 @@ Material sampleMaterial(float3 p)
             if (node.brick_offset == ~0u) break;
             float3 sz = node.aabb_max - node.aabb_min;
             float  vs = sz.x / float(BRICK_DIM);
-            float  hd = 3.0 * vs;
             float3 lp = (p - node.aabb_min) / vs - 0.5;
             lp = clamp(lp, 0.0, float(BRICK_DIM) - 1e-4);
             int3   vi = min(int3(floor(lp)), int3(BRICK_DIM - 1));
             float3 fr = lp - float3(vi);
             uint   bd = BRICK_DIM + 1u;
+            float  band = BAND * vs;
 
             Material result; result.albedo = float3(0,0,0); result.roughness = 0.0; result.metalness = 0.0;
             float total = 0.0;
@@ -233,14 +240,12 @@ Material sampleMaterial(float3 p)
             for (uint iy = 0u; iy <= 1u; iy++)
             for (uint ix = 0u; ix <= 1u; ix++)
             {
-                uint  vf  = uint(vi.x+ix) + bd*(uint(vi.y+iy) + bd*uint(vi.z+iz));
-                float sd  = loadSdfVoxel(node.brick_offset, vf, hd);
-                uint  mid = loadMatVoxel(node.brick_offset, vf);
+                Voxel v   = loadVoxel(node.brick_offset, uint(vi.x+ix) + bd*(uint(vi.y+iy) + bd*uint(vi.z+iz)), band);
                 float wx  = (ix == 0u) ? (1.0 - fr.x) : fr.x;
                 float wy  = (iy == 0u) ? (1.0 - fr.y) : fr.y;
                 float wz  = (iz == 0u) ? (1.0 - fr.z) : fr.z;
-                float w   = wx * wy * wz * exp(-max(sd, 0.0) / vs);
-                Material m = kMaterials[min(mid, 7u)];
+                float w   = wx * wy * wz * exp(-max(v.dist, 0.0) / vs);
+                Material m = kMaterials[min(v.mat, 7u)];
                 result.albedo    += m.albedo    * w;
                 result.roughness += m.roughness * w;
                 result.metalness += m.metalness * w;
@@ -257,21 +262,6 @@ Material sampleMaterial(float3 p)
 }
 
 // ─── Normal via finite differences ───────────────────────────────────────────
-float3 calcNormal(float3 p, float eps)
-{
-    float2 e = float2(eps, 0.0);
-    SvoSample sx0 = sampleSvo(p - e.xyy); SvoSample sx1 = sampleSvo(p + e.xyy);
-    SvoSample sy0 = sampleSvo(p - e.yxy); SvoSample sy1 = sampleSvo(p + e.yxy);
-    SvoSample sz0 = sampleSvo(p - e.yyx); SvoSample sz1 = sampleSvo(p + e.yyx);
-    float3 g = float3(
-        (sx1.found ? sx1.sdf : 0.0) - (sx0.found ? sx0.sdf : 0.0),
-        (sy1.found ? sy1.sdf : 0.0) - (sy0.found ? sy0.sdf : 0.0),
-        (sz1.found ? sz1.sdf : 0.0) - (sz0.found ? sz0.sdf : 0.0)
-    );
-    float len = length(g);
-    return len > 1e-5 ? g / len : float3(0, 1, 0);
-}
-
 // ─── GBuffer output ───────────────────────────────────────────────────────────
 struct GBufferOut
 {
@@ -373,7 +363,8 @@ GBufferOut fsMain(float4 svPos : SV_Position)
         // the threshold bulge (the trilinear field is locally ~linear).
         if (s.sdf < s.voxel_size * 0.08)
         {
-            float gdotr = dot(normalize(s.grad / s.voxel_size), rd);
+            // s.grad is the blended analytic normal (already world-space direction).
+            float gdotr = dot(normalize(s.grad), rd);
             float back  = (abs(gdotr) > 1e-3) ? (s.sdf / gdotr) : 0.0;  // signed dist to surface along ray
             hit     = true;
             hitPos  = p - rd * clamp(back, -s.voxel_size, s.voxel_size);

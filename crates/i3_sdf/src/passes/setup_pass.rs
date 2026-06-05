@@ -13,27 +13,25 @@ use super::SvoShared;
 // First frame: clears sdf/mat atlases to "fully outside" sentinel.
 
 pub struct SvoSetupPass {
-    shared:         Arc<SvoShared>,
-    first_frame:    AtomicBool,
-    node_pool_virt: BufferHandle,
-    sdf_atlas_virt: BufferHandle,
-    mat_atlas_virt: BufferHandle,
-    jobs_virt:      BufferHandle,
-    prims_virt:     BufferHandle,
-    bvh_virt:       BufferHandle,
+    shared:          Arc<SvoShared>,
+    first_frame:     AtomicBool,
+    node_pool_virt:  BufferHandle,
+    geom_atlas_virt: BufferHandle,
+    jobs_virt:       BufferHandle,
+    prims_virt:      BufferHandle,
+    bvh_virt:        BufferHandle,
 }
 
 impl SvoSetupPass {
     pub(crate) fn new(shared: Arc<SvoShared>, _inv: BufferHandle) -> Self {
         Self {
             shared,
-            first_frame:    AtomicBool::new(true),
-            node_pool_virt: BufferHandle::INVALID,
-            sdf_atlas_virt: BufferHandle::INVALID,
-            mat_atlas_virt: BufferHandle::INVALID,
-            jobs_virt:      BufferHandle::INVALID,
-            prims_virt:     BufferHandle::INVALID,
-            bvh_virt:       BufferHandle::INVALID,
+            first_frame:     AtomicBool::new(true),
+            node_pool_virt:  BufferHandle::INVALID,
+            geom_atlas_virt: BufferHandle::INVALID,
+            jobs_virt:       BufferHandle::INVALID,
+            prims_virt:      BufferHandle::INVALID,
+            bvh_virt:        BufferHandle::INVALID,
         }
     }
 }
@@ -51,12 +49,11 @@ impl RenderPass for SvoSetupPass {
         let next = (ring + 1) % RING;
         self.shared.cur_ring.store(next, Ordering::Relaxed);
 
-        self.node_pool_virt = builder.import_buffer("SvoNodePool", gb.node_pool[next]);
-        self.sdf_atlas_virt = builder.import_buffer("SvoSdfAtlas", gb.sdf_atlas_buf);
-        self.mat_atlas_virt = builder.import_buffer("SvoMatAtlas", gb.mat_atlas_buf);
-        self.jobs_virt      = builder.import_buffer("SvoBakeJobs", gb.jobs[next]);
-        self.prims_virt     = builder.import_buffer("SvoPrims",    gb.prims[next]);
-        self.bvh_virt       = builder.import_buffer("SvoBvh",      gb.bvh[next]);
+        self.node_pool_virt  = builder.import_buffer("SvoNodePool",  gb.node_pool[next]);
+        self.geom_atlas_virt = builder.import_buffer("SvoGeomAtlas", gb.geom_atlas_buf);
+        self.jobs_virt       = builder.import_buffer("SvoBakeJobs",  gb.jobs[next]);
+        self.prims_virt      = builder.import_buffer("SvoPrims",     gb.prims[next]);
+        self.bvh_virt        = builder.import_buffer("SvoBvh",       gb.bvh[next]);
 
         // Declare the CpuToGpu buffers this pass map-writes as WRITES. The actual
         // write is a host map, invisible to the frame graph — but declaring it as a
@@ -71,8 +68,7 @@ impl RenderPass for SvoSetupPass {
         builder.write_buffer(self.bvh_virt,       ResourceUsage::SHADER_WRITE);
 
         if self.first_frame.load(Ordering::Relaxed) {
-            builder.write_buffer(self.sdf_atlas_virt, ResourceUsage::TRANSFER_WRITE);
-            builder.write_buffer(self.mat_atlas_virt, ResourceUsage::TRANSFER_WRITE);
+            builder.write_buffer(self.geom_atlas_virt, ResourceUsage::TRANSFER_WRITE);
         }
     }
 
@@ -96,9 +92,11 @@ impl RenderPass for SvoSetupPass {
         if !prims.is_empty() { upload(ctx, self.prims_virt, &prims, prims.len().min(MAX_PRIMS as usize)); }
         if !bvh.is_empty()   { upload(ctx, self.bvh_virt,   &bvh,   bvh.len().min(65536)); }
 
+        // Clear to a "far outside" sentinel: each 8-byte voxel's distance is the
+        // low f16 of every u32; 0x7BFF is f16 ≈ 65504, so any unbaked/in-flight slot
+        // reads as far-from-surface (no spurious surface) rather than distance 0.
         if self.first_frame.swap(false, Ordering::AcqRel) {
-            ctx.clear_buffer(self.sdf_atlas_virt, 0xFF_FF_FF_FFu32);
-            ctx.clear_buffer(self.mat_atlas_virt, 0u32);
+            ctx.clear_buffer(self.geom_atlas_virt, 0x7BFF_7BFFu32);
         }
 
         tracing::debug!(

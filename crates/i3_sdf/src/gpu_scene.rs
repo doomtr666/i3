@@ -22,9 +22,8 @@ pub struct GpuSvoNode {
 pub struct GpuBrickJob {
     pub brick_world_min: [f32; 3],
     pub voxel_size:      f32,
-    pub atlas_offset:    u32,
-    pub half_diag:       f32,
-    pub _pad:            [u32; 2],
+    pub atlas_offset:    u32,      // byte offset into the geometry atlas
+    pub _pad:            [u32; 3],
 }
 
 // ─── GpuPrimitive ────────────────────────────────────────────────────────────
