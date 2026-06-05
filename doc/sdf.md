@@ -252,9 +252,24 @@ data path (scene → traversal → brick content → tracer) and found every bug
 
 ## 8. Known limitations / next steps
 
+- **Gradient-augmented bricks (chosen quality direction).** Today a brick stores only
+  u8 SDF per voxel and the surface is reconstructed by *trilinear interpolation of values*
+  (C0, gradient magnitude drifts from 1). The plan is to **also store the analytic normal**
+  `n_i = ∇d` per voxel (we have it at bake time) and reconstruct per-corner tangent planes
+  `d_i(p) = d_i + n_i·(p − corner_i)`, then blend with the trilinear weights. Each `d_i`
+  has `|∇| = 1`, the convex blend keeps `|∇| ≤ 1` (1-Lipschitz → safe sphere-tracing), the
+  result is **exact for planes** (the floor needs no refinement) and Hermite-smooth for
+  curves, and the normal is read directly (true analytic normal, no finite differences,
+  no quantisation noise). This is the SVO-native answer to the old clipmap's level
+  blending — better quality per brick rather than blending across the partition. Cost:
+  +2–3 B/voxel (oct-encoded normal); likely a *net* brick reduction (smooth/flat surfaces
+  reconstruct well coarsely).
+- **Material**: now a proximity-weighted trilinear blend of the 8 corner materials
+  (`exp(-max(sd,0)/vs)`), ported from the clipmap — done (`sampleMaterial` in
+  `svo_render.slang`).
 - **LOD seams (T-junctions)** between neighbour nodes of different depth are not blended;
   acceptable for the flat floor (linear SDF is trilinear-exact) but visible on curved
-  surfaces at transitions. A blend (à la the old clipmap) is the quality lever.
+  surfaces. The gradient-augmented bricks above reduce this (better per-brick fit).
 - **Error-driven refinement** (curvature/distance) is wired in spirit (`_sdf_weight`
   reserved) but disabled — it was unbounded on sharp edges; needs a depth cap.
 - **Empty-shell cost**: the conservative bake spends bricks on a thin shell around

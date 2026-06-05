@@ -200,6 +200,62 @@ float boxExit(float3 p, float3 rd, float3 bmin, float3 bmax)
     return min(tmax.x, min(tmax.y, tmax.z));
 }
 
+// ─── Material: surface-proximity-weighted trilinear blend ─────────────────────
+// Descends to the leaf at p and blends the 8 corner materials, weighting each by
+// trilinear weight × exp(-max(sdf,0)/vs): corners inside the solid (sdf<0)
+// contribute fully, corners outside attenuate over ~1 voxel. Smooth material
+// transitions instead of blocky per-voxel pick. Called once per pixel at the hit.
+Material sampleMaterial(float3 p)
+{
+    uint idx = 0u;
+    [loop]
+    for (uint d = 0u; d <= MAX_SVO_DEPTH; d++)
+    {
+        if (idx >= pc.node_count) break;
+        GpuSvoNode node = node_pool[idx];
+        if (any(p < node.aabb_min) || any(p > node.aabb_max)) break;
+
+        if (node.first_child == ~0u)
+        {
+            if (node.brick_offset == ~0u) break;
+            float3 sz = node.aabb_max - node.aabb_min;
+            float  vs = sz.x / float(BRICK_DIM);
+            float  hd = 3.0 * vs;
+            float3 lp = (p - node.aabb_min) / vs - 0.5;
+            lp = clamp(lp, 0.0, float(BRICK_DIM) - 1e-4);
+            int3   vi = min(int3(floor(lp)), int3(BRICK_DIM - 1));
+            float3 fr = lp - float3(vi);
+            uint   bd = BRICK_DIM + 1u;
+
+            Material result; result.albedo = float3(0,0,0); result.roughness = 0.0; result.metalness = 0.0;
+            float total = 0.0;
+            for (uint iz = 0u; iz <= 1u; iz++)
+            for (uint iy = 0u; iy <= 1u; iy++)
+            for (uint ix = 0u; ix <= 1u; ix++)
+            {
+                uint  vf  = uint(vi.x+ix) + bd*(uint(vi.y+iy) + bd*uint(vi.z+iz));
+                float sd  = loadSdfVoxel(node.brick_offset, vf, hd);
+                uint  mid = loadMatVoxel(node.brick_offset, vf);
+                float wx  = (ix == 0u) ? (1.0 - fr.x) : fr.x;
+                float wy  = (iy == 0u) ? (1.0 - fr.y) : fr.y;
+                float wz  = (iz == 0u) ? (1.0 - fr.z) : fr.z;
+                float w   = wx * wy * wz * exp(-max(sd, 0.0) / vs);
+                Material m = kMaterials[min(mid, 7u)];
+                result.albedo    += m.albedo    * w;
+                result.roughness += m.roughness * w;
+                result.metalness += m.metalness * w;
+                total            += w;
+            }
+            if (total > 1e-6) { result.albedo /= total; result.roughness /= total; result.metalness /= total; return result; }
+            break;
+        }
+        float3 mid = (node.aabb_min + node.aabb_max) * 0.5;
+        uint   oct = (p.x > mid.x ? 1u : 0u) | (p.y > mid.y ? 2u : 0u) | (p.z > mid.z ? 4u : 0u);
+        idx = node.first_child + oct;
+    }
+    return kMaterials[0];
+}
+
 // ─── Normal via finite differences ───────────────────────────────────────────
 float3 calcNormal(float3 p, float eps)
 {
@@ -343,7 +399,8 @@ GBufferOut fsMain(float4 svPos : SV_Position)
     float4 clip     = mul(g_common.viewProjection, float4(hitPos, 1.0));
     float  ndcDepth = clip.z / clip.w;
 
-    Material mat = kMaterials[min(hit_mat, 7u)];
+    // Proximity-weighted trilinear material blend (smooth transitions, not blocky).
+    Material mat = sampleMaterial(hitPos);
 
     GBufferOut o;
     o.albedo = float4(mat.albedo, 1.0);
