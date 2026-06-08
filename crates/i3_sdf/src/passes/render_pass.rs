@@ -57,6 +57,12 @@ struct SvoPC {
     debug_flags: u32,
     prim_count:  u32,
     terrain_on:  u32,
+    // Terrain texture layer bindless indices (16-aligned int4s) + blend params.
+    idx_albedo:  [i32; 4],
+    idx_normal:  [i32; 4],
+    idx_orm:     [i32; 4],
+    thr0:        [f32; 4],  // snow_lo, snow_hi, slope_lo, slope_hi
+    thr1:        [f32; 4],  // dirt_lo, dirt_hi, tiling, jitter_amp
 }
 
 impl RenderPass for SvoRenderPass {
@@ -130,11 +136,17 @@ impl RenderPass for SvoRenderPass {
         ctx.bind_descriptor_set(1, common_set);
         ctx.bind_descriptor_set(2, self.bindless_set);
 
+        let tm = self.shared.terrain_mat;
         let pc = SvoPC {
             node_count,
             debug_flags: self.shared.debug_flags.load(Ordering::Relaxed),
             prim_count,
             terrain_on: self.shared.terrain_on.load(Ordering::Acquire),
+            idx_albedo: tm.albedo,
+            idx_normal: tm.normal,
+            idx_orm:    tm.orm,
+            thr0: [tm.snow_lo, tm.snow_hi, tm.slope_lo, tm.slope_hi],
+            thr1: [tm.dirt_lo, tm.dirt_hi, tm.tiling, tm.jitter_amp],
         };
         ctx.push_constant_data(ShaderStageFlags::Vertex | ShaderStageFlags::Fragment, 0, &pc);
         ctx.draw(3, 0);

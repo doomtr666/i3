@@ -550,7 +550,7 @@ impl BasicScene {
         -1
     }
 
-    fn upload_and_register_texture<T: i3_gfx::graph::backend::RenderBackendInternal + ?Sized>(
+    pub fn upload_and_register_texture<T: i3_gfx::graph::backend::RenderBackendInternal + ?Sized>(
         backend: &mut T,
         bindless: &mut i3_renderer::bindless::BindlessManager,
         tex_asset: &i3_io::texture::TextureAsset,

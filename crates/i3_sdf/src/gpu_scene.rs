@@ -64,6 +64,35 @@ pub struct GpuBvhNode {
     pub right_or_prim: u32,
 }
 
+// ─── TerrainMatParams ──────────────────────────────────────────────────────────
+// Terrain texture layer bindless indices + slope/height blend params, pushed to
+// svo_render. Layer order: 0=grass, 1=rock, 2=snow, 3=dirt. Index -1 = no texture
+// (the shader falls back to a solid colour). ORM = (R=AO, G=Roughness, B=Metallic).
+#[derive(Clone, Copy)]
+pub struct TerrainMatParams {
+    pub albedo:     [i32; 4],
+    pub normal:     [i32; 4],
+    pub orm:        [i32; 4],
+    pub snow_lo:    f32,
+    pub snow_hi:    f32,
+    pub slope_lo:   f32,   // below this slope (n.y) → fully rock
+    pub slope_hi:   f32,   // above this → no rock
+    pub dirt_lo:    f32,
+    pub dirt_hi:    f32,
+    pub tiling:     f32,   // world→uv scale (tiles ≈ 1/tiling metres)
+    pub jitter_amp: f32,   // fBm height jitter (m) so bands aren't horizontal
+}
+
+impl Default for TerrainMatParams {
+    fn default() -> Self {
+        Self {
+            albedo: [-1; 4], normal: [-1; 4], orm: [-1; 4],
+            snow_lo: 9.0, snow_hi: 17.0, slope_lo: 0.45, slope_hi: 0.72,
+            dirt_lo: -9.0, dirt_hi: -3.0, tiling: 0.15, jitter_amp: 6.0,
+        }
+    }
+}
+
 // ─── Packing functions ────────────────────────────────────────────────────────
 
 pub fn pack_node(node: &i3_voxel::SdfNode) -> Option<GpuPrimitive> {

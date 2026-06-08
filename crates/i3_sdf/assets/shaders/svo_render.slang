@@ -23,7 +23,13 @@ struct GpuPrimitive
 [[vk::binding(2, 0)]] StructuredBuffer<GpuPrimitive> prims;
 
 // ─── Push constants ───────────────────────────────────────────────────────────
-struct SvoPC { uint node_count; uint debug_flags; uint prim_count; uint terrain_on; };
+struct SvoPC {
+    uint node_count; uint debug_flags; uint prim_count; uint terrain_on;
+    // Terrain layers (0=grass 1=rock 2=snow 3=dirt): bindless texture indices (-1 = none)
+    int4 idxAlbedo; int4 idxNormal; int4 idxOrm;
+    float4 thr0;   // snowLo, snowHi, slopeLo, slopeHi
+    float4 thr1;   // dirtLo, dirtHi, tiling, jitterAmp
+};
 [[vk::push_constant]] SvoPC pc;
 
 // ─── Analytic SDF (ground-truth, bypasses bricks) ─────────────────────────────
@@ -271,26 +277,104 @@ Material sampleMaterial(float3 p)
 // First cut: solid layer colours (grass / rock / snow / dirt) blended by surface
 // slope (n.y) and height, with a low-frequency fBm jitter so the bands aren't
 // perfectly horizontal. Image textures (triplanar) slot in here later, per layer.
-Material terrainShade(float3 p, float3 n)
+// Triplanar sample of one bindless texture (idx < 0 → returns the fallback).
+// `w` are the (normalised) triplanar projection weights, `tiling` the world→uv
+// scale and `lod` the mip level (distance-based; screen derivatives are not
+// reliable under sphere-tracing).
+float4 triSample(int idx, float3 p, float3 w, float tiling, float lod, float4 fallback)
 {
+    if (idx < 0) return fallback;
+    // SAMPLER_ANISO is the only Repeat-addressed sampler — required since the
+    // triplanar UVs (world·tiling) run far outside [0,1]; ClampToEdge would smear
+    // the border texel into long streaks.
+    SamplerState s = bindlessSamplers[SAMPLER_ANISO];
+    Texture2D    t = bindlessTextures[idx];
+    float4 cx = t.SampleLevel(s, p.zy * tiling, lod);   // X-facing plane
+    float4 cy = t.SampleLevel(s, p.xz * tiling, lod);   // Y-facing plane
+    float4 cz = t.SampleLevel(s, p.xy * tiling, lod);   // Z-facing plane
+    return cx * w.x + cy * w.y + cz * w.z;
+}
+
+// Unpack a BC5_UNORM (2-channel) tangent-space normal: RG → [-1,1], reconstruct Z.
+float3 unpackNormalBC5(float2 rg)
+{
+    float2 xy = rg * 2.0 - 1.0;
+    return float3(xy, sqrt(saturate(1.0 - dot(xy, xy))));
+}
+
+Material terrainShade(float3 p, inout float3 n, float dist)
+{
+    float3 geoN = n;                                   // geometric (analytic) normal
     float slope = saturate(n.y);                       // 1 = flat, 0 = vertical
     float jit   = fbm3(p * 0.06, float3(0,0,0), 7, 3, 2.0, 0.5).v;
-    float h     = p.y + jit * 6.0;                      // jittered height for the bands
+    float h     = p.y + jit * pc.thr1.w;               // jittered height for the bands
 
-    float3 cGrass = float3(0.13, 0.34, 0.10);
-    float3 cRock  = float3(0.30, 0.28, 0.26);
-    float3 cSnow  = float3(0.90, 0.93, 0.97);
-    float3 cDirt  = float3(0.26, 0.19, 0.12);
-
-    float wRock = 1.0 - smoothstep(0.45, 0.72, slope);                       // steep → rock
-    float wSnow = smoothstep(9.0, 17.0, h) * smoothstep(0.60, 0.80, slope);  // high & flat → snow
-    float wDirt = 1.0 - smoothstep(-9.0, -3.0, h);                           // low → dirt
+    // Layer weights — order: 0=grass, 1=rock, 2=snow, 3=dirt.
+    float wRock  = 1.0 - smoothstep(pc.thr0.z, pc.thr0.w, slope);                 // steep → rock
+    float wSnow  = smoothstep(pc.thr0.x, pc.thr0.y, h) * smoothstep(0.55, 0.78, slope); // high & flat → snow
+    float wDirt  = 1.0 - smoothstep(pc.thr1.x, pc.thr1.y, h);                     // low → dirt
     float wGrass = saturate(1.0 - wRock - wSnow - wDirt);
+    float wl[4]  = { wGrass, wRock, wSnow, wDirt };
     float total  = wGrass + wRock + wSnow + wDirt + 1e-4;
 
+    // Triplanar projection weights (sharpened so each plane dominates its axis).
+    float3 tw = pow(abs(n), 4.0);
+    tw /= (tw.x + tw.y + tw.z + 1e-5);
+
+    float tiling = pc.thr1.z;
+    // Distance LOD: texel/world rate ≈ tiling·texSize (1K), pixel world footprint
+    // ≈ dist/screenH. texSize/screenH ≈ 1 → lod ≈ log2(dist·tiling), biased ×2 to
+    // favour higher mips (less shimmer). Refined to a proper cone in A-cut3.
+    float lod = max(0.0, log2(dist * tiling * 2.0 + 1e-3));
+
+    // Fallback colours / roughness when a layer has no texture bound.
+    float4 fbAlb[4] = {
+        float4(0.13, 0.34, 0.10, 1), float4(0.30, 0.28, 0.26, 1),
+        float4(0.90, 0.93, 0.97, 1), float4(0.26, 0.19, 0.12, 1),
+    };
+    float fbRough[4] = { 0.85, 0.90, 0.50, 0.88 };
+
+    SamplerState sA = bindlessSamplers[SAMPLER_ANISO];
+
+    float3 albedo = float3(0, 0, 0);
+    float  rough  = 0.0;
+    // Per-plane tangent-space normals, layer-blended (whiteout-blended below).
+    float3 tnX = float3(0, 0, 0), tnY = float3(0, 0, 0), tnZ = float3(0, 0, 0);
+    [unroll] for (int i = 0; i < 4; ++i) {
+        float wi = wl[i] / total;
+        albedo += triSample(pc.idxAlbedo[i], p, tw, tiling, lod, fbAlb[i]).rgb * wi;
+        // ORM packing: R=AO, G=Roughness, B=Metallic.
+        float rg = triSample(pc.idxOrm[i], p, tw, tiling, lod, float4(fbRough[i].xxx, 1)).g;
+        rough  += rg * wi;
+
+        // Tangent normals per plane (flat fallback when the layer has no normal map).
+        if (pc.idxNormal[i] >= 0) {
+            Texture2D tn = bindlessTextures[pc.idxNormal[i]];
+            tnX += unpackNormalBC5(tn.SampleLevel(sA, p.zy * tiling, lod).rg) * wi;
+            tnY += unpackNormalBC5(tn.SampleLevel(sA, p.xz * tiling, lod).rg) * wi;
+            tnZ += unpackNormalBC5(tn.SampleLevel(sA, p.xy * tiling, lod).rg) * wi;
+        } else {
+            float3 flat = float3(0, 0, 1) * wi;
+            tnX += flat; tnY += flat; tnZ += flat;
+        }
+    }
+
+    // Triplanar normal mapping — Whiteout blend (bgolus): reorient each plane's
+    // tangent normal by the geometric normal, swizzle to world axes, blend by `tw`.
+    // Bit 7 disables it (A/B compare against the pure analytic normal).
+    bool haveNrm = max(max(pc.idxNormal[0], pc.idxNormal[1]),
+                       max(pc.idxNormal[2], pc.idxNormal[3])) >= 0;
+    if (haveNrm && (pc.debug_flags & 128u) == 0u) {
+        float3 a = abs(geoN);
+        tnX = float3(tnX.xy + geoN.zy, a.x * tnX.z);
+        tnY = float3(tnY.xy + geoN.xz, a.y * tnY.z);
+        tnZ = float3(tnZ.xy + geoN.xy, a.z * tnZ.z);
+        n = normalize(tnX.zyx * tw.x + tnY.xzy * tw.y + tnZ.xyz * tw.z);
+    }
+
     Material m;
-    m.albedo    = (cGrass*wGrass + cRock*wRock + cSnow*wSnow + cDirt*wDirt) / total;
-    m.roughness = (0.85*wGrass + 0.90*wRock + 0.50*wSnow + 0.88*wDirt) / total;
+    m.albedo    = albedo;
+    m.roughness = rough;
     m.metalness = 0.0;
     return m;
 }
@@ -428,10 +512,14 @@ GBufferOut fsMain(float4 svPos : SV_Position)
     float4 clip     = mul(g_common.viewProjection, float4(hitPos, 1.0));
     float  ndcDepth = clip.z / clip.w;
 
-    // Terrain → slope/height layer shading; everything else → the brick material blend.
-    Material mat = (pc.terrain_on != 0u && hit_mat == 5u)   // TERRAIN_MAT
-        ? terrainShade(hitPos, n)
-        : sampleMaterial(hitPos);
+    // Terrain → slope/height layer shading (also perturbs `n` via normal maps);
+    // everything else → the brick material blend.
+    float hitDist = length(hitPos - g_common.GetCameraPos());
+    Material mat;
+    if (pc.terrain_on != 0u && hit_mat == 5u)   // TERRAIN_MAT
+        mat = terrainShade(hitPos, n, hitDist);
+    else
+        mat = sampleMaterial(hitPos);
 
     GBufferOut o;
     o.albedo = float4(mat.albedo, 1.0);

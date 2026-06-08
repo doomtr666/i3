@@ -488,6 +488,27 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
     render_graph.ao_mode = AoMode::None;
     render_graph.publish("UiSystem", ui.clone());
+
+    // ── Terrain material textures → bindless indices (layer order: grass/rock/snow/dirt)
+    let terrain_mat = {
+        use examples_common::basic_scene::BasicScene;
+        use i3_io::texture::TextureAsset;
+        let mut tex = |name: &str| -> i32 {
+            match loader.load::<TextureAsset>(name).wait_loaded() {
+                Ok(t) => BasicScene::upload_and_register_texture(
+                    &mut backend, &mut render_graph.bindless_manager, &t),
+                Err(e) => { tracing::warn!("terrain texture '{name}' not loaded: {e}"); -1 }
+            }
+        };
+        let mut tm = i3_sdf::TerrainMatParams::default();
+        for (i, layer) in ["grass", "rock", "snow", "dirt"].iter().enumerate() {
+            tm.albedo[i] = tex(&format!("terrain_{layer}_albedo.png"));
+            tm.normal[i] = tex(&format!("terrain_{layer}_normal.png"));
+            tm.orm[i]    = tex(&format!("terrain_{layer}_orm.png"));
+        }
+        tm
+    };
+
     render_graph.publish("AssetLoader", loader);
 
     let (svo_compute, svo_render) = create_svo_passes(
@@ -497,6 +518,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         svo_debug_flags.clone(),
         svo_enabled.clone(),
         terrain_graph().compile(),
+        terrain_mat,
     );
     for pass in svo_compute {
         render_graph.extra_pre_gbuffer_passes.push(pass);

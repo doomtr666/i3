@@ -10,6 +10,7 @@ pub mod debug_ui;
 
 pub use svo::{SvoTree, SvoNode, SvoState};
 pub use gpu_buffers::SvoGpuBuffers;
+pub use gpu_scene::TerrainMatParams;
 pub use noise_graph::{NoiseGraph, VmOp};
 pub use passes::create_svo_passes;
 
