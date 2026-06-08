@@ -1,6 +1,6 @@
 use crate::sdf::{SdfNode, SdfScene, SdfSample};
 use i3_math::AABB;
-use i3_noise::VecPosition;
+use i3_noise::NoisePoint;
 
 use nalgebra::{Point3, Vector3, point};
 use rayon::prelude::*;
@@ -88,7 +88,7 @@ fn fill_sdf_cache_impl(
         for y in -1..=(VOXEL_BLOCK_WIDTH + 1) {
             let mut x = -1;
             while x <= VOXEL_BLOCK_WIDTH + 1 {
-                let mut vpos = VecPosition::default();
+                let mut vpos = NoisePoint::default();
                 for i in 0..8 {
                     if x + i <= VOXEL_BLOCK_WIDTH + 1 {
                         let p = wp(x + i, y, z);

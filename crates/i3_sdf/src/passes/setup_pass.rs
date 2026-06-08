@@ -20,6 +20,7 @@ pub struct SvoSetupPass {
     jobs_virt:       BufferHandle,
     prims_virt:      BufferHandle,
     bvh_virt:        BufferHandle,
+    vm_ops_virt:     BufferHandle,
 }
 
 impl SvoSetupPass {
@@ -32,6 +33,7 @@ impl SvoSetupPass {
             jobs_virt:       BufferHandle::INVALID,
             prims_virt:      BufferHandle::INVALID,
             bvh_virt:        BufferHandle::INVALID,
+            vm_ops_virt:     BufferHandle::INVALID,
         }
     }
 }
@@ -54,6 +56,7 @@ impl RenderPass for SvoSetupPass {
         self.jobs_virt       = builder.import_buffer("SvoBakeJobs",  gb.jobs[next]);
         self.prims_virt      = builder.import_buffer("SvoPrims",     gb.prims[next]);
         self.bvh_virt        = builder.import_buffer("SvoBvh",       gb.bvh[next]);
+        self.vm_ops_virt     = builder.import_buffer("SvoVmOps",     gb.vm_ops[next]);
 
         // Declare the CpuToGpu buffers this pass map-writes as WRITES. The actual
         // write is a host map, invisible to the frame graph — but declaring it as a
@@ -66,6 +69,7 @@ impl RenderPass for SvoSetupPass {
         builder.write_buffer(self.jobs_virt,      ResourceUsage::SHADER_WRITE);
         builder.write_buffer(self.prims_virt,     ResourceUsage::SHADER_WRITE);
         builder.write_buffer(self.bvh_virt,       ResourceUsage::SHADER_WRITE);
+        builder.write_buffer(self.vm_ops_virt,    ResourceUsage::SHADER_WRITE);
 
         if self.first_frame.load(Ordering::Relaxed) {
             builder.write_buffer(self.geom_atlas_virt, ResourceUsage::TRANSFER_WRITE);
@@ -81,13 +85,18 @@ impl RenderPass for SvoSetupPass {
         let scene    = self.shared.sdf_scene.read().unwrap();
         let prims    = pack_scene(&scene);
         let bvh      = pack_bvh(&scene);
+        let has_terrain = scene.nodes().iter().any(|n| {
+            matches!(n.primitive(), i3_voxel::SdfPrimitive::VolumeTerrain { .. })
+        });
         drop(scene);
 
+        self.shared.terrain_on.store(has_terrain as u32, Ordering::Release);
         self.shared.prim_count.store(prims.len() as u32, Ordering::Release);
         self.shared.bvh_root.store(if bvh.is_empty() { u32::MAX } else { 0 }, Ordering::Release);
         self.shared.job_count.store(jobs.len() as u32, Ordering::Release);
 
         upload(ctx, self.node_pool_virt, &gpu_nodes, gpu_nodes.len());
+        { let ops = &self.shared.vm_ops; if !ops.is_empty() { upload(ctx, self.vm_ops_virt, ops, ops.len()); } }
         if !jobs.is_empty()  { upload(ctx, self.jobs_virt,  &jobs,  jobs.len()); }
         if !prims.is_empty() { upload(ctx, self.prims_virt, &prims, prims.len().min(MAX_PRIMS as usize)); }
         if !bvh.is_empty()   { upload(ctx, self.bvh_virt,   &bvh,   bvh.len().min(65536)); }

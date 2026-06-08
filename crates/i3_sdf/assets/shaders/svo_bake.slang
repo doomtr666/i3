@@ -16,6 +16,10 @@
 // (still a valid "far" distance for sphere-marching). BAND must match svo_render.
 static const float BAND = 4.0;
 
+#include "noise.slangh"   // perlin3 / fbm3 / terrainDensity (CPU-parity volumetric terrain)
+
+static const uint TERRAIN_MAT = 5u;   // material id for terrain voxels (kMaterials[5])
+
 struct GpuBrickJob
 {
     float3 brick_world_min;
@@ -48,7 +52,7 @@ struct GpuPrimitive
 [[vk::binding(1, 0)]] StructuredBuffer<GpuPrimitive>  prims;
 [[vk::binding(2, 0)]] RWByteAddressBuffer              geom_atlas;
 
-struct BakePC { uint prim_count; uint _pad0; uint _pad1; uint _pad2; };
+struct BakePC { uint prim_count; uint terrain_on; uint _pad1; uint _pad2; };
 [[vk::push_constant]] BakePC pc;
 
 static const uint PRIM_SPHERE = 0u, PRIM_BOX = 1u, PRIM_CAPSULE = 2u, PRIM_CYLINDER = 3u, PRIM_TORUS = 4u;
@@ -73,7 +77,8 @@ float evalPrimitive(float3 pw, GpuPrimitive prim)
     return d / prim.inv_scale;
 }
 
-// CSG distance only (for the finite-difference gradient).
+// Analytic-PRIMITIVE CSG distance (no terrain). Used for the finite-difference
+// normal — cheap, no graph evaluation. Terrain is folded analytically in csMain.
 float sceneSdf(float3 p)
 {
     float solid = 1e10, empty = 1e10;
@@ -86,18 +91,18 @@ float sceneSdf(float3 p)
     return max(solid, -empty);
 }
 
-// CSG distance + nearest-solid material.
-float sceneSdfMat(float3 p, out uint mat_id)
+// Primitive CSG, returning `solid` and `empty` SEPARATELY (+ nearest-solid material)
+// so csMain can fold the terrain into `solid` (so subtracts carve it) and decide the
+// normal source. No terrain here → no graph evaluation.
+void sceneCSG(float3 p, out float solid, out float empty, out uint mat_id)
 {
-    float solid = 1e10, empty = 1e10, mind = 1e10;
-    mat_id = 0u;
+    solid = 1e10; empty = 1e10; float mind = 1e10; mat_id = 0u;
     for (uint i = 0u; i < pc.prim_count; i++)
     {
         float d = evalPrimitive(p, prims[i]);
         if (prims[i].subtract != 0u) { empty = min(empty, d); }
         else { solid = min(solid, d); if (d < mind) { mind = d; mat_id = prims[i].material_id; } }
     }
-    return max(solid, -empty);
 }
 
 // ─── Octahedral normal encode (unit vec → [-1,1]²) ───────────────────────────
@@ -119,11 +124,11 @@ void csMain(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID)
     GpuBrickJob job = jobs[gid.x];
     float3 p  = job.brick_world_min + (float3(lid) + 0.5) * job.voxel_size;
 
-    // Distance + material at the voxel centre.
-    uint  mat_id;
-    float sdf = sceneSdfMat(p, mat_id);
+    // Primitive CSG (solid/empty separately) + finite-difference normal — all cheap,
+    // NO graph evaluation.
+    float solid, empty; uint mat_id;
+    sceneCSG(p, solid, empty, mat_id);
 
-    // Analytic normal via central differences on the (smooth) analytic field.
     float  e = job.voxel_size * 0.5;
     float3 grad = float3(
         sceneSdf(p + float3(e, 0, 0)) - sceneSdf(p - float3(e, 0, 0)),
@@ -131,6 +136,16 @@ void csMain(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID)
         sceneSdf(p + float3(0, 0, e)) - sceneSdf(p - float3(0, 0, e)));
     float gl = length(grad);
     float3 n = gl > 1e-6 ? grad / gl : float3(0, 1, 0);
+
+    // Terrain: evaluate the noise graph ONCE (value + ANALYTIC normal — no FD on the
+    // graph, the big win). Fold into `solid` so subtracts carve it; when terrain is the
+    // winning surface (and not carved), use its analytic normal.
+    if (pc.terrain_on != 0u)
+    {
+        NV t = terrainDensity(p, float3(0, 0, 0));
+        if (t.v < solid) { solid = t.v; mat_id = TERRAIN_MAT; if (solid >= -empty) n = t.g; }
+    }
+    float sdf = max(solid, -empty);
 
     float2 oct = octEncode(n);
 

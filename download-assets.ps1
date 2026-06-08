@@ -84,6 +84,40 @@ if (-not (Test-Path $HdriFile)) {
     Write-Host "[INFO] HDRI already present." -ForegroundColor Green
 }
 
+# 4. Terrain textures (ambientCG, 1K PNG ZIPs) → assets/textures/<name>/
+# Each ZIP holds *_Color / *_NormalGL / *_Roughness / *_AmbientOcclusion / *_Displacement.
+# Add more rows as needed (grass / rock / dirt …).
+$TexDir = Join-Path $AssetDir "textures"
+if (-not (Test-Path $TexDir)) { New-Item -ItemType Directory -Path $TexDir | Out-Null }
+
+$TerrainTextures = @(
+    @{ Name = "snow"; Url = "https://ambientcg.com/get?file=Snow014_1K-PNG.zip" }
+    @{ Name = "grass"; Url = "https://ambientcg.com/get?file=Ground037_1K-PNG.zip" }
+    @{ Name = "rock";  Url = "https://ambientcg.com/get?file=Rock063_1K-PNG.zip" }
+    @{ Name = "dirt";  Url = "https://ambientcg.com/get?file=Ground103_1K-PNG.zip" }
+)
+
+Write-Host "[INFO] Checking terrain textures..." -ForegroundColor Cyan
+foreach ($tex in $TerrainTextures) {
+    $dir = Join-Path $TexDir $tex.Name
+    if (Test-Path $dir) {
+        Write-Host "[INFO] Terrain texture '$($tex.Name)' already present." -ForegroundColor Green
+        continue
+    }
+    Write-Host "[INFO] Downloading terrain texture '$($tex.Name)'..." -ForegroundColor Cyan
+    $zip = Join-Path $TexDir "$($tex.Name).zip"
+    try {
+        Invoke-WebRequest -Uri $tex.Url -OutFile $zip -UseBasicParsing -UserAgent "Mozilla/5.0"
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        Expand-Archive -Path $zip -DestinationPath $dir -Force
+        Remove-Item $zip
+        Write-Host "[SUCCESS] Terrain texture '$($tex.Name)' downloaded." -ForegroundColor Green
+    } catch {
+        Write-Host "[ERROR] Failed to download terrain texture '$($tex.Name)'." -ForegroundColor Red
+        if (Test-Path $zip) { Remove-Item $zip }
+    }
+}
+
 Write-Host ""
 Write-Host "[SUCCESS] Asset download completed!" -ForegroundColor Green
 Write-Host "          Assets are located in: $KHDir" -ForegroundColor Gray

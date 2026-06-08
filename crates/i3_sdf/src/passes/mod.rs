@@ -20,6 +20,8 @@ pub(crate) struct SvoShared {
     pub sdf_scene:   Arc<RwLock<SdfScene>>,
     pub job_count:   AtomicU32,
     pub prim_count:  AtomicU32,
+    pub terrain_on:  AtomicU32,   // 1 if the scene has a VolumeTerrain primitive
+    pub vm_ops:      Arc<Vec<crate::VmOp>>,  // compiled terrain noise graph (static)
     pub bvh_root:    AtomicU32,
     pub debug_flags: Arc<AtomicU32>,
     pub enabled:     Arc<AtomicBool>,
@@ -40,6 +42,7 @@ pub fn create_svo_passes(
     gpu_buffers: Arc<SvoGpuBuffers>,
     debug_flags: Arc<AtomicU32>,
     enabled:     Arc<AtomicBool>,
+    vm_ops:      Vec<crate::VmOp>,
 ) -> (Vec<Box<dyn RenderPass>>, Box<dyn RenderPass>) {
     let shared = Arc::new(SvoShared {
         gpu_buffers,
@@ -47,6 +50,8 @@ pub fn create_svo_passes(
         sdf_scene,
         job_count:   AtomicU32::new(0),
         prim_count:  AtomicU32::new(0),
+        terrain_on:  AtomicU32::new(0),
+        vm_ops:      Arc::new(vm_ops),
         bvh_root:    AtomicU32::new(u32::MAX),
         debug_flags,
         enabled,

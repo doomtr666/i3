@@ -2,7 +2,10 @@ use std::mem::size_of;
 
 use i3_gfx::prelude::*;
 
-use crate::{BRICK_BYTES, MAX_PRIMS, MAX_SVO_BRICKS, MAX_SVO_NODES, gpu_scene::{GpuBrickJob, GpuBvhNode, GpuPrimitive, GpuSvoNode}};
+use crate::{BRICK_BYTES, MAX_PRIMS, MAX_SVO_BRICKS, MAX_SVO_NODES, noise_graph::VmOp, gpu_scene::{GpuBrickJob, GpuBvhNode, GpuPrimitive, GpuSvoNode}};
+
+/// Max ops in a compiled noise graph (terrain VM bytecode). Matches evalGraph's cap.
+pub const MAX_VM_OPS: usize = 256;
 
 /// Frames the renderer keeps in flight. CPU-written buffers are ring-buffered
 /// this many times so frame N's map-write never lands on a buffer that the GPU
@@ -19,6 +22,8 @@ pub struct SvoGpuBuffers {
     pub prims:     [BackendBuffer; RING],
     /// CpuToGpu, ring-buffered — GpuBvhNode array.
     pub bvh:       [BackendBuffer; RING],
+    /// CpuToGpu, ring-buffered — compiled noise-graph bytecode (terrain VM).
+    pub vm_ops:    [BackendBuffer; RING],
     /// GpuOnly, single — geometry atlas: 8 bytes/voxel (f16 dist + oct normal +
     /// material + flags). Queue-ordered, no ring needed.
     pub geom_atlas_buf: BackendBuffer,
@@ -31,6 +36,7 @@ impl SvoGpuBuffers {
         let jobs_bytes      = (MAX_SVO_BRICKS * size_of::<GpuBrickJob>()  as u32) as u64;
         let prims_bytes     = (MAX_PRIMS      * size_of::<GpuPrimitive>() as u32) as u64;
         let bvh_bytes       = (65536          * size_of::<GpuBvhNode>()         ) as u64;
+        let vm_ops_bytes    = (MAX_VM_OPS     * size_of::<VmOp>()               ) as u64;
 
         fn storage(backend: &mut dyn RenderBackend, size: u64, mem: MemoryType) -> BackendBuffer {
             backend.create_buffer(&BufferDesc { size, usage: BufferUsageFlags::STORAGE_BUFFER, memory: mem })
@@ -44,6 +50,7 @@ impl SvoGpuBuffers {
             jobs:      ring(backend, jobs_bytes),
             prims:     ring(backend, prims_bytes),
             bvh:       ring(backend, bvh_bytes),
+            vm_ops:    ring(backend, vm_ops_bytes),
             geom_atlas_buf: storage(backend, atlas_bytes, MemoryType::GpuOnly),
         }
     }

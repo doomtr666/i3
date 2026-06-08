@@ -1132,18 +1132,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "i3_brickmap"
-version = "0.1.0"
-dependencies = [
- "half",
- "i3_math",
- "i3_voxel",
- "nalgebra",
- "rayon",
- "tracing",
-]
-
-[[package]]
 name = "i3_bundle"
 version = "0.1.0"
 dependencies = [
@@ -1210,6 +1198,9 @@ dependencies = [
 [[package]]
 name = "i3_noise"
 version = "0.1.0"
+dependencies = [
+ "wide 1.5.0",
+]
 
 [[package]]
 name = "i3_null_backend"
@@ -1243,6 +1234,7 @@ dependencies = [
  "i3_gfx",
  "i3_io",
  "i3_math",
+ "i3_noise",
  "i3_voxel",
  "nalgebra",
  "rayon",
@@ -2277,6 +2269,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "safe_arch"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f7caad094bd561859bcd467734a720c3c1f5d1f338995351fefe2190c45efed"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2292,6 +2293,7 @@ dependencies = [
  "i3_gfx",
  "i3_io",
  "i3_math",
+ "i3_noise",
  "i3_renderer",
  "i3_sdf",
  "i3_voxel",
@@ -2419,7 +2421,7 @@ dependencies = [
  "num-complex",
  "num-traits",
  "paste",
- "wide",
+ "wide 0.7.33",
 ]
 
 [[package]]
@@ -2825,9 +2827,11 @@ dependencies = [
  "i3_egui",
  "i3_gfx",
  "i3_io",
+ "i3_math",
  "i3_renderer",
  "i3_slang",
  "i3_vulkan_backend",
+ "nalgebra",
  "nalgebra-glm",
  "tracing",
  "uuid",
@@ -2842,28 +2846,6 @@ dependencies = [
  "ash",
  "bitflags 2.10.0",
  "cc",
-]
-
-[[package]]
-name = "voxel"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "examples_common",
- "i3_baker",
- "i3_egui",
- "i3_gfx",
- "i3_io",
- "i3_math",
- "i3_noise",
- "i3_renderer",
- "i3_slang",
- "i3_voxel",
- "i3_vulkan_backend",
- "nalgebra",
- "nalgebra-glm",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -3000,7 +2982,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
 dependencies = [
  "bytemuck",
- "safe_arch",
+ "safe_arch 0.7.4",
+]
+
+[[package]]
+name = "wide"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
+dependencies = [
+ "bytemuck",
+ "safe_arch 1.0.0",
 ]
 
 [[package]]

@@ -1,97 +1,62 @@
-use i3_math::{nalgebra::Point3, AABB};
+use i3_math::{nalgebra::{Point3, Vector3}, AABB};
 use i3_voxel::SdfScene;
 
-use crate::{BRICK_SIZE, svo::SvoNode};
+use crate::BRICK_SIZE;
 
-/// Screen-space projected size score for `aabb` from camera position.
-/// Returns pixel-footprint / 1 (dimensionless ratio; > lod_threshold → split).
-pub fn screen_score(aabb: &AABB, cam: &Point3<f32>, vp: &nalgebra::Matrix4<f32>) -> f32 {
-    if !aabb.is_in_frustum(vp) { return 0.0; }
-    let dist = (cam - aabb.clamp(cam)).norm().max(0.001);
-    aabb.diagonal_length() / dist
-}
-
-/// Non-linearity of the SDF over `aabb`, in world units: how far the centre value
-/// deviates from the average of the corner values. A linear SDF (flat plane,
-/// half-space) gives ~0 — trilinear interpolation already reproduces it exactly,
-/// so the brick needs no further subdivision. Curved surfaces (sphere, torus,
-/// edges) give a positive value that grows with sub-brick detail.
-pub fn sdf_curvature(scene: &SdfScene, aabb: &AABB) -> f32 {
+/// Estimated tangent-plane reconstruction error of a brick over `aabb`, in WORLD
+/// units — the basis of error-driven refinement.
+///
+/// A brick stores, per voxel, the distance and the analytic normal, and the
+/// renderer reconstructs the surface by blending per-corner tangent planes
+/// `d_i + n_i·(p − corner_i)`. That reconstruction is **exact for planar
+/// surfaces**, so the only error is the surface's deviation from planar over one
+/// voxel. We measure it directly: at several seed points across the node, project
+/// onto the surface and sample the true SDF one voxel away along the surface
+/// tangents — points the tangent plane predicts to be *on* the surface (value 0).
+/// Their actual `|SDF|` is the residual; we take the max over all seeds.
+///
+/// Properties that make it the right refinement driver:
+/// - **planar / half-space → 0** (tangent-exact ⇒ the floor never over-refines);
+/// - **curved → grows with sub-voxel detail** (sphere/torus refine where needed);
+/// - **sharp edge → bounded by ~`voxel_size`** (the field is 1-Lipschitz, the
+///   probe moves by `h`, so `|SDF| ≤ h`). This is the key difference from a
+///   curvature term, which diverges on edges and caused runaway subdivision.
+///
+/// **Multi-seed** (the 8 octant centres) so a node holding several surfaces — a
+/// flat floor *and* a sphere — reports the worst, not just the nearest.
+pub fn reconstruction_residual(scene: &SdfScene, aabb: &AABB) -> f32 {
     let nodes = scene.get_nodes(aabb);
     if nodes.is_empty() { return 0.0; }
 
-    let mid = aabb.center();
-    let c   = SdfScene::sample(&nodes, &mid).value;
+    let h    = (aabb.max.x - aabb.min.x) / BRICK_SIZE as f32; // voxel size at this LOD
+    let min  = aabb.min;
+    let ext  = aabb.max - aabb.min;
+    let mut resid = 0.0f32;
 
-    let min = aabb.min;
-    let max = aabb.max;
-    let corners = [
-        Point3::new(min.x, min.y, min.z), Point3::new(max.x, min.y, min.z),
-        Point3::new(min.x, max.y, min.z), Point3::new(max.x, max.y, min.z),
-        Point3::new(min.x, min.y, max.z), Point3::new(max.x, min.y, max.z),
-        Point3::new(min.x, max.y, max.z), Point3::new(max.x, max.y, max.z),
-    ];
-    let mut mean = 0.0;
-    for p in &corners { mean += SdfScene::sample(&nodes, p).value; }
-    mean /= 8.0;
+    // Seed at the 8 octant centres (¼ / ¾ along each axis).
+    for &fz in &[0.25f32, 0.75] {
+    for &fy in &[0.25f32, 0.75] {
+    for &fx in &[0.25f32, 0.75] {
+        let seed = Point3::new(min.x + ext.x * fx, min.y + ext.y * fy, min.z + ext.z * fz);
+        let s0 = SdfScene::sample(&nodes, &seed);
 
-    (c - mean).abs()
-}
+        // Skip octants whose surface is too far to lie in this octant.
+        if s0.value.abs() > 0.5 * ext.x { continue; }
 
-/// Surface-proximity SDF error for `node`: fraction of sample points where
-/// the analytical SDF is within 2 voxels of the surface at this node's resolution.
-/// Returns 0..=1. Cheap approximation: samples 9 points (corners + centre).
-pub fn sdf_approximation_error(node: &SvoNode, sdf: &SdfScene) -> f32 {
-    let voxel_size = (node.aabb.max.x - node.aabb.min.x) / BRICK_SIZE as f32;
-    let threshold  = voxel_size * 2.0;
-
-    let nodes = sdf.get_nodes(&node.aabb);
-    if nodes.is_empty() { return 0.0; }
-
-    let min = node.aabb.min;
-    let max = node.aabb.max;
-    let mid = node.aabb.center();
-
-    let pts = [
-        mid,
-        Point3::new(min.x, min.y, min.z),
-        Point3::new(max.x, min.y, min.z),
-        Point3::new(min.x, max.y, min.z),
-        Point3::new(max.x, max.y, min.z),
-        Point3::new(min.x, min.y, max.z),
-        Point3::new(max.x, min.y, max.z),
-        Point3::new(min.x, max.y, max.z),
-        Point3::new(max.x, max.y, max.z),
-    ];
-
-    let near = pts.iter()
-        .filter(|&&p| SdfScene::sample(&nodes, &p).value.abs() < threshold)
-        .count();
-
-    near as f32 / pts.len() as f32
-}
-
-/// Combined score: screen-space (gate) amplified by SDF surface proximity.
-/// `sdf_weight = 0.0` → pure screen-space (fast).
-/// `sdf_weight = 1.0` → surface areas get up to 2× higher priority.
-pub fn compute_score(
-    node:          &SvoNode,
-    cam:           &Point3<f32>,
-    vp:            &nalgebra::Matrix4<f32>,
-    sdf:           Option<&SdfScene>,
-    lod_threshold: f32,
-    sdf_weight:    f32,
-) -> f32 {
-    let ss = screen_score(&node.aabb, cam, vp);
-    if ss < 1e-4 { return -ss; }
-
-    if sdf_weight > 0.0 {
-        if let Some(scene) = sdf {
-            if ss > lod_threshold * 0.5 {
-                let err = sdf_approximation_error(node, scene);
-                return ss * (1.0 + sdf_weight * err);
-            }
+        let n = s0.gradient.try_normalize(1e-6).unwrap_or_else(Vector3::y);
+        let surf = seed - n * s0.value;           // one Newton step onto the surface
+        if surf.coords.zip_map(&min.coords, |a, b| a - b).iter().any(|&d| d < -h)
+            || (aabb.max - surf).iter().any(|&d| d < -h)
+        {
+            continue;                              // surface point not within the node
         }
-    }
-    ss
+
+        // Two orthogonal tangents; |true SDF| one voxel out = local non-planarity.
+        let a  = if n.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+        let t1 = n.cross(&a).normalize();
+        let t2 = n.cross(&t1);
+        resid = resid.max(SdfScene::sample(&nodes, &(surf + t1 * h)).value.abs());
+        resid = resid.max(SdfScene::sample(&nodes, &(surf + t2 * h)).value.abs());
+    }}}
+    resid
 }

@@ -287,11 +287,15 @@ data path (scene → traversal → brick content → tracer) and found every bug
   struct (→ scalar pads).
 - **Material**: proximity-weighted trilinear blend of the 8 corner materials
   (`exp(-max(sd,0)/vs)`), ported from the clipmap — done (`sampleMaterial`).
-- **Error-driven refinement** (curvature/distance) is the next real feature: with the
-  tangent-plane reconstruction in place, the residual `|reconstructed − true|` (sampled at
-  cell midpoints, projected to pixels) gives a principled "refine until < 1 px" metric →
-  no LOD transitions by construction. Wired in spirit (`_sdf_weight` reserved) but disabled
-  — the earlier curvature term was unbounded on sharp edges; needs a depth cap.
+- **Error-driven refinement — done** (`error_metric::reconstruction_residual`). A surface
+  leaf below `EMPTY_CAP` keeps splitting only while its residual (true SDF probed one voxel
+  along the surface tangents, where the tangent-plane reconstruction predicts 0) exceeds
+  `RESID_DIAG_FRAC` of the node diagonal, scaled by the `sdf_weight` ("Curve detail")
+  slider. Flat surfaces (residual 0) stop at `EMPTY_CAP`; curved ones refine where they
+  deviate; the screen-space gate supplies distance falloff. Crucially the residual is
+  **bounded by ~`voxel_size` on sharp edges** (1-Lipschitz field), so — unlike the old
+  curvature term — it does not run away on box corners. `sdf_weight = 0` falls back to pure
+  screen-space LOD.
 - **LOD seams (T-junctions)** between neighbour nodes of different depth are not blended;
   exact for the flat floor (linear ⇒ tangent-exact), mild on curves now that each brick
   fits better. The error metric above is the proper fix.

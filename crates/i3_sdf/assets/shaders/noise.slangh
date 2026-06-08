@@ -1,0 +1,248 @@
+// ─── GPU noise library (mirrors crates/i3_noise / rnoise) ──────────────────────
+// Scalar (one invocation = one point) port of the SoA CPU generators. Parity with
+// the CPU reference is REQUIRED (the SVO culls/refines on CPU, bakes on GPU): the
+// integer hash, gradient table, fade curves and fBm accumulation must match
+// crates/i3_noise/src/{perlin,fbm}.rs bit-for-bit. Do not "improve" the math here
+// without changing the CPU side in lockstep.
+//
+// Each op operates on an explicit state (value + analytic gradient) and takes the
+// position + footprint as inputs — VM-ready (M2 will dispatch these from a node
+// buffer instead of the hand-composed terrainDensity below).
+#ifndef I3_NOISE_SLANGH
+#define I3_NOISE_SLANGH
+
+struct NV { float v; float3 g; };   // value + ∂value/∂position
+
+// ── Perlin (gradient noise) — mirror of perlin.rs ──────────────────────────────
+// Integer hash. Rust uses i32 wrapping mul + ARITHMETIC right shift, so we use
+// `int` here (HLSL `int >>` is arithmetic; uint would be logical → mismatch).
+int perlinHash(int seed, int x, int y, int z)
+{
+    int c1 = (int)0x9E3779B1u, c2 = (int)0x85EBCA6Bu, c3 = (int)0xC2B2AE35u;
+    int h = (seed + x) * c1;
+    h = ((h ^ (h >> 16)) + y) * c2;
+    h = ((h ^ (h >> 13)) + z) * c3;
+    return h ^ (h >> 16);
+}
+
+// 12 standard gradients selected from the hash (mirror get_gradient_simd).
+float3 perlinGrad(int hash)
+{
+    int h = min(hash & 15, 11);
+    float s0 = ((h & 1) == 0) ?  1.0 : -1.0;
+    float s1 = ((h & 2) == 0) ?  1.0 : -1.0;
+    bool zZero = h < 4;     // h 0-3 : (±1,±1, 0)
+    bool xZero = h > 7;     // h 8-11: ( 0,±1,±1)
+    float gx = xZero ? 0.0 : s0;
+    float gy = xZero ? s0 : (zZero ? s1 : 0.0);
+    float gz = zZero ? 0.0 : s1;
+    return float3(gx, gy, gz);
+}
+
+float perlinFade(float t)      { return t*t*t*(t*(t*6.0 - 15.0) + 10.0); }     // 6t⁵-15t⁴+10t³
+float perlinFadeDeriv(float t) { float tm = t - 1.0; return 30.0*t*t*tm*tm; }  // 30t²(t-1)²
+
+// Perlin value + analytic gradient at p (mirror of perlin.rs sample()).
+NV perlin3(float3 p, int seed)
+{
+    float3 p0f = floor(p);
+    int3   i0  = int3(p0f);
+    int3   i1  = i0 + 1;
+    float3 f0  = p - p0f;
+    float3 f1  = f0 - 1.0;
+
+    float3 g000 = perlinGrad(perlinHash(seed, i0.x, i0.y, i0.z));
+    float3 g100 = perlinGrad(perlinHash(seed, i1.x, i0.y, i0.z));
+    float3 g010 = perlinGrad(perlinHash(seed, i0.x, i1.y, i0.z));
+    float3 g110 = perlinGrad(perlinHash(seed, i1.x, i1.y, i0.z));
+    float3 g001 = perlinGrad(perlinHash(seed, i0.x, i0.y, i1.z));
+    float3 g101 = perlinGrad(perlinHash(seed, i1.x, i0.y, i1.z));
+    float3 g011 = perlinGrad(perlinHash(seed, i0.x, i1.y, i1.z));
+    float3 g111 = perlinGrad(perlinHash(seed, i1.x, i1.y, i1.z));
+
+    float d000 = dot(g000, float3(f0.x, f0.y, f0.z));
+    float d100 = dot(g100, float3(f1.x, f0.y, f0.z));
+    float d010 = dot(g010, float3(f0.x, f1.y, f0.z));
+    float d110 = dot(g110, float3(f1.x, f1.y, f0.z));
+    float d001 = dot(g001, float3(f0.x, f0.y, f1.z));
+    float d101 = dot(g101, float3(f1.x, f0.y, f1.z));
+    float d011 = dot(g011, float3(f0.x, f1.y, f1.z));
+    float d111 = dot(g111, float3(f1.x, f1.y, f1.z));
+
+    float u = perlinFade(f0.x), v = perlinFade(f0.y), w = perlinFade(f0.z);
+
+    // value = d000 + u·k0 + v·k1 + w·k2 + uv·k3 + uw·k4 + vw·k5 + uvw·k6
+    float k0 = d100 - d000;
+    float k1 = d010 - d000;
+    float k2 = d001 - d000;
+    float k3 = d110 - d010 - k0;
+    float k4 = d101 - d001 - k0;
+    float k5 = d011 - d001 - k1;
+    float k6 = d111 - d011 - d101 + d001 - k3;
+
+    float value = d000 + u*k0 + v*k1 + w*k2 + u*v*k3 + u*w*k4 + v*w*k5 + u*v*w*k6;
+
+    // Per-coefficient gradients (∂dXYZ/∂p = gXYZ).
+    float3 k0g = g100 - g000;
+    float3 k1g = g010 - g000;
+    float3 k2g = g001 - g000;
+    float3 k3g = g110 - g010 - k0g;
+    float3 k4g = g101 - g001 - k0g;
+    float3 k5g = g011 - g001 - k1g;
+    float3 k6g = g111 - g011 - g101 + g001 - k3g;
+
+    float du = perlinFadeDeriv(f0.x), dv = perlinFadeDeriv(f0.y), dw = perlinFadeDeriv(f0.z);
+
+    float gx = g000.x
+        + du*k0 + u*k0g.x + v*k1g.x + w*k2g.x
+        + du*v*k3 + u*v*k3g.x + du*w*k4 + u*w*k4g.x
+        + v*w*k5g.x + du*v*w*k6 + u*v*w*k6g.x;
+    float gy = g000.y
+        + u*k0g.y + dv*k1 + v*k1g.y + w*k2g.y
+        + u*dv*k3 + u*v*k3g.y + u*w*k4g.y
+        + dv*w*k5 + v*w*k5g.y + u*dv*w*k6 + u*v*w*k6g.y;
+    float gz = g000.z
+        + u*k0g.z + v*k1g.z + dw*k2 + w*k2g.z
+        + u*v*k3g.z + u*dw*k4 + u*w*k4g.z
+        + v*dw*k5 + v*w*k5g.z + u*v*dw*k6 + u*v*w*k6g.z;
+
+    NV r; r.v = value; r.g = float3(gx, gy, gz); return r;
+}
+
+// ── fBm — mirror of fbm.rs (same source/seed each octave, footprint Nyquist LOD) ─
+NV fbm3(float3 p, float3 fp, int seed, int octaves, float lac, float gain)
+{
+    float freq = 1.0, amp = 1.0;
+    float  accv = 0.0;
+    float3 accg = float3(0,0,0);
+    for (int o = 0; o < octaves; o++)
+    {
+        // Per-octave LOD: linear fade as the scaled footprint reaches Nyquist (≥1).
+        float3 sfp = fp * freq;
+        float maxd = max(abs(sfp.x), max(abs(sfp.y), abs(sfp.z)));
+        float lod  = max(1.0 - maxd, 0.0);
+
+        NV s = perlin3(p * freq, seed);
+        accv += s.v * (amp * lod);
+        accg += s.g * (freq * amp * lod);   // chain rule (freq) × octave weight (amp) × lod
+
+        freq *= lac;
+        amp  *= gain;
+    }
+    NV r; r.v = accv; r.g = accg; return r;
+}
+
+// ── Bytecode VM (M2) ───────────────────────────────────────────────────────────
+// The noise graph is compiled (CPU) to a flat op stream and interpreted here with a
+// value stack (NV) + a position-context stack (for domain ops). Mirrors the rnoise
+// combinators/warps op-for-op (CPU parity). Domain ops bracket their inner subtree
+// as DPUSH … DPOP: DPUSH transforms the current position/footprint (forward Jacobian
+// on the footprint) and records the matrix M whose transpose maps the inner gradient
+// back to the parent frame; DPOP restores pos/fp and applies Mᵀ to the top gradient.
+struct VmOp  { uint op; uint aux; float a; float b; float c; float d; float e; float f; }; // 32 B (16-mult; stride-safe)
+struct VmCtx { float3 pos; float3 fp; float3 m0; float3 m1; float3 m2; };
+
+static const uint OP_CONST = 0u,  OP_PERLIN = 1u,  OP_FBM = 2u;
+static const uint OP_ADD = 10u, OP_SUB = 11u, OP_MUL = 12u, OP_MIN = 13u, OP_MAX = 14u, OP_NEG = 15u;
+static const uint OP_SCALEBIAS = 20u, OP_ABS = 21u, OP_CLAMP = 22u;
+static const uint OP_DPUSH = 30u, OP_DPOP = 31u;
+static const uint OP_END = 99u;   // terminator (avoids threading an op-count everywhere)
+static const uint DOM_SCALE = 0u, DOM_TRANSLATE = 1u, DOM_ROTATE = 2u, DOM_WARP = 3u;
+
+// The compiled graph, bound once for the bake and the render (analytic debug).
+[[vk::binding(3, 0)]] StructuredBuffer<VmOp> g_vm_ops;
+
+// Row-major rotation matrix (XYZ intrinsic, Z then Y then X) — mirror of DomainRotate.
+void rotRows(float px, float yw, float rl, out float3 r0, out float3 r1, out float3 r2)
+{
+    float sx = sin(px), cx = cos(px), sy = sin(yw), cy = cos(yw), sz = sin(rl), cz = cos(rl);
+    r0 = float3( cy*cz,                -cy*sz,                sy    );
+    r1 = float3( cx*sz + sx*sy*cz,      cx*cz - sx*sy*sz,   -sx*cy );
+    r2 = float3( sx*sz - cx*sy*cz,      sx*cz + cx*sy*sz,    cx*cy );
+}
+
+NV evalGraph(StructuredBuffer<VmOp> ops, uint base, float3 p0, float3 fp0)
+{
+    NV    vstack[12]; int vsp = 0;
+    VmCtx cstack[6];  int csp = 0;
+    float3 cpos = p0, cfp = fp0;
+
+    for (uint i = 0u; i < 256u; i++)   // sentinel-terminated, with a hard cap
+    {
+        VmOp o = ops[base + i];
+        if (o.op == OP_END) break;
+        // Seeds come through `aux` (uint); octaves/lac/gain through a/b/c.
+        if      (o.op == OP_PERLIN) { vstack[vsp++] = perlin3(cpos, int(o.aux)); }
+        else if (o.op == OP_FBM)    { vstack[vsp++] = fbm3(cpos, cfp, int(o.aux), int(o.a), o.b, o.c); }
+        else if (o.op == OP_CONST)  { NV r; r.v = o.a; r.g = float3(0,0,0); vstack[vsp++] = r; }
+        else if (o.op == OP_ADD) { NV b = vstack[--vsp]; NV a = vstack[--vsp]; NV r; r.v = a.v + b.v; r.g = a.g + b.g; vstack[vsp++] = r; }
+        else if (o.op == OP_SUB) { NV b = vstack[--vsp]; NV a = vstack[--vsp]; NV r; r.v = a.v - b.v; r.g = a.g - b.g; vstack[vsp++] = r; }
+        else if (o.op == OP_MUL) { NV b = vstack[--vsp]; NV a = vstack[--vsp]; NV r; r.v = a.v * b.v; r.g = a.v * b.g + b.v * a.g; vstack[vsp++] = r; }
+        else if (o.op == OP_MIN) { NV b = vstack[--vsp]; NV a = vstack[--vsp]; vstack[vsp++] = (a.v <= b.v) ? a : b; }
+        else if (o.op == OP_MAX) { NV b = vstack[--vsp]; NV a = vstack[--vsp]; vstack[vsp++] = (a.v >= b.v) ? a : b; }
+        else if (o.op == OP_NEG) { NV a = vstack[vsp-1]; a.v = -a.v; a.g = -a.g; vstack[vsp-1] = a; }
+        else if (o.op == OP_SCALEBIAS) { NV a = vstack[vsp-1]; a.v = a.v * o.a + o.b; a.g *= o.a; vstack[vsp-1] = a; }
+        else if (o.op == OP_ABS) { NV a = vstack[vsp-1]; float s = (a.v >= 0.0) ? 1.0 : -1.0; a.v = abs(a.v); a.g *= s; vstack[vsp-1] = a; }
+        else if (o.op == OP_CLAMP) { NV a = vstack[vsp-1]; bool act = (a.v > o.a) && (a.v < o.b); a.v = clamp(a.v, o.a, o.b); a.g = act ? a.g : float3(0,0,0); vstack[vsp-1] = a; }
+        else if (o.op == OP_DPUSH)
+        {
+            VmCtx c; c.pos = cpos; c.fp = cfp;
+            if (o.aux == DOM_SCALE)
+            {
+                float f = o.a; cpos *= f; cfp *= f;
+                c.m0 = float3(f,0,0); c.m1 = float3(0,f,0); c.m2 = float3(0,0,f);
+            }
+            else if (o.aux == DOM_TRANSLATE)
+            {
+                cpos += float3(o.a, o.b, o.c);
+                c.m0 = float3(1,0,0); c.m1 = float3(0,1,0); c.m2 = float3(0,0,1);
+            }
+            else if (o.aux == DOM_ROTATE)
+            {
+                float3 r0, r1, r2; rotRows(o.a, o.b, o.c, r0, r1, r2);
+                cpos = float3(dot(r0, cpos), dot(r1, cpos), dot(r2, cpos));
+                cfp  = float3(dot(r0, cfp ), dot(r1, cfp ), dot(r2, cfp ));
+                c.m0 = r0; c.m1 = r1; c.m2 = r2;
+            }
+            else // DOM_WARP: consume the 3 warp fields already on the stack
+            {
+                NV sz = vstack[--vsp]; NV sy = vstack[--vsp]; NV sx = vstack[--vsp];
+                float iv = o.a;
+                cpos += iv * float3(sx.v, sy.v, sz.v);
+                cfp  += iv * float3(dot(sx.g, c.fp), dot(sy.g, c.fp), dot(sz.g, c.fp)); // forward Jacobian
+                c.m0 = float3(1,0,0) + iv * sx.g;   // rows of J = I + iv·∇W
+                c.m1 = float3(0,1,0) + iv * sy.g;
+                c.m2 = float3(0,0,1) + iv * sz.g;
+            }
+            cstack[csp++] = c;
+        }
+        else if (o.op == OP_DPOP)
+        {
+            VmCtx c = cstack[--csp];
+            cpos = c.pos; cfp = c.fp;
+            float3 g = vstack[vsp-1].g;
+            vstack[vsp-1].g = g.x * c.m0 + g.y * c.m1 + g.z * c.m2;   // Mᵀ·g
+        }
+    }
+    return vstack[0];
+}
+
+// ── Terrain shaping (M2) ───────────────────────────────────────────────────────
+// The noise graph (frequency, fBm, warps…) lives in g_vm_ops and yields the height
+// noise + its analytic gradient w.r.t. p (the frequency scaling is a DomainScale node
+// inside the graph, so no extra F factor here). Only the amplitude/Lipschitz shaping
+// stays hard-coded. T_AMP MUST match the `amplitude` passed to volume_terrain (CPU).
+static const float T_AMP = 14.0;
+
+// d(p) = p.y − A·noise(p). The noise depends on all of p, so the isosurface folds
+// (overhangs/caves). Lipschitz-normalize so the SVO sphere-tracer is safe.
+NV terrainDensity(float3 p, float3 fp)
+{
+    NV n = evalGraph(g_vm_ops, 0u, p, fp);
+    float d = p.y - T_AMP * n.v;
+    float3 g = float3(-T_AMP*n.g.x, 1.0 - T_AMP*n.g.y, -T_AMP*n.g.z);
+    float gl = max(length(g), 1e-6);
+    NV r; r.v = d / gl; r.g = g / gl; return r;
+}
+
+#endif // I3_NOISE_SLANGH

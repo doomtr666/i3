@@ -36,6 +36,36 @@ struct EditOp {
 
 // ─── Scene builder ────────────────────────────────────────────────────────────
 
+/// Terrain amplitude — MUST match `T_AMP` in noise.slangh — and the SVO region.
+const TERRAIN_AMP: f32 = 14.0;
+const TERRAIN_REGION: [f32; 3] = [200.0, 36.0, 200.0];
+
+/// The terrain noise graph — single source of truth for the CPU generator
+/// (`build_rnoise`) and the GPU bytecode (`compile`). DomainScale carries the base
+/// frequency so both backends agree without a duplicated constant.
+fn terrain_graph() -> i3_sdf::NoiseGraph {
+    use i3_sdf::NoiseGraph as G;
+    // Base terrain: rich fBm(Perlin), base wavelength 48 m, 5 octaves (down to ~3 m).
+    let base = G::DomainScale {
+        factor: 1.0 / 48.0,
+        src: Box::new(G::Fbm { seed: 1337, octaves: 5, lacunarity: 2.0, gain: 0.5 }),
+    };
+    // Warp fields: low-frequency fBm (wavelength 96 m) → large-scale organic distortion.
+    let field = |seed: u32| {
+        Box::new(G::DomainScale {
+            factor: 1.0 / 96.0,
+            src: Box::new(G::Fbm { seed, octaves: 3, lacunarity: 2.0, gain: 0.5 }),
+        })
+    };
+    G::DomainWarp {
+        inner: Box::new(base),
+        x: field(11),
+        y: field(22),
+        z: field(33),
+        intensity: 42.0, // domain displacement ≈ ±42 m → strong distortion
+    }
+}
+
 fn build_sdf_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
     use i3_math::Transform;
     use i3_math::nalgebra::Vector3;
@@ -98,11 +128,19 @@ fn build_sdf_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
         },
         7,
     );
-    scene.add(
-        &Transform::new(Vector3::new(0.0, -1.0, 0.0), id, 1.0),
-        &SdfPrimitive::Box {
-            half_extents: Vector3::new(200.0, 1.0, 200.0),
-        },
+    // 3D volumetric terrain as the ground. IDENTITY transform is required: the GPU
+    // bake evaluates the graph in world space, so local must equal world for CPU/GPU
+    // parity. The CPU generator and the GPU bytecode both come from `terrain_graph()`
+    // (single source of truth); the frequency lives in the graph (DomainScale), so
+    // the primitive's frequency is 1.0. Amplitude must match T_AMP in noise.slangh.
+    scene.add_mat(
+        &Transform::new(Vector3::zeros(), id, 1.0),
+        &SdfPrimitive::volume_terrain(
+            Vector3::new(TERRAIN_REGION[0], TERRAIN_REGION[1], TERRAIN_REGION[2]),
+            TERRAIN_AMP,            // amplitude  → T_AMP
+            terrain_graph().build_rnoise(),
+        ),
+        5, // terrain material → TERRAIN_MAT
     );
 
     scene.build_bvh();
@@ -458,6 +496,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         gpu_buffers.clone(),
         svo_debug_flags.clone(),
         svo_enabled.clone(),
+        terrain_graph().compile(),
     );
     for pass in svo_compute {
         render_graph.extra_pre_gbuffer_passes.push(pass);

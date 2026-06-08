@@ -2,6 +2,7 @@ pub mod gpu_scene;
 pub mod gpu_buffers;
 pub mod svo;
 pub mod error_metric;
+pub mod noise_graph;
 pub mod passes;
 
 #[cfg(feature = "debug-ui")]
@@ -9,6 +10,7 @@ pub mod debug_ui;
 
 pub use svo::{SvoTree, SvoNode, SvoState};
 pub use gpu_buffers::SvoGpuBuffers;
+pub use noise_graph::{NoiseGraph, VmOp};
 pub use passes::create_svo_passes;
 
 #[cfg(feature = "debug-ui")]

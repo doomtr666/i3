@@ -1,38 +1,44 @@
-#![allow(dead_code)]
-#![allow(unused)]
+mod generator;
+pub use generator::*;
 
-// generator traits
-mod scalar_generator;
-pub use scalar_generator::{ScalarGenerator, ScalarPosition, ScalarSample};
-
-mod vec_generator;
-pub use vec_generator::{VecGenerator, VecPosition, VecSample};
-
-// base noises
 mod simplex;
-pub use simplex::Simplex;
+pub use simplex::*;
 
-#[cfg(target_arch = "x86_64")]
-mod simplex_avx;
-#[cfg(target_arch = "x86_64")]
-pub use simplex_avx::SimplexAvx;
+mod open_simplex2;
+pub use open_simplex2::*;
 
-mod builder;
-pub use builder::{SimplexBuilder, SimplexGenerator, FbmBuilder, FbmGenerator, ErosionFbmBuilder, ErosionFbmGenerator};
+mod worley;
+pub use worley::*;
 
-// combinators
+mod synthetic;
+pub use synthetic::*;
+
+mod curve;
+pub use curve::*;
+
+mod hybrid_multi;
+pub use hybrid_multi::*;
+
+mod domain_warp_fractal;
+pub use domain_warp_fractal::*;
+
 mod fbm;
-pub use fbm::FbmVec;
+pub use fbm::*;
 
-#[cfg(target_arch = "x86_64")]
-mod fbm_avx;
-#[cfg(target_arch = "x86_64")]
-pub use fbm_avx::FbmAvx;
+mod ridged;
+pub use ridged::*;
 
-mod erosion_fbm;
-pub use erosion_fbm::ErosionFbmVec;
+mod billow;
+pub use billow::*;
 
-#[cfg(target_arch = "x86_64")]
-mod erosion_fbm_avx;
-#[cfg(target_arch = "x86_64")]
-pub use erosion_fbm_avx::ErosionFbmAvx;
+mod warp;
+pub use warp::*;
+
+mod combinators;
+pub use combinators::*;
+
+mod perlin;
+pub use perlin::*;
+
+mod value;
+pub use value::*;

@@ -6,7 +6,6 @@ authors.workspace = true
 
 [dependencies]
 i3_math  = { path = "../i3_math" }
-i3_voxel = { path = "../i3_voxel" }
 half     = { workspace = true }
 rayon    = { workspace = true }
 nalgebra = { workspace = true }

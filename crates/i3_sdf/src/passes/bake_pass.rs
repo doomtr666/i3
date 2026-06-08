@@ -17,6 +17,7 @@ pub struct SvoBakePass {
     jobs_virt:       BufferHandle,
     prims_virt:      BufferHandle,
     geom_atlas_virt: BufferHandle,
+    vm_ops_virt:     BufferHandle,
 }
 
 impl SvoBakePass {
@@ -27,13 +28,14 @@ impl SvoBakePass {
             jobs_virt:       BufferHandle::INVALID,
             geom_atlas_virt: BufferHandle::INVALID,
             prims_virt:      BufferHandle::INVALID,
+            vm_ops_virt:     BufferHandle::INVALID,
         }
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct BakePC { prim_count: u32, _pad: [u32; 3] }
+struct BakePC { prim_count: u32, terrain_on: u32, _pad: [u32; 2] }
 
 impl RenderPass for SvoBakePass {
     fn name(&self) -> &str { "SvoBakePass" }
@@ -52,9 +54,11 @@ impl RenderPass for SvoBakePass {
         self.jobs_virt       = builder.resolve_buffer("SvoBakeJobs");
         self.prims_virt      = builder.resolve_buffer("SvoPrims");
         self.geom_atlas_virt = builder.resolve_buffer("SvoGeomAtlas");
+        self.vm_ops_virt     = builder.resolve_buffer("SvoVmOps");
 
         builder.read_buffer(self.jobs_virt,        ResourceUsage::SHADER_READ);
         builder.read_buffer(self.prims_virt,       ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.vm_ops_virt,      ResourceUsage::SHADER_READ);
         builder.write_buffer(self.geom_atlas_virt, ResourceUsage::SHADER_WRITE);
     }
 
@@ -69,11 +73,13 @@ impl RenderPass for SvoBakePass {
             DescriptorWrite::storage_buffer(0, 0, self.jobs_virt),
             DescriptorWrite::storage_buffer(0, 1, self.prims_virt),
             DescriptorWrite::storage_buffer(0, 2, self.geom_atlas_virt),
+            DescriptorWrite::storage_buffer(0, 3, self.vm_ops_virt),
         ]);
         ctx.bind_descriptor_set(0, set);
 
         let prim_count = self.shared.prim_count.load(Ordering::Acquire);
-        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &BakePC { prim_count, _pad: [0; 3] });
+        let terrain_on = self.shared.terrain_on.load(Ordering::Acquire);
+        ctx.push_constant_data(ShaderStageFlags::Compute, 0, &BakePC { prim_count, terrain_on, _pad: [0; 2] });
         ctx.dispatch(job_count, 1, 1);
     }
 }

@@ -1,6 +1,0 @@
-BakeManifest(
-    bundle_name: "voxel",
-    pipelines_dirs: [
-        "pipelines",
-    ],
-)

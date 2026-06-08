@@ -6,9 +6,10 @@ authors.workspace = true
 
 [dependencies]
 i3_math  = { path = "../i3_math" }
-i3_voxel = { path = "../i3_voxel" }
 i3_gfx   = { path = "../i3_gfx" }
 i3_io    = { path = "../i3_io" }
+i3_voxel = { path = "../i3_voxel" }
+i3_noise = { path = "../i3_noise" }
 rayon    = { workspace = true }
 nalgebra = { workspace = true }
 tracing  = { workspace = true }

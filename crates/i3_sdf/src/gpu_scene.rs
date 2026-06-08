@@ -106,7 +106,9 @@ pub fn pack_node(node: &i3_voxel::SdfNode) -> Option<GpuPrimitive> {
             data0: *major_radius, data1: *minor_radius, data2: 0.0,
             prim_type: GpuPrimitive::TORUS, subtract, material_id, _pad: 0,
         },
-        SdfPrimitive::TerrainBox { .. } => return None,
+        // Terrain is evaluated by the bake's noise library (terrainDensity), not as an
+        // analytic primitive — skip here; the setup pass flags terrain separately.
+        SdfPrimitive::TerrainBox { .. } | SdfPrimitive::VolumeTerrain { .. } => return None,
     };
     Some(prim)
 }

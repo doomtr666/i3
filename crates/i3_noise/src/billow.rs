@@ -1,20 +1,20 @@
 use crate::{Generator, NoisePoint, NoiseSample};
 use wide::f32x8;
 
-pub struct Fbm<N> {
+pub struct Billow<N> {
     pub source: N,
     pub octaves: usize,
     pub lacunarity: f32,
     pub gain: f32,
 }
 
-impl<N: Generator> Fbm<N> {
+impl<N: Generator> Billow<N> {
     pub fn new(source: N, octaves: usize, lacunarity: f32, gain: f32) -> Self {
         Self { source, octaves, lacunarity, gain }
     }
 }
 
-impl<N: Generator> Generator for Fbm<N> {
+impl<N: Generator> Generator for Billow<N> {
     fn sample(&self, pos: &NoisePoint) -> NoiseSample {
         let x = f32x8::from(pos.x);
         let y = f32x8::from(pos.y);
@@ -34,7 +34,6 @@ impl<N: Generator> Generator for Fbm<N> {
         for _ in 0..self.octaves {
             let fv = f32x8::splat(freq);
 
-            // Per-lane LOD: linear fade when scaled footprint approaches Nyquist (>= 1)
             let max_d = (pdx * fv).abs()
                 .max((pdy * fv).abs())
                 .max((pdz * fv).abs());
@@ -50,15 +49,18 @@ impl<N: Generator> Generator for Fbm<N> {
             };
 
             let s = self.source.sample(&scaled_pos);
+            let sv = f32x8::from(s.value);
 
-            // deriv_scale = freq * amp : chain rule (freq) + octave weight (amp)
-            let amp_v       = f32x8::splat(amp)        * lod;
-            let deriv_scale = f32x8::splat(freq * amp) * lod;
+            // Billow transform: |sv| * 2 - 1
+            // d(|sv|*2-1)/d(sv) = 2 * sign(sv)
+            let transformed = sv.abs().mul_add(f32x8::splat(2.0), f32x8::splat(-1.0));
+            let amp_v       = f32x8::splat(amp) * lod;
+            let deriv_scale = f32x8::splat(freq * amp) * lod * sv.signum() * f32x8::splat(2.0);
 
-            acc_v  = f32x8::from(s.value).mul_add(amp_v,       acc_v);
-            acc_dx = f32x8::from(s.dx)   .mul_add(deriv_scale, acc_dx);
-            acc_dy = f32x8::from(s.dy)   .mul_add(deriv_scale, acc_dy);
-            acc_dz = f32x8::from(s.dz)   .mul_add(deriv_scale, acc_dz);
+            acc_v  = transformed.mul_add(amp_v, acc_v);
+            acc_dx = f32x8::from(s.dx).mul_add(deriv_scale, acc_dx);
+            acc_dy = f32x8::from(s.dy).mul_add(deriv_scale, acc_dy);
+            acc_dz = f32x8::from(s.dz).mul_add(deriv_scale, acc_dz);
 
             freq *= self.lacunarity;
             amp  *= self.gain;

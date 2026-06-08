@@ -1,4 +1,5 @@
 #include "common.slangh"
+#include "noise.slangh"   // terrainDensity — for analytic debug (bit 4/5) parity with the bake
 
 // ─── Set 0: SVO buffers ───────────────────────────────────────────────────────
 struct GpuSvoNode
@@ -22,7 +23,7 @@ struct GpuPrimitive
 [[vk::binding(2, 0)]] StructuredBuffer<GpuPrimitive> prims;
 
 // ─── Push constants ───────────────────────────────────────────────────────────
-struct SvoPC { uint node_count; uint debug_flags; uint prim_count; uint _pad; };
+struct SvoPC { uint node_count; uint debug_flags; uint prim_count; uint terrain_on; };
 [[vk::push_constant]] SvoPC pc;
 
 // ─── Analytic SDF (ground-truth, bypasses bricks) ─────────────────────────────
@@ -56,6 +57,11 @@ float gtScene(float3 p, out uint mat_id)
         float d = gtEvalPrim(p, prims[i]);
         if (prims[i].subtract != 0u) { empty = min(empty, d); }
         else { solid = min(solid, d); if (d < mind) { mind = d; mat_id = prims[i].material_id; } }
+    }
+    if (pc.terrain_on != 0u)
+    {
+        float td = terrainDensity(p, float3(0, 0, 0)).v;
+        if (td < solid) { solid = td; mat_id = 5u; }   // TERRAIN_MAT
     }
     return max(solid, -empty);
 }
@@ -261,7 +267,34 @@ Material sampleMaterial(float3 p)
     return kMaterials[0];
 }
 
-// ─── Normal via finite differences ───────────────────────────────────────────
+// ─── Terrain shading: slope + height layer blend ──────────────────────────────
+// First cut: solid layer colours (grass / rock / snow / dirt) blended by surface
+// slope (n.y) and height, with a low-frequency fBm jitter so the bands aren't
+// perfectly horizontal. Image textures (triplanar) slot in here later, per layer.
+Material terrainShade(float3 p, float3 n)
+{
+    float slope = saturate(n.y);                       // 1 = flat, 0 = vertical
+    float jit   = fbm3(p * 0.06, float3(0,0,0), 7, 3, 2.0, 0.5).v;
+    float h     = p.y + jit * 6.0;                      // jittered height for the bands
+
+    float3 cGrass = float3(0.13, 0.34, 0.10);
+    float3 cRock  = float3(0.30, 0.28, 0.26);
+    float3 cSnow  = float3(0.90, 0.93, 0.97);
+    float3 cDirt  = float3(0.26, 0.19, 0.12);
+
+    float wRock = 1.0 - smoothstep(0.45, 0.72, slope);                       // steep → rock
+    float wSnow = smoothstep(9.0, 17.0, h) * smoothstep(0.60, 0.80, slope);  // high & flat → snow
+    float wDirt = 1.0 - smoothstep(-9.0, -3.0, h);                           // low → dirt
+    float wGrass = saturate(1.0 - wRock - wSnow - wDirt);
+    float total  = wGrass + wRock + wSnow + wDirt + 1e-4;
+
+    Material m;
+    m.albedo    = (cGrass*wGrass + cRock*wRock + cSnow*wSnow + cDirt*wDirt) / total;
+    m.roughness = (0.85*wGrass + 0.90*wRock + 0.50*wSnow + 0.88*wDirt) / total;
+    m.metalness = 0.0;
+    return m;
+}
+
 // ─── GBuffer output ───────────────────────────────────────────────────────────
 struct GBufferOut
 {
@@ -384,14 +417,21 @@ GBufferOut fsMain(float4 svPos : SV_Position)
 
     if (!hit) discard;
 
-    // Smooth normal from the brick's analytic trilinear gradient.
+    // Normal from the brick's blended gradient. The trilinear blend is only C0, so its
+    // derivative jumps at brick boundaries → faint faceting ("quadrillage"). For terrain
+    // we instead re-evaluate the ANALYTIC normal at the hit (C∞, continuous), band-limited
+    // by the leaf voxel size so it doesn't alias at distance. One graph eval / terrain px.
     float3 n = normalize(hit_grad);
+    if (pc.terrain_on != 0u && hit_mat == 5u)   // TERRAIN_MAT
+        n = terrainDensity(hitPos, float3(hit_vs, hit_vs, hit_vs)).g;
 
     float4 clip     = mul(g_common.viewProjection, float4(hitPos, 1.0));
     float  ndcDepth = clip.z / clip.w;
 
-    // Proximity-weighted trilinear material blend (smooth transitions, not blocky).
-    Material mat = sampleMaterial(hitPos);
+    // Terrain → slope/height layer shading; everything else → the brick material blend.
+    Material mat = (pc.terrain_on != 0u && hit_mat == 5u)   // TERRAIN_MAT
+        ? terrainShade(hitPos, n)
+        : sampleMaterial(hitPos);
 
     GBufferOut o;
     o.albedo = float4(mat.albedo, 1.0);

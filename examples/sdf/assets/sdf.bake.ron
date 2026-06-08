@@ -4,4 +4,41 @@ BakeManifest(
         "pipelines",
         "../../../crates/i3_sdf/assets/pipelines",
     ],
+    // Terrain material layers (ambientCG 1K). Each packs Albedo (sRGB) + Normal (GL) +
+    // ORM (R=AO, G=Roughness, B=Metallic=0) → baked as `<name>_albedo/_normal/_orm`.
+    // Paths are relative to this manifest dir → repo-root assets/textures/.
+    material_sets: [
+        (
+            name: "terrain_snow",
+            albedo:    Some("../../../assets/textures/snow/Snow014_1K-PNG_Color.png"),
+            normal:    Some("../../../assets/textures/snow/Snow014_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/snow/Snow014_1K-PNG_Roughness.png"),
+            metallic:  None,
+            occlusion: Some("../../../assets/textures/snow/Snow014_1K-PNG_AmbientOcclusion.png"),
+        ),
+        (
+            name: "terrain_grass",
+            albedo:    Some("../../../assets/textures/grass/Ground037_1K-PNG_Color.png"),
+            normal:    Some("../../../assets/textures/grass/Ground037_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/grass/Ground037_1K-PNG_Roughness.png"),
+            metallic:  None,
+            occlusion: Some("../../../assets/textures/grass/Ground037_1K-PNG_AmbientOcclusion.png"),
+        ),
+        (
+            name: "terrain_rock",
+            albedo:    Some("../../../assets/textures/rock/Rock063_1K-PNG_Color.png"),
+            normal:    Some("../../../assets/textures/rock/Rock063_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/rock/Rock063_1K-PNG_Roughness.png"),
+            metallic:  None,
+            occlusion: Some("../../../assets/textures/rock/Rock063_1K-PNG_AmbientOcclusion.png"),
+        ),
+        (
+            name: "terrain_dirt",
+            albedo:    Some("../../../assets/textures/dirt/Ground103_1K-PNG_Color.png"),
+            normal:    Some("../../../assets/textures/dirt/Ground103_1K-PNG_NormalGL.png"),
+            roughness: Some("../../../assets/textures/dirt/Ground103_1K-PNG_Roughness.png"),
+            metallic:  None,
+            occlusion: Some("../../../assets/textures/dirt/Ground103_1K-PNG_AmbientOcclusion.png"),
+        ),
+    ],
 )

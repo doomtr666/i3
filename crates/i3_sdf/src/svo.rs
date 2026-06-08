@@ -3,8 +3,15 @@ use i3_voxel::SdfScene;
 
 use crate::{
     BRICK_BYTES, BRICK_SIZE, EMPTY_CAP, MAX_SVO_BRICKS, MAX_SVO_DEPTH, MAX_SVO_NODES,
+    error_metric::reconstruction_residual,
     gpu_scene::{GpuBrickJob, GpuSvoNode},
 };
+
+/// Surface-refinement target: a crossing leaf below `EMPTY_CAP` keeps splitting
+/// while its tangent-plane reconstruction residual exceeds this fraction of the
+/// node diagonal (scaled by `sdf_weight`). ~0.01 ⇒ refine until the brick is
+/// non-planar by less than ~0.14 voxel. Tuned live via the "Curve detail" slider.
+const RESID_DIAG_FRAC: f32 = 0.01;
 
 /// True if a surface may cross `aabb` — conservative, with NO false negatives.
 /// The SDF is 1-Lipschitz (exact primitives + min/max CSG), so if any point in
@@ -35,17 +42,22 @@ fn crosses_surface(scene: &SdfScene, aabb: &AABB) -> bool {
     // empty nodes count as "crossing" and refine into a fine empty shell → the
     // ray-marcher crawls through it and exhausts its budget → floor holes.
     const EPS: f32 = 1e-3;
+    // 5³ grid (was 3³): denser sampling catches surfaces that graze a leaf without a
+    // clear sign change on a coarse grid — the leaves near_surface borderline-misses
+    // with the d/max(|∇d|,1) estimate. Cheap: computed once per node (cached).
+    const N: usize = 5;
+    let step = 1.0 / (N - 1) as f32;
     let min = aabb.min;
     let ext = aabb.max - aabb.min;
     let mut has_pos = false;
     let mut has_neg = false;
-    for k in 0..3 {
-        for j in 0..3 {
-            for i in 0..3 {
+    for k in 0..N {
+        for j in 0..N {
+            for i in 0..N {
                 let p = Point3::new(
-                    min.x + ext.x * (i as f32 * 0.5),
-                    min.y + ext.y * (j as f32 * 0.5),
-                    min.z + ext.z * (k as f32 * 0.5),
+                    min.x + ext.x * (i as f32 * step),
+                    min.y + ext.y * (j as f32 * step),
+                    min.z + ext.z * (k as f32 * step),
                 );
                 let v = SdfScene::sample(&nodes, &p).value;
                 has_pos |= v > EPS;
@@ -78,6 +90,13 @@ pub struct SvoNode {
     pub parent:         u32,          // u32::MAX = root
     pub depth:          u8,
     pub octant:         u8,
+    // Cached surface metrics for this node's AABB (a function of the static scene, so
+    // computed ONCE at creation / on edit — never per frame). Lets the per-frame update
+    // be screen-space only, no SDF/noise evaluation. Invalidated via `compute_metrics`.
+    pub m_valid:   bool,   // false ⇒ metrics not yet computed (root, or after an edit)
+    pub m_near:    bool,   // near_surface: box may contain a surface (conservative)
+    pub m_crosses: bool,   // crosses_surface: a surface actually crosses (strict sign)
+    pub m_resid:   f32,    // reconstruction residual (0 if !m_crosses)
 }
 
 impl Default for SvoNode {
@@ -90,6 +109,10 @@ impl Default for SvoNode {
             parent:         u32::MAX,
             depth:          0,
             octant:         0,
+            m_valid:        false,
+            m_near:         false,
+            m_crosses:      false,
+            m_resid:        0.0,
         }
     }
 }
@@ -159,11 +182,9 @@ impl SvoTree {
         let root = SvoNode {
             aabb:           root_aabb,
             state:          SvoState::Leaf,
-            brick_slot:     u32::MAX,
-            children_start: u32::MAX,
-            parent:         u32::MAX,
             depth:          0,
             octant:         0,
+            ..SvoNode::default()   // metrics computed lazily on the first update (needs the scene)
         };
         let mut tree = Self {
             nodes:        vec![root],
@@ -215,9 +236,16 @@ impl SvoTree {
             if !node.aabb.intersects(region) { continue; }
 
             match node.state {
-                SvoState::Leaf => self.bake_or_cull(idx, scene),
+                SvoState::Leaf => {
+                    // The edit changed the field here → cached metrics are stale.
+                    self.compute_metrics(idx, scene);
+                    self.bake_or_cull(idx, scene);
+                }
                 SvoState::Split => {
-                    let cs = node.children_start;
+                    // Recompute this internal node's metrics too (its merge decision uses
+                    // them), then recurse to the leaves.
+                    self.compute_metrics(idx, scene);
+                    let cs = self.nodes[idx as usize].children_start;
                     for i in 0..8u32 { stack.push(cs + i); }
                 }
                 SvoState::Free => {}
@@ -313,11 +341,18 @@ impl SvoTree {
         vp:            &nalgebra::Matrix4<f32>,
         scene:         &SdfScene,
         lod_threshold: f32,
-        _sdf_weight:   f32,  // reserved (bounded curvature refinement, future)
+        sdf_weight:    f32,  // 0 ⇒ pure screen-space; >0 ⇒ residual-gated surface LOD
         split_budget:  u32,
         merge_budget:  u32,
     ) {
         self.frame = SvoStats { split_budget, ..Default::default() };
+
+        // Root metrics are computed lazily here (the constructor has no scene). Every
+        // other node gets its metrics at creation (do_split) or edit (invalidate), so
+        // the per-frame phases below read the cache only — no SDF/noise evaluation.
+        if self.nodes[0].state != SvoState::Free && !self.nodes[0].m_valid {
+            self.compute_metrics(0, scene);
+        }
 
         // ── Phase 1: collect + execute merges ─────────────────────────────────
         let mut merge_cands: Vec<(u32, f32)> = Vec::new();
@@ -331,11 +366,18 @@ impl SvoTree {
                     SvoState::Split => {
                         let diag = node.aabb.diagonal_length();
                         let dist = (cam - node.aabb.clamp(&cam)).norm().max(0.01);
-                        // Bounded screen-space LOD: merge out of view (frees bricks),
-                        // or when the projected size drops below half the split
-                        // threshold (hysteresis).
+                        // Merge (collapse children → one brick) when: out of view; the
+                        // projected size dropped below half the split threshold (screen-
+                        // space hysteresis); OR this node's own brick would reconstruct
+                        // the surface well enough — a flat surface that earlier got
+                        // over-refined. The `*0.5` is split/merge hysteresis to avoid
+                        // oscillation. Short-circuits so the SDF probes run only when the
+                        // cheap screen tests didn't already decide to keep it.
                         let merge = !node.aabb.is_in_frustum(vp)
-                            || diag / dist < lod_threshold * 0.5;
+                            || diag / dist < lod_threshold * 0.5
+                            || (sdf_weight > 0.0
+                                && node.m_crosses
+                                && node.m_resid / diag * sdf_weight <= RESID_DIAG_FRAC * 0.5);
                         if merge {
                             merge_cands.push((idx, diag / dist));
                         } else {
@@ -364,7 +406,7 @@ impl SvoTree {
                         // near-surface test — only subdivide geometry, not empty sky.
                         if u32::from(node.depth) < self.max_depth
                             && node.aabb.is_in_frustum(vp)
-                            && near_surface(scene, &node.aabb)
+                            && node.m_near
                         {
                             // Bounded screen-space LOD (depth ∝ log dist). BUT only
                             // refine *empty* space (conservative shell, no actual
@@ -377,10 +419,26 @@ impl SvoTree {
                             let side = node.aabb.max.x - node.aabb.min.x;
                             let diag = node.aabb.diagonal_length();
                             let dist = (cam - node.aabb.clamp(&cam)).norm().max(0.01);
-                            if diag / dist > lod_threshold
-                                && (side > EMPTY_CAP || crosses_surface(scene, &node.aabb))
-                            {
-                                split_cands.push((idx, diag / dist));
+                            if diag / dist > lod_threshold {
+                                let want = if node.m_crosses {
+                                    // Surface present: refine while the brick can't
+                                    // reconstruct it well — residual as a fraction of the
+                                    // node diagonal (scale-invariant), scaled by the
+                                    // "Curve detail" slider. Flat surfaces (residual≈0)
+                                    // STOP here at any size → the floor stays coarse; curved
+                                    // ones keep going. The screen-space gate above supplies
+                                    // distance falloff. sdf_weight=0 ⇒ always refine
+                                    // (old pure-screen-space behaviour).
+                                    sdf_weight <= 0.0
+                                        || node.m_resid / diag * sdf_weight > RESID_DIAG_FRAC
+                                } else {
+                                    // Empty shell near a surface: collapse to EMPTY_CAP so
+                                    // the tracer skips it in one boxExit jump.
+                                    side > EMPTY_CAP
+                                };
+                                if want {
+                                    split_cands.push((idx, diag / dist));
+                                }
                             }
                         }
                     }
@@ -443,16 +501,30 @@ impl SvoTree {
         });
     }
 
+    /// Compute and cache the surface metrics for a node's AABB. A function of the
+    /// (static) scene only, so this is the ONLY place the noise/SDF graph is evaluated
+    /// for refinement — once per node at creation / on edit, never per frame.
+    fn compute_metrics(&mut self, node_idx: u32, scene: &SdfScene) {
+        let aabb = self.nodes[node_idx as usize].aabb;
+        let near    = near_surface(scene, &aabb);
+        let crosses = crosses_surface(scene, &aabb);
+        let resid   = if crosses { reconstruction_residual(scene, &aabb) } else { 0.0 };
+        let n = &mut self.nodes[node_idx as usize];
+        n.m_near = near; n.m_crosses = crosses; n.m_resid = resid; n.m_valid = true;
+    }
+
     /// Emit a bake job for the node only if its box is crossed by a surface;
     /// otherwise leave it empty (free any brick it held). This is the empty-space
     /// cull that keeps the atlas reserved for actual geometry.
     fn bake_or_cull(&mut self, node_idx: u32, scene: &SdfScene) {
-        let aabb = self.nodes[node_idx as usize].aabb;
-        // CONSERVATIVE bake (1-Lipschitz half-diagonal): bake every node that might
-        // contain a surface → zero false negatives → NO holes (works for the floor
-        // even though its top sits on partition planes). Far-from-surface nodes are
-        // culled and skipped via boxExit.
-        if near_surface(scene, &aabb) {
+        let _ = scene;
+        // Bake every node that MIGHT contain a surface (cached metrics). near_surface is
+        // conservative for a TRUE distance field; crosses_surface (strict sign change) is
+        // exact even when the terrain's d/|∇d| magnitude overestimates distance where it
+        // is steep (|∇d|→0, vertical/overhang) and would otherwise false-cull a crossing
+        // leaf. Their union has no false negatives → no holes. Else culled (boxExit-skip).
+        let n = &self.nodes[node_idx as usize];
+        if n.m_near || n.m_crosses {
             self.emit_bake_job(node_idx);
         } else {
             self.frame.culls += 1;
@@ -490,12 +562,12 @@ impl SvoTree {
             self.nodes[ci] = SvoNode {
                 aabb:           child_aabbs[i as usize],
                 state:          SvoState::Leaf,
-                brick_slot:     u32::MAX,
-                children_start: u32::MAX,
                 parent:         node_idx,
                 depth:          depth + 1,
                 octant:         i as u8,
+                ..SvoNode::default()
             };
+            self.compute_metrics(children_start + i, scene); // once, here (not per frame)
             self.bake_or_cull(children_start + i, scene);
         }
 

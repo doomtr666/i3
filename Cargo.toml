@@ -6,19 +6,22 @@ members = [
     "crates/i3_slang",
     "crates/i3_bundle",
     "crates/i3_math",
-    "crates/i3_voxel",
     "examples/draw_triangle",
     "examples/common",
     "examples/compute_mandelbrot",
-    "tools/rust_diagnostics",
-    "tools/vulkan_diagnostics", "crates/i3_baker", "crates/i3_io",
+    "crates/i3_baker", 
+    "crates/i3_io",
     "crates/i3_renderer",
     "crates/i3_egui",
     "examples/viewer",
-    "examples/voxel",
     "examples/deferred_stress",
     "examples/sdf",
-    "crates/i3_brickmap", "crates/i3_noise", "crates/i3_sdf",
+    "crates/i3_voxel",
+    "crates/i3_noise", 
+    "crates/i3_sdf",
+    "tools/rust_diagnostics",
+    "tools/vulkan_diagnostics", 
+
 ]
 resolver = "2"
 
@@ -48,6 +51,7 @@ bytemuck = { version = "1.18", features = ["derive"] }
 pathdiff = "0.2"
 egui = "0.29"
 ddsfile = "0.5"
+wide = "1.4.0"
 
 # Internal
 i3_gfx = { path = "crates/i3_gfx" }
@@ -55,7 +59,6 @@ i3_io = { path = "crates/i3_io" }
 i3_slang = { path = "crates/i3_slang" }
 postcard = "1.0"
 ron = "0.8"
-libnoise = "1.2"
 half = "2"
 
 [profile.release]

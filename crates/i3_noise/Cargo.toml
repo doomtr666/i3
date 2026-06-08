@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+wide  = { workspace = true }
 
 [lints]
 workspace = true

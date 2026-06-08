@@ -17,6 +17,7 @@ pub struct SvoRenderPass {
     node_pool_virt:      BufferHandle,
     geom_atlas_virt:     BufferHandle,
     prims_virt:          BufferHandle,
+    vm_ops_virt:         BufferHandle,
     common_buffer:       BufferHandle,
     bindless_set:        DescriptorSetHandle,
 
@@ -36,6 +37,7 @@ impl SvoRenderPass {
             node_pool_virt:      BufferHandle::INVALID,
             geom_atlas_virt:     BufferHandle::INVALID,
             prims_virt:          BufferHandle::INVALID,
+            vm_ops_virt:         BufferHandle::INVALID,
             common_buffer:       BufferHandle::INVALID,
             bindless_set:        DescriptorSetHandle(0),
             gbuffer_albedo:      ImageHandle::INVALID,
@@ -54,7 +56,7 @@ struct SvoPC {
     node_count:  u32,
     debug_flags: u32,
     prim_count:  u32,
-    _pad:        u32,
+    terrain_on:  u32,
 }
 
 impl RenderPass for SvoRenderPass {
@@ -77,6 +79,7 @@ impl RenderPass for SvoRenderPass {
         self.node_pool_virt     = builder.resolve_buffer("SvoNodePool");
         self.geom_atlas_virt    = builder.resolve_buffer("SvoGeomAtlas");
         self.prims_virt         = builder.resolve_buffer("SvoPrims");
+        self.vm_ops_virt        = builder.resolve_buffer("SvoVmOps");
         self.common_buffer      = builder.resolve_buffer("CommonBuffer");
         self.bindless_set       = *builder.consume::<DescriptorSetHandle>("BindlessSet");
 
@@ -90,6 +93,7 @@ impl RenderPass for SvoRenderPass {
         builder.read_buffer(self.node_pool_virt, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.geom_atlas_virt, ResourceUsage::SHADER_READ);
         builder.read_buffer(self.prims_virt,     ResourceUsage::SHADER_READ);
+        builder.read_buffer(self.vm_ops_virt,    ResourceUsage::SHADER_READ);
         builder.read_buffer(self.common_buffer,  ResourceUsage::SHADER_READ);
 
         builder.write_image(self.gbuffer_albedo,     ResourceUsage::COLOR_ATTACHMENT);
@@ -116,6 +120,7 @@ impl RenderPass for SvoRenderPass {
             DescriptorWrite::storage_buffer(0, 0, self.node_pool_virt),
             DescriptorWrite::storage_buffer(0, 1, self.geom_atlas_virt),
             DescriptorWrite::storage_buffer(0, 2, self.prims_virt),
+            DescriptorWrite::storage_buffer(0, 3, self.vm_ops_virt),
         ]);
         ctx.bind_descriptor_set(0, svo_set);
 
@@ -129,7 +134,7 @@ impl RenderPass for SvoRenderPass {
             node_count,
             debug_flags: self.shared.debug_flags.load(Ordering::Relaxed),
             prim_count,
-            _pad: 0,
+            terrain_on: self.shared.terrain_on.load(Ordering::Acquire),
         };
         ctx.push_constant_data(ShaderStageFlags::Vertex | ShaderStageFlags::Fragment, 0, &pc);
         ctx.draw(3, 0);
