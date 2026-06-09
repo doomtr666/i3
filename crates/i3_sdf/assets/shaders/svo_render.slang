@@ -365,10 +365,12 @@ Material terrainShade(float3 p, inout float3 n, float dist)
     bool haveNrm = max(max(pc.idxNormal[0], pc.idxNormal[1]),
                        max(pc.idxNormal[2], pc.idxNormal[3])) >= 0;
     if (haveNrm && (pc.debug_flags & 128u) == 0u) {
-        float3 a = abs(geoN);
-        tnX = float3(tnX.xy + geoN.zy, a.x * tnX.z);
-        tnY = float3(tnY.xy + geoN.xz, a.y * tnY.z);
-        tnZ = float3(tnZ.xy + geoN.xy, a.z * tnZ.z);
+        // Out-of-plane component must carry the SIGN of the geometric normal's axis
+        // (abs on the tangent's z, which is ≥0), else faces pointing toward −X/−Z get
+        // their normal flipped → inverted shading / AO / IBL on those slopes.
+        tnX = float3(tnX.xy + geoN.zy, abs(tnX.z) * geoN.x);
+        tnY = float3(tnY.xy + geoN.xz, abs(tnY.z) * geoN.y);
+        tnZ = float3(tnZ.xy + geoN.xy, abs(tnZ.z) * geoN.z);
         n = normalize(tnX.zyx * tw.x + tnY.xzy * tw.y + tnZ.xyz * tw.z);
     }
 

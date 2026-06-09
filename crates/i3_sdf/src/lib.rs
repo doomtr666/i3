@@ -1,7 +1,6 @@
 pub mod gpu_scene;
 pub mod gpu_buffers;
 pub mod svo;
-pub mod error_metric;
 pub mod noise_graph;
 pub mod passes;
 

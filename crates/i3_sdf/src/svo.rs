@@ -3,15 +3,8 @@ use i3_voxel::SdfScene;
 
 use crate::{
     BRICK_BYTES, BRICK_SIZE, EMPTY_CAP, MAX_SVO_BRICKS, MAX_SVO_DEPTH, MAX_SVO_NODES,
-    error_metric::reconstruction_residual,
     gpu_scene::{GpuBrickJob, GpuSvoNode},
 };
-
-/// Surface-refinement target: a crossing leaf below `EMPTY_CAP` keeps splitting
-/// while its tangent-plane reconstruction residual exceeds this fraction of the
-/// node diagonal (scaled by `sdf_weight`). ~0.01 ⇒ refine until the brick is
-/// non-planar by less than ~0.14 voxel. Tuned live via the "Curve detail" slider.
-const RESID_DIAG_FRAC: f32 = 0.01;
 
 /// True if a surface may cross `aabb` — conservative, with NO false negatives.
 /// The SDF is 1-Lipschitz (exact primitives + min/max CSG), so if any point in
@@ -96,7 +89,6 @@ pub struct SvoNode {
     pub m_valid:   bool,   // false ⇒ metrics not yet computed (root, or after an edit)
     pub m_near:    bool,   // near_surface: box may contain a surface (conservative)
     pub m_crosses: bool,   // crosses_surface: a surface actually crosses (strict sign)
-    pub m_resid:   f32,    // reconstruction residual (0 if !m_crosses)
 }
 
 impl Default for SvoNode {
@@ -112,7 +104,6 @@ impl Default for SvoNode {
             m_valid:        false,
             m_near:         false,
             m_crosses:      false,
-            m_resid:        0.0,
         }
     }
 }
@@ -335,13 +326,15 @@ impl SvoTree {
 
     /// Per-frame LOD update. Surface-aware: only leaves whose box is crossed by a
     /// surface are subdivided, so atlas bricks are spent on geometry, not empty sky.
+    /// Refinement is pure screen-space (projected node size vs `lod_threshold`):
+    /// sampled error metrics (tangent residual, normal cone) false-converged on the
+    /// 3D-folded terrain → frozen flat patches, so they were removed.
     pub fn update(
         &mut self,
         cam:           Point3<f32>,
         vp:            &nalgebra::Matrix4<f32>,
         scene:         &SdfScene,
         lod_threshold: f32,
-        sdf_weight:    f32,  // 0 ⇒ pure screen-space; >0 ⇒ residual-gated surface LOD
         split_budget:  u32,
         merge_budget:  u32,
     ) {
@@ -366,18 +359,11 @@ impl SvoTree {
                     SvoState::Split => {
                         let diag = node.aabb.diagonal_length();
                         let dist = (cam - node.aabb.clamp(&cam)).norm().max(0.01);
-                        // Merge (collapse children → one brick) when: out of view; the
-                        // projected size dropped below half the split threshold (screen-
-                        // space hysteresis); OR this node's own brick would reconstruct
-                        // the surface well enough — a flat surface that earlier got
-                        // over-refined. The `*0.5` is split/merge hysteresis to avoid
-                        // oscillation. Short-circuits so the SDF probes run only when the
-                        // cheap screen tests didn't already decide to keep it.
+                        // Merge (collapse children → one brick) when out of view, or the
+                        // projected size dropped below half the split threshold. The `*0.5`
+                        // is split/merge hysteresis to avoid oscillation at the boundary.
                         let merge = !node.aabb.is_in_frustum(vp)
-                            || diag / dist < lod_threshold * 0.5
-                            || (sdf_weight > 0.0
-                                && node.m_crosses
-                                && node.m_resid / diag * sdf_weight <= RESID_DIAG_FRAC * 0.5);
+                            || diag / dist < lod_threshold * 0.5;
                         if merge {
                             merge_cands.push((idx, diag / dist));
                         } else {
@@ -404,9 +390,16 @@ impl SvoTree {
                     SvoState::Leaf => {
                         // Cheap screen-space gate first, then the expensive SDF/BVH
                         // near-surface test — only subdivide geometry, not empty sky.
+                        // Use `m_near || m_crosses`, NOT m_near alone: the terrain's
+                        // d/max(|∇d|,1) estimate overestimates distance where ∇d→0 (folds,
+                        // critical points), so a node a surface genuinely CROSSES can read
+                        // |center| > half_diag → m_near=false. With the old `m_near` gate
+                        // such a node baked a brick (bake = m_near||m_crosses) but was never
+                        // allowed to split → frozen coarse forever (the deterministic flat
+                        // "triangle"/"fish" patches that no slider could refine).
                         if u32::from(node.depth) < self.max_depth
                             && node.aabb.is_in_frustum(vp)
-                            && node.m_near
+                            && (node.m_near || node.m_crosses)
                         {
                             // Bounded screen-space LOD (depth ∝ log dist). BUT only
                             // refine *empty* space (conservative shell, no actual
@@ -421,16 +414,11 @@ impl SvoTree {
                             let dist = (cam - node.aabb.clamp(&cam)).norm().max(0.01);
                             if diag / dist > lod_threshold {
                                 let want = if node.m_crosses {
-                                    // Surface present: refine while the brick can't
-                                    // reconstruct it well — residual as a fraction of the
-                                    // node diagonal (scale-invariant), scaled by the
-                                    // "Curve detail" slider. Flat surfaces (residual≈0)
-                                    // STOP here at any size → the floor stays coarse; curved
-                                    // ones keep going. The screen-space gate above supplies
-                                    // distance falloff. sdf_weight=0 ⇒ always refine
-                                    // (old pure-screen-space behaviour).
-                                    sdf_weight <= 0.0
-                                        || node.m_resid / diag * sdf_weight > RESID_DIAG_FRAC
+                                    // Surface crosses this leaf: refine purely by projected
+                                    // size (the diag/dist gate above), down to whatever LOD
+                                    // the distance warrants. No error metric — sampled ones
+                                    // false-converged on the folded terrain.
+                                    true
                                 } else {
                                     // Empty shell near a surface: collapse to EMPTY_CAP so
                                     // the tracer skips it in one boxExit jump.
@@ -508,9 +496,8 @@ impl SvoTree {
         let aabb = self.nodes[node_idx as usize].aabb;
         let near    = near_surface(scene, &aabb);
         let crosses = crosses_surface(scene, &aabb);
-        let resid   = if crosses { reconstruction_residual(scene, &aabb) } else { 0.0 };
         let n = &mut self.nodes[node_idx as usize];
-        n.m_near = near; n.m_crosses = crosses; n.m_resid = resid; n.m_valid = true;
+        n.m_near = near; n.m_crosses = crosses; n.m_valid = true;
     }
 
     /// Emit a bake job for the node only if its box is crossed by a surface;

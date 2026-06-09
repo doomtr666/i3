@@ -48,13 +48,23 @@ fn terrain_graph() -> i3_sdf::NoiseGraph {
     // Base terrain: rich fBm(Perlin), base wavelength 48 m, 5 octaves (down to ~3 m).
     let base = G::DomainScale {
         factor: 1.0 / 48.0,
-        src: Box::new(G::Fbm { seed: 1337, octaves: 5, lacunarity: 2.0, gain: 0.5 }),
+        src: Box::new(G::Fbm {
+            seed: 1337,
+            octaves: 6,
+            lacunarity: 2.0,
+            gain: 0.5,
+        }),
     };
     // Warp fields: low-frequency fBm (wavelength 96 m) → large-scale organic distortion.
     let field = |seed: u32| {
         Box::new(G::DomainScale {
             factor: 1.0 / 96.0,
-            src: Box::new(G::Fbm { seed, octaves: 3, lacunarity: 2.0, gain: 0.5 }),
+            src: Box::new(G::Fbm {
+                seed,
+                octaves: 3,
+                lacunarity: 2.0,
+                gain: 0.5,
+            }),
         })
     };
     G::DomainWarp {
@@ -137,7 +147,7 @@ fn build_sdf_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
         &Transform::new(Vector3::zeros(), id, 1.0),
         &SdfPrimitive::volume_terrain(
             Vector3::new(TERRAIN_REGION[0], TERRAIN_REGION[1], TERRAIN_REGION[2]),
-            TERRAIN_AMP,            // amplitude  → T_AMP
+            TERRAIN_AMP, // amplitude  → T_AMP
             terrain_graph().build_rnoise(),
         ),
         5, // terrain material → TERRAIN_MAT
@@ -240,7 +250,6 @@ impl ExampleApp for SdfApp {
                 &vp,
                 &scene,
                 self.svo_params.lod_threshold,
-                self.svo_params.sdf_weight,
                 self.svo_params.split_budget,
                 self.svo_params.merge_budget,
             );
@@ -478,7 +487,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let sdf_scene = Arc::new(RwLock::new(build_sdf_scene(initial_gem)));
     // Root MUST be cubic — voxel_size = side/8 is used uniformly for all 3 axes.
     // 2048 m cube → ~2 km view distance; screen-space LOD keeps the far field coarse.
-    let root_aabb = AABB::new(Point3::new(-1024.0, -1024.0, -1024.0), Point3::new(1024.0, 1024.0, 1024.0));
+    let root_aabb = AABB::new(
+        Point3::new(-1024.0, -1024.0, -1024.0),
+        Point3::new(1024.0, 1024.0, 1024.0),
+    );
     let svo_tree = Arc::new(RwLock::new(SvoTree::new(root_aabb, 16)));
     let gpu_buffers = Arc::new(SvoGpuBuffers::new(&mut backend));
     let svo_enabled = Arc::new(AtomicBool::new(true));
@@ -496,15 +508,21 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut tex = |name: &str| -> i32 {
             match loader.load::<TextureAsset>(name).wait_loaded() {
                 Ok(t) => BasicScene::upload_and_register_texture(
-                    &mut backend, &mut render_graph.bindless_manager, &t),
-                Err(e) => { tracing::warn!("terrain texture '{name}' not loaded: {e}"); -1 }
+                    &mut backend,
+                    &mut render_graph.bindless_manager,
+                    &t,
+                ),
+                Err(e) => {
+                    tracing::warn!("terrain texture '{name}' not loaded: {e}");
+                    -1
+                }
             }
         };
         let mut tm = i3_sdf::TerrainMatParams::default();
         for (i, layer) in ["grass", "rock", "snow", "dirt"].iter().enumerate() {
             tm.albedo[i] = tex(&format!("terrain_{layer}_albedo.png"));
             tm.normal[i] = tex(&format!("terrain_{layer}_normal.png"));
-            tm.orm[i]    = tex(&format!("terrain_{layer}_orm.png"));
+            tm.orm[i] = tex(&format!("terrain_{layer}_orm.png"));
         }
         tm
     };

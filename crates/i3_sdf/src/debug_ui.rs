@@ -4,7 +4,6 @@ use crate::svo::SvoTree;
 
 pub struct SvoParams {
     pub lod_threshold: f32,
-    pub sdf_weight: f32,
     pub split_budget: u32,
     pub merge_budget: u32,
     pub debug_flags: u32,
@@ -14,7 +13,6 @@ impl Default for SvoParams {
     fn default() -> Self {
         Self {
             lod_threshold: 0.18,
-            sdf_weight: 1.0,
             split_budget: 256,
             merge_budget: 128,
             debug_flags: 0,
@@ -65,7 +63,6 @@ impl SvoDebugUi {
             });
 
             ui.add(egui::Slider::new(&mut params.lod_threshold, 0.05..=10.0).text("LOD threshold"));
-            ui.add(egui::Slider::new(&mut params.sdf_weight, 0.0..=8.0).text("Curve detail (↑ = finer)"));
             ui.add(egui::Slider::new(&mut params.split_budget, 1..=1024).text("Split budget/frame"));
             ui.add(egui::Slider::new(&mut params.merge_budget, 1..=256).text("Merge budget/frame"));
 
