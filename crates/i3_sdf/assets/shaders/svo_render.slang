@@ -503,13 +503,11 @@ GBufferOut fsMain(float4 svPos : SV_Position)
 
     if (!hit) discard;
 
-    // Normal from the brick's blended gradient. The trilinear blend is only C0, so its
-    // derivative jumps at brick boundaries → faint faceting ("quadrillage"). For terrain
-    // we instead re-evaluate the ANALYTIC normal at the hit (C∞, continuous), band-limited
-    // by the leaf voxel size so it doesn't alias at distance. One graph eval / terrain px.
+    // Normal straight from the brick. The bake stores the TRUE combined-CSG normal per
+    // voxel (each operand's own normal, selected by the active min/max term — terrain
+    // analytic, a subtract's inward −∇empty, a solid prim's ∇), so it is correct on
+    // carved surfaces and elsewhere. No per-case re-evaluation here.
     float3 n = normalize(hit_grad);
-    if (pc.terrain_on != 0u && hit_mat == 5u)   // TERRAIN_MAT
-        n = terrainDensity(hitPos, float3(hit_vs, hit_vs, hit_vs)).g;
 
     float4 clip     = mul(g_common.viewProjection, float4(hitPos, 1.0));
     float  ndcDepth = clip.z / clip.w;

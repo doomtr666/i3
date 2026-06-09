@@ -77,18 +77,26 @@ float evalPrimitive(float3 pw, GpuPrimitive prim)
     return d / prim.inv_scale;
 }
 
-// Analytic-PRIMITIVE CSG distance (no terrain). Used for the finite-difference
-// normal — cheap, no graph evaluation. Terrain is folded analytically in csMain.
-float sceneSdf(float3 p)
+// Union of all SOLID (non-subtract) primitives. FD of this gives a solid prim's own
+// surface normal — cheap, no graph evaluation.
+float solidPrimSdf(float3 p)
 {
-    float solid = 1e10, empty = 1e10;
+    float solid = 1e10;
     for (uint i = 0u; i < pc.prim_count; i++)
-    {
-        float d = evalPrimitive(p, prims[i]);
-        if (prims[i].subtract != 0u) empty = min(empty, d);
-        else                          solid = min(solid, d);
-    }
-    return max(solid, -empty);
+        if (prims[i].subtract == 0u) solid = min(solid, evalPrimitive(p, prims[i]));
+    return solid;
+}
+
+// Union of all SUBTRACT primitives. FD of this (negated) gives a carved surface's
+// normal — pointing INTO the cavity. Each CSG operand thus carries its own correct
+// normal; csMain's min/max selection picks the active one, so the combined normal is
+// correct everywhere with no per-case overrides.
+float emptySdf(float3 p)
+{
+    float empty = 1e10;
+    for (uint i = 0u; i < pc.prim_count; i++)
+        if (prims[i].subtract != 0u) empty = min(empty, evalPrimitive(p, prims[i]));
+    return empty;
 }
 
 // Primitive CSG, returning `solid` and `empty` SEPARATELY (+ nearest-solid material)
@@ -124,28 +132,43 @@ void csMain(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID)
     GpuBrickJob job = jobs[gid.x];
     float3 p  = job.brick_world_min + (float3(lid) + 0.5) * job.voxel_size;
 
-    // Primitive CSG (solid/empty separately) + finite-difference normal — all cheap,
-    // NO graph evaluation.
-    float solid, empty; uint mat_id;
-    sceneCSG(p, solid, empty, mat_id);
+    float e = job.voxel_size * 0.5;
 
-    float  e = job.voxel_size * 0.5;
-    float3 grad = float3(
-        sceneSdf(p + float3(e, 0, 0)) - sceneSdf(p - float3(e, 0, 0)),
-        sceneSdf(p + float3(0, e, 0)) - sceneSdf(p - float3(0, e, 0)),
-        sceneSdf(p + float3(0, 0, e)) - sceneSdf(p - float3(0, 0, e)));
-    float gl = length(grad);
-    float3 n = gl > 1e-6 ? grad / gl : float3(0, 1, 0);
+    // ── CSG by operands, each carrying its OWN correct normal ─────────────────
+    // Surface = max( min(solidPrim, terrain), -empty ). The normal is the active
+    // operand's gradient, so selecting by which term wins is correct EVERYWHERE —
+    // no per-case overrides:
+    //   • solid prim → ∇solidPrim                (FD, cheap)
+    //   • terrain    → analytic ∇(p.y − A·noise)  (1 graph eval, smooth)
+    //   • subtract   → −∇empty                    (points INTO the carved cavity)
+    float solidP, empty; uint matP;
+    sceneCSG(p, solidP, empty, matP);
 
-    // Terrain: evaluate the noise graph ONCE (value + ANALYTIC normal — no FD on the
-    // graph, the big win). Fold into `solid` so subtracts carve it; when terrain is the
-    // winning surface (and not carved), use its analytic normal.
+    // Winning SOLID operand A = min(solidPrim, terrain), with its normal + material.
+    float3 gS    = float3(
+        solidPrimSdf(p + float3(e, 0, 0)) - solidPrimSdf(p - float3(e, 0, 0)),
+        solidPrimSdf(p + float3(0, e, 0)) - solidPrimSdf(p - float3(0, e, 0)),
+        solidPrimSdf(p + float3(0, 0, e)) - solidPrimSdf(p - float3(0, 0, e)));
+    float  solid  = solidP;
+    float3 nSolid = length(gS) > 1e-6 ? normalize(gS) : float3(0, 1, 0);
+    uint   mat_id = matP;
     if (pc.terrain_on != 0u)
     {
         NV t = terrainDensity(p, float3(0, 0, 0));
-        if (t.v < solid) { solid = t.v; mat_id = TERRAIN_MAT; if (solid >= -empty) n = t.g; }
+        if (t.v < solid) { solid = t.v; nSolid = t.g; mat_id = TERRAIN_MAT; }
     }
-    float sdf = max(solid, -empty);
+
+    // f = max(A, −empty): a subtract carves where −empty wins → its inward normal.
+    float  sdf = max(solid, -empty);
+    float3 n   = nSolid;
+    if (-empty > solid)
+    {
+        float3 gE = float3(
+            emptySdf(p + float3(e, 0, 0)) - emptySdf(p - float3(e, 0, 0)),
+            emptySdf(p + float3(0, e, 0)) - emptySdf(p - float3(0, e, 0)),
+            emptySdf(p + float3(0, 0, e)) - emptySdf(p - float3(0, 0, e)));
+        n = length(gE) > 1e-6 ? -normalize(gE) : nSolid;
+    }
 
     float2 oct = octEncode(n);
 
