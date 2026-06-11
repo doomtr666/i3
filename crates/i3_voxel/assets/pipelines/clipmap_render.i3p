@@ -1,6 +1,6 @@
 PipelineConfig(
-    name: "svo_render",
-    shader: Path("../shaders/svo_render.slang"),
+    name: "clipmap_render",
+    shader: Path("../shaders/clipmap_render.slang"),
     search_paths: [
         "../../../i3_renderer/assets/shaders",
     ],

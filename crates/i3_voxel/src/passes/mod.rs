@@ -2,21 +2,21 @@ mod setup_pass;
 mod bake_pass;
 mod render_pass;
 
-pub use setup_pass::SvoSetupPass;
-pub use bake_pass::SvoBakePass;
-pub use render_pass::SvoRenderPass;
+pub use setup_pass::ClipmapSetupPass;
+pub use bake_pass::ClipmapBakePass;
+pub use render_pass::ClipmapRenderPass;
 
 use std::sync::{Arc, RwLock, atomic::{AtomicBool, AtomicU32, AtomicUsize}};
 use i3_gfx::prelude::*;
-use i3_voxel::SdfScene;
+use crate::SdfScene;
 
-use crate::{gpu_buffers::SvoGpuBuffers, svo::SvoTree};
+use crate::{clipmap::ClipmapState, gpu_buffers::ClipmapBuffers};
 
 // ─── Shared per-frame state ───────────────────────────────────────────────────
 
-pub(crate) struct SvoShared {
-    pub gpu_buffers: Arc<SvoGpuBuffers>,
-    pub svo_tree:    Arc<RwLock<SvoTree>>,
+pub(crate) struct ClipmapShared {
+    pub gpu_buffers: Arc<ClipmapBuffers>,
+    pub clipmap:     Arc<RwLock<ClipmapState>>,
     pub sdf_scene:   Arc<RwLock<SdfScene>>,
     pub job_count:   AtomicU32,
     pub prim_count:  AtomicU32,
@@ -27,7 +27,7 @@ pub(crate) struct SvoShared {
     pub debug_flags: Arc<AtomicU32>,
     pub enabled:     Arc<AtomicBool>,
     /// Active ring-buffer slot for this frame's CpuToGpu buffers.
-    /// Advanced once per frame by SvoSetupPass::declare; read by all SVO passes.
+    /// Advanced once per frame by ClipmapSetupPass::declare; read by all SVO passes.
     pub cur_ring:    AtomicUsize,
 }
 
@@ -37,18 +37,18 @@ pub(crate) struct SvoShared {
 ///
 /// `compute_passes` (Setup + Bake) go into `extra_pre_gbuffer_passes`.
 /// `render_pass` (GBuffer sphere-trace) goes into `extra_gbuffer_passes`.
-pub fn create_svo_passes(
-    svo_tree:    Arc<RwLock<SvoTree>>,
+pub fn create_clipmap_passes(
+    clipmap:     Arc<RwLock<ClipmapState>>,
     sdf_scene:   Arc<RwLock<SdfScene>>,
-    gpu_buffers: Arc<SvoGpuBuffers>,
+    gpu_buffers: Arc<ClipmapBuffers>,
     debug_flags: Arc<AtomicU32>,
     enabled:     Arc<AtomicBool>,
     vm_ops:      Vec<crate::VmOp>,
     terrain_mat: crate::TerrainMatParams,
 ) -> (Vec<Box<dyn RenderPass>>, Box<dyn RenderPass>) {
-    let shared = Arc::new(SvoShared {
+    let shared = Arc::new(ClipmapShared {
         gpu_buffers,
-        svo_tree,
+        clipmap,
         sdf_scene,
         job_count:   AtomicU32::new(0),
         prim_count:  AtomicU32::new(0),
@@ -65,11 +65,11 @@ pub fn create_svo_passes(
     let inv_img = ImageHandle::INVALID;
 
     let compute: Vec<Box<dyn RenderPass>> = vec![
-        Box::new(SvoSetupPass::new(shared.clone(), inv_buf)),
-        Box::new(SvoBakePass::new(shared.clone(), inv_buf)),
+        Box::new(ClipmapSetupPass::new(shared.clone(), inv_buf)),
+        Box::new(ClipmapBakePass::new(shared.clone(), inv_buf)),
     ];
     let render: Box<dyn RenderPass> =
-        Box::new(SvoRenderPass::new(shared.clone(), inv_buf, inv_img));
+        Box::new(ClipmapRenderPass::new(shared.clone(), inv_buf, inv_img));
 
     (compute, render)
 }

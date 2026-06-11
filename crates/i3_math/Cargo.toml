@@ -8,3 +8,6 @@ workspace = true
 
 [dependencies]
 nalgebra = { workspace = true }
+
+[features]
+profiling = []

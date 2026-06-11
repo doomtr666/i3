@@ -1,17 +1,19 @@
 use i3_math::nalgebra::Vector3;
-use i3_voxel::{BvhNode, SdfPrimitive, SdfScene};
+use crate::{BvhNode, SdfPrimitive, SdfScene};
 
 // ─── GpuSvoNode ───────────────────────────────────────────────────────────────
-// 32 bytes. Mirrors the Slang struct in svo_render.slang.
+// 8 bytes. Mirrors the Slang struct in clip_render.slang.
 // first_child == u32::MAX  → leaf node.
 // brick_offset == u32::MAX → no baked brick yet (renders as empty).
+//
+// No AABB stored: it's DERIVED during descent by halving the (cubic) root toward each
+// octant. 8 B (vs 32) → 4× fewer bytes per descent read and 8 nodes per 64 B cache line,
+// which is what the sphere-trace hotspot needs (the root AABB comes from a push constant).
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct GpuSvoNode {
-    pub aabb_min:     [f32; 3],
     pub first_child:  u32,
-    pub aabb_max:     [f32; 3],
     pub brick_offset: u32,
 }
 
@@ -66,7 +68,7 @@ pub struct GpuBvhNode {
 
 // ─── TerrainMatParams ──────────────────────────────────────────────────────────
 // Terrain texture layer bindless indices + slope/height blend params, pushed to
-// svo_render. Layer order: 0=grass, 1=rock, 2=snow, 3=dirt. Index -1 = no texture
+// clip_render. Layer order: 0=grass, 1=rock, 2=snow, 3=dirt. Index -1 = no texture
 // (the shader falls back to a solid colour). ORM = (R=AO, G=Roughness, B=Metallic).
 #[derive(Clone, Copy)]
 pub struct TerrainMatParams {
@@ -95,7 +97,7 @@ impl Default for TerrainMatParams {
 
 // ─── Packing functions ────────────────────────────────────────────────────────
 
-pub fn pack_node(node: &i3_voxel::SdfNode) -> Option<GpuPrimitive> {
+pub fn pack_node(node: &crate::SdfNode) -> Option<GpuPrimitive> {
     let tf = node.transform();
     let t  = tf.translation();
 

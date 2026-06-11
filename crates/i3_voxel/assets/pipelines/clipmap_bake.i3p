@@ -1,0 +1,6 @@
+PipelineConfig(
+    name: "clipmap_bake",
+    shader: Path("../shaders/clipmap_bake.slang"),
+    search_paths: [],
+    graphics: None,
+)

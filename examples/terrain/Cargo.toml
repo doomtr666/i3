@@ -1,5 +1,5 @@
 [package]
-name = "sdf"
+name = "terrain"
 edition = "2024"
 version.workspace = true
 authors.workspace = true
@@ -12,11 +12,12 @@ i3_egui           = { path = "../../crates/i3_egui" }
 i3_io             = { path = "../../crates/i3_io" }
 examples_common   = { path = "../common" }
 i3_math           = { path = "../../crates/i3_math" }
-i3_voxel          = { path = "../../crates/i3_voxel" }
-i3_noise          = { path = "../../crates/i3_noise" }
-i3_sdf            = { path = "../../crates/i3_sdf", features = ["debug-ui"] }
+i3_voxel          = { path = "../../crates/i3_voxel", features = ["debug-ui"] }
 nalgebra-glm      = { workspace = true }
 tracing           = { workspace = true }
 
 [build-dependencies]
 i3_baker = { path = "../../crates/i3_baker" }
+
+[features]
+profiling = ["i3_gfx/profiling", "i3_vulkan_backend/profiling", "i3_voxel/profiling", "i3_math/profiling"]

@@ -13,14 +13,13 @@ use examples_common::{
 use i3_egui::prelude::*;
 use i3_gfx::prelude::*;
 use i3_io::prelude::*;
-use i3_math::nalgebra::Point3;
 use i3_math::{AABB, nalgebra::UnitQuaternion};
 use i3_renderer::prelude::*;
 use i3_renderer::render_graph::RenderConfig;
-use i3_sdf::{
-    SvoGpuBuffers, SvoTree,
-    debug_ui::{SvoDebugUi, SvoParams},
-    passes::create_svo_passes,
+use i3_voxel::{
+    ClipmapState, ClipmapBuffers,
+    debug_ui::{ClipmapDebugUi, ClipmapParams},
+    passes::create_clipmap_passes,
 };
 use i3_vulkan_backend::backend::VulkanBackend;
 use nalgebra_glm as glm;
@@ -43,8 +42,8 @@ const TERRAIN_REGION: [f32; 3] = [200.0, 36.0, 200.0];
 /// The terrain noise graph — single source of truth for the CPU generator
 /// (`build_rnoise`) and the GPU bytecode (`compile`). DomainScale carries the base
 /// frequency so both backends agree without a duplicated constant.
-fn terrain_graph() -> i3_sdf::NoiseGraph {
-    use i3_sdf::NoiseGraph as G;
+fn terrain_graph() -> i3_voxel::NoiseGraph {
+    use i3_voxel::NoiseGraph as G;
     // Base terrain: rich fBm(Perlin), base wavelength 48 m, 5 octaves (down to ~3 m).
     let base = G::DomainScale {
         factor: 1.0 / 48.0,
@@ -76,68 +75,16 @@ fn terrain_graph() -> i3_sdf::NoiseGraph {
     }
 }
 
-fn build_sdf_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
+fn build_sdf_scene() -> i3_voxel::SdfScene {
     use i3_math::Transform;
     use i3_math::nalgebra::Vector3;
     use i3_voxel::{SdfPrimitive, SdfScene};
 
     let id = UnitQuaternion::identity();
-    let rot_x90 = UnitQuaternion::from_euler_angles(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
     let mut scene = SdfScene::new();
 
-    scene.add_mat(
-        &Transform::new(Vector3::new(0.0, 1.2, 0.0), id, 1.0),
-        &SdfPrimitive::Sphere { radius: 1.0 },
-        2,
-    );
-    scene.add_mat(
-        &Transform::new(Vector3::new(0.0, 1.2, 0.0), id, 1.0),
-        &SdfPrimitive::Torus {
-            major_radius: 1.35,
-            minor_radius: 0.18,
-        },
-        3,
-    );
-    scene.add_mat(
-        &Transform::new(Vector3::new(-2.8, 1.1, -0.5), id, 1.0),
-        &SdfPrimitive::Capsule {
-            half_height: 1.1,
-            radius: 0.28,
-        },
-        4,
-    );
-    scene.add_mat(
-        &Transform::new(Vector3::new(2.8, 1.0, -0.5), id, 1.0),
-        &SdfPrimitive::Cylinder {
-            half_height: 1.0,
-            radius: 0.42,
-        },
-        6,
-    );
-    scene.add_mat(
-        &Transform::new(Vector3::new(gem_pos[0], gem_pos[1], gem_pos[2]), id, 1.0),
-        &SdfPrimitive::Sphere { radius: 0.6 },
-        3,
-    );
-    scene.add_mat(
-        &Transform::new(Vector3::new(0.0, 1.6, -3.8), id, 1.0),
-        &SdfPrimitive::Box {
-            half_extents: Vector3::new(1.4, 1.6, 0.35),
-        },
-        1,
-    );
-    scene.sub(
-        &Transform::new(Vector3::new(0.0, 1.6, -4.0), id, 1.0),
-        &SdfPrimitive::Sphere { radius: 0.85 },
-    );
-    scene.add_mat(
-        &Transform::new(Vector3::new(2.8, 1.5, -3.0), rot_x90, 1.0),
-        &SdfPrimitive::Torus {
-            major_radius: 0.7,
-            minor_radius: 0.14,
-        },
-        7,
-    );
+    // Terrain-only scene. Analytic primitives stay supported (the runtime CSG edits —
+    // dig/add — depend on them), but no static/animated instances are seeded here.
     // 3D volumetric terrain as the ground. IDENTITY transform is required: the GPU
     // bake evaluates the graph in world space, so local must equal world for CPU/GPU
     // parity. The CPU generator and the GPU bytecode both come from `terrain_graph()`
@@ -157,8 +104,8 @@ fn build_sdf_scene(gem_pos: [f32; 3]) -> i3_voxel::SdfScene {
     scene
 }
 
-fn build_full_scene(gem_pos: [f32; 3], edits: &[EditOp]) -> i3_voxel::SdfScene {
-    let mut scene = build_sdf_scene(gem_pos);
+fn build_full_scene(edits: &[EditOp]) -> i3_voxel::SdfScene {
+    let mut scene = build_sdf_scene();
     for edit in edits {
         if edit.subtract {
             scene.sub(&edit.transform, &edit.primitive);
@@ -184,16 +131,14 @@ struct SdfApp {
     time: f32,
     debug_gui: RendererDebugGui,
 
-    svo_enabled: Arc<AtomicBool>,
-    svo_debug_flags: Arc<AtomicU32>,
-    svo_params: SvoParams,
-    svo_tree: Arc<RwLock<SvoTree>>,
+    clip_enabled: Arc<AtomicBool>,
+    clip_debug_flags: Arc<AtomicU32>,
+    clip_params: ClipmapParams,
+    clipmap: Arc<RwLock<ClipmapState>>,
     sdf_scene: Arc<RwLock<i3_voxel::SdfScene>>,
 
-    svo_freeze: bool,
-    svo_freeze_gem: bool,
+    clip_freeze: bool,
     dig_radius: f32,
-    gem_pos_last: [f32; 3],
     pending_action: Option<bool>,
     edits: Vec<EditOp>,
 }
@@ -208,64 +153,24 @@ impl ExampleApp for SdfApp {
     }
 
     fn render(&mut self) {
-        // ── Update animated gem ───────────────────────────────────────────────
-        if !self.svo_freeze_gem && !self.svo_freeze {
-            let angle = self.time * 1.5;
-            let new_gem = [
-                2.8 + angle.cos() * 0.55,
-                2.38 + (self.time * 3.0).sin() * 0.15,
-                -0.5 + angle.sin() * 0.55,
-            ];
-            let prev = self.gem_pos_last;
-            let d = ((new_gem[0] - prev[0]).powi(2)
-                + (new_gem[1] - prev[1]).powi(2)
-                + (new_gem[2] - prev[2]).powi(2))
-            .sqrt();
-            if d > 0.05 {
-                *self.sdf_scene.write().unwrap() = build_full_scene(new_gem, &self.edits);
-                let region = sphere_aabb(prev, 0.8);
-                let region2 = sphere_aabb(new_gem, 0.8);
-                let scene = self.sdf_scene.read().unwrap();
-                let mut tree = self.svo_tree.write().unwrap();
-                tree.invalidate(&region, &scene);
-                tree.invalidate(&region2, &scene);
-                self.gem_pos_last = new_gem;
-            }
-        }
-
-        // ── SVO LOD update ────────────────────────────────────────────────────
-        if !self.svo_freeze {
+        // ── Clipmap re-centre on the camera ───────────────────────────────────
+        if !self.clip_freeze {
             let cam = self.camera.position;
-            let (w, h) = self.backend.window_size(self.window).unwrap_or((1280, 720));
-            let far = 500.0f32;
-            let near = 0.1f32;
-            let proj = glm::perspective_rh_zo(w as f32 / h as f32, FRAC_PI_4, far, near);
-            let view = self.camera.view_matrix();
-            let vp = proj * view;
-
             let scene = self.sdf_scene.read().unwrap();
-            let mut tree = self.svo_tree.write().unwrap();
-            tree.update(
-                cam.into(),
-                &vp,
-                &scene,
-                self.svo_params.lod_threshold,
-                self.svo_params.split_budget,
-                self.svo_params.merge_budget,
-            );
+            let mut clip = self.clipmap.write().unwrap();
+            clip.update_camera(cam.into(), &scene);
         }
 
         // ── UI ────────────────────────────────────────────────────────────────
         self.ui.begin_frame();
         let egui_ctx = self.ui.context().clone();
 
-        let svo_enabled = self.svo_enabled.clone();
-        let svo_debug_flags = self.svo_debug_flags.clone();
-        let mut svo_params = std::mem::take(&mut self.svo_params);
+        let clip_enabled = self.clip_enabled.clone();
+        let clip_debug_flags = self.clip_debug_flags.clone();
+        let mut clip_params = std::mem::take(&mut self.clip_params);
         let mut dig_radius = self.dig_radius;
-        let mut svo_freeze = self.svo_freeze;
-        let mut svo_freeze_gem = self.svo_freeze_gem;
-        let svo_tree_g = self.svo_tree.clone();
+        let mut clip_freeze = self.clip_freeze;
+        let clipmap_g = self.clipmap.clone();
 
         self.debug_gui.show(
             &egui_ctx,
@@ -274,17 +179,16 @@ impl ExampleApp for SdfApp {
             self.smoothed_dt,
             |ui| {
                 ui.separator();
-                let mut en = svo_enabled.load(Ordering::Relaxed);
-                ui.checkbox(&mut en, "SVO enabled");
-                svo_enabled.store(en, Ordering::Relaxed);
+                let mut en = clip_enabled.load(Ordering::Relaxed);
+                ui.checkbox(&mut en, "Terrain render");
+                clip_enabled.store(en, Ordering::Relaxed);
 
-                ui.checkbox(&mut svo_freeze, "FREEZE tree (no split/merge/invalidate)");
-                ui.checkbox(&mut svo_freeze_gem, "Freeze gem only");
+                ui.checkbox(&mut clip_freeze, "FREEZE clipmap (no re-centre/invalidate)");
 
-                if let Ok(tree) = svo_tree_g.try_read() {
-                    SvoDebugUi::show(ui, &tree, &mut svo_params);
+                if let Ok(clip) = clipmap_g.try_read() {
+                    ClipmapDebugUi::show(ui, &clip, &mut clip_params);
                 }
-                svo_debug_flags.store(svo_params.debug_flags, Ordering::Relaxed);
+                clip_debug_flags.store(clip_params.debug_flags, Ordering::Relaxed);
 
                 ui.separator();
                 ui.label("Edit (LMB=dig  RMB=fill)");
@@ -292,10 +196,9 @@ impl ExampleApp for SdfApp {
             },
         );
 
-        self.svo_params = svo_params;
+        self.clip_params = clip_params;
         self.dig_radius = dig_radius;
-        self.svo_freeze = svo_freeze;
-        self.svo_freeze_gem = svo_freeze_gem;
+        self.clip_freeze = clip_freeze;
 
         if let Some(is_dig) = self.pending_action.take() {
             if !egui_ctx.wants_pointer_input() {
@@ -400,7 +303,7 @@ impl SdfApp {
                         (tx.x - hit.x).powi(2) + (tx.y - hit.y).powi(2) + (tx.z - hit.z).powi(2);
                     d2 > thr_sq
                 });
-                *self.sdf_scene.write().unwrap() = build_full_scene(self.gem_pos_last, &self.edits);
+                *self.sdf_scene.write().unwrap() = build_full_scene(&self.edits);
             } else {
                 let mut scene = self.sdf_scene.write().unwrap();
                 scene.sub(&xf, &sphere);
@@ -418,9 +321,8 @@ impl SdfApp {
             } else {
                 self.dig_radius * 2.5
             };
-            let region = sphere_aabb(center, inv_radius);
             let scene = self.sdf_scene.read().unwrap();
-            self.svo_tree.write().unwrap().invalidate(&region, &scene);
+            self.clipmap.write().unwrap().invalidate_sphere(center, inv_radius, &scene);
             tracing::info!(
                 "{} at ({:.2}, {:.2}, {:.2}) r={:.2}",
                 if is_dig { "DIG" } else { "FILL" },
@@ -433,14 +335,6 @@ impl SdfApp {
     }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn sphere_aabb(center: [f32; 3], radius: f32) -> AABB {
-    AABB::new(
-        Point3::new(center[0] - radius, center[1] - radius, center[2] - radius),
-        Point3::new(center[0] + radius, center[1] + radius, center[2] + radius),
-    )
-}
 
 // ─── main ─────────────────────────────────────────────────────────────────────
 
@@ -452,7 +346,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     backend.initialize(get_gpu_index())?;
 
     let window = backend.create_window(WindowDesc {
-        title: "SDF".to_string(),
+        title: "Terrain".to_string(),
         width: 1280,
         height: 720,
     })?;
@@ -470,7 +364,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_default();
 
-    for (cat, blob) in [("system.i3c", "system.i3b"), ("sdf.i3c", "sdf.i3b")] {
+    for (cat, blob) in [("system.i3c", "system.i3b"), ("terrain.i3c", "terrain.i3b")] {
         if exe_dir.join(cat).exists() {
             if let Ok(bundle) = BundleBackend::mount(
                 exe_dir.join(cat).to_str().unwrap(),
@@ -482,19 +376,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     let loader = Arc::new(AssetLoader::new(vfs));
 
-    // ── SVO setup ─────────────────────────────────────────────────────────────
-    let initial_gem = [3.35f32, 2.38, -0.5];
-    let sdf_scene = Arc::new(RwLock::new(build_sdf_scene(initial_gem)));
-    // Root MUST be cubic — voxel_size = side/8 is used uniformly for all 3 axes.
-    // 2048 m cube → ~2 km view distance; screen-space LOD keeps the far field coarse.
-    let root_aabb = AABB::new(
-        Point3::new(-1024.0, -1024.0, -1024.0),
-        Point3::new(1024.0, 1024.0, 1024.0),
-    );
-    let svo_tree = Arc::new(RwLock::new(SvoTree::new(root_aabb, 16)));
-    let gpu_buffers = Arc::new(SvoGpuBuffers::new(&mut backend));
-    let svo_enabled = Arc::new(AtomicBool::new(true));
-    let svo_debug_flags = Arc::new(AtomicU32::new(0));
+    // ── Clipmap setup ─────────────────────────────────────────────────────────
+    let sdf_scene = Arc::new(RwLock::new(build_sdf_scene()));
+    let clipmap = Arc::new(RwLock::new(ClipmapState::new()));
+    let gpu_buffers = Arc::new(ClipmapBuffers::new(&mut backend));
+    let clip_enabled = Arc::new(AtomicBool::new(true));
+    let clip_debug_flags = Arc::new(AtomicU32::new(0));
 
     // ── Render graph ──────────────────────────────────────────────────────────
     let mut render_graph = DefaultRenderGraph::new(&mut backend, &config);
@@ -518,7 +405,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 }
             }
         };
-        let mut tm = i3_sdf::TerrainMatParams::default();
+        let mut tm = i3_voxel::TerrainMatParams::default();
         for (i, layer) in ["grass", "rock", "snow", "dirt"].iter().enumerate() {
             tm.albedo[i] = tex(&format!("terrain_{layer}_albedo.png"));
             tm.normal[i] = tex(&format!("terrain_{layer}_normal.png"));
@@ -529,19 +416,19 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     render_graph.publish("AssetLoader", loader);
 
-    let (svo_compute, svo_render) = create_svo_passes(
-        svo_tree.clone(),
+    let (clip_compute, clip_render) = create_clipmap_passes(
+        clipmap.clone(),
         sdf_scene.clone(),
         gpu_buffers.clone(),
-        svo_debug_flags.clone(),
-        svo_enabled.clone(),
+        clip_debug_flags.clone(),
+        clip_enabled.clone(),
         terrain_graph().compile(),
         terrain_mat,
     );
-    for pass in svo_compute {
+    for pass in clip_compute {
         render_graph.extra_pre_gbuffer_passes.push(pass);
     }
-    render_graph.extra_gbuffer_passes.push(svo_render);
+    render_graph.extra_gbuffer_passes.push(clip_render);
 
     render_graph.init(&mut backend);
 
@@ -564,15 +451,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         smoothed_dt: 0.016,
         time: 0.0,
         debug_gui: RendererDebugGui::new(),
-        svo_enabled,
-        svo_debug_flags,
-        svo_params: SvoParams::default(),
-        svo_tree,
+        clip_enabled,
+        clip_debug_flags,
+        clip_params: ClipmapParams::default(),
+        clipmap,
         sdf_scene,
-        svo_freeze: false,
-        svo_freeze_gem: false,
+        clip_freeze: false,
         dig_radius: 1.0,
-        gem_pos_last: initial_gem,
         pending_action: None,
         edits: Vec::new(),
     });

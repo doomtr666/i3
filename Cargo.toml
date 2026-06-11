@@ -15,10 +15,9 @@ members = [
     "crates/i3_egui",
     "examples/viewer",
     "examples/deferred_stress",
-    "examples/sdf",
+    "examples/terrain",
     "crates/i3_voxel",
-    "crates/i3_noise", 
-    "crates/i3_sdf",
+    "crates/i3_noise",
     "tools/rust_diagnostics",
     "tools/vulkan_diagnostics", 
 

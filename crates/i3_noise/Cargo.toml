@@ -9,3 +9,6 @@ wide  = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+profiling = []

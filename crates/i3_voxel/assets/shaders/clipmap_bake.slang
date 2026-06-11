@@ -51,8 +51,13 @@ struct GpuPrimitive
 [[vk::binding(0, 0)]] StructuredBuffer<GpuBrickJob>   jobs;
 [[vk::binding(1, 0)]] StructuredBuffer<GpuPrimitive>  prims;
 [[vk::binding(2, 0)]] RWByteAddressBuffer              geom_atlas;
+[[vk::binding(4, 0)]] RWByteAddressBuffer              weight_atlas;  // pre-mix layer weights
 
-struct BakePC { uint prim_count; uint terrain_on; uint _pad1; uint _pad2; };
+struct BakePC {
+    uint prim_count; uint terrain_on; uint _pad1; uint _pad2;
+    float4 thr0;   // snowLo, snowHi, slopeLo, slopeHi  (terrain layer mix thresholds)
+    float4 thr1;   // dirtLo, dirtHi, tiling(unused here), jitterAmp
+};
 [[vk::push_constant]] BakePC pc;
 
 static const uint PRIM_SPHERE = 0u, PRIM_BOX = 1u, PRIM_CAPSULE = 2u, PRIM_CYLINDER = 3u, PRIM_TORUS = 4u;
@@ -130,7 +135,7 @@ uint snorm16(float v) { return uint(int(round(clamp(v, -1.0, 1.0) * 32767.0)) & 
 void csMain(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID)
 {
     GpuBrickJob job = jobs[gid.x];
-    float3 p  = job.brick_world_min + (float3(lid) + 0.5) * job.voxel_size;
+    float3 p  = job.brick_world_min + float3(lid) * job.voxel_size;
 
     float e = job.voxel_size * 0.5;
 
@@ -178,4 +183,28 @@ void csMain(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID)
 
     uint vox = lid.x + 9u * (lid.y + 9u * lid.z);
     geom_atlas.Store2(job.atlas_offset + vox * 8u, uint2(word0, word1));
+
+    // ── Pre-mix: bake the terrain layer blend WEIGHTS once per voxel ──────────────
+    // The slope/height/fBm mix is low-frequency and only changes on LOD/edit, so it's
+    // computed here (once per brick) instead of per pixel per frame — the render reads
+    // these weights and does only the (crisp, per-pixel) triplanar texture sampling.
+    // RGBA8 = (grass, rock, snow, dirt), normalised. Half the geom voxel size ⇒ the byte
+    // address is exactly geom_addr >> 1.
+    uint pw = 0u;
+    if (pc.terrain_on != 0u && mat_id == TERRAIN_MAT)
+    {
+        float slope = saturate(n.y);
+        float jit   = fbm3(p * 0.06, float3(0, 0, 0), 7, 3, 2.0, 0.5).v;
+        float h     = p.y + jit * pc.thr1.w;                                   // jitterAmp
+        float wRock  = 1.0 - smoothstep(pc.thr0.z, pc.thr0.w, slope);          // steep → rock
+        float wSnow  = smoothstep(pc.thr0.x, pc.thr0.y, h) * smoothstep(0.55, 0.78, slope);
+        float wDirt  = 1.0 - smoothstep(pc.thr1.x, pc.thr1.y, h);              // low → dirt
+        float wGrass = saturate(1.0 - wRock - wSnow - wDirt);
+        float total  = wGrass + wRock + wSnow + wDirt + 1e-4;
+        pw = uint(saturate(wGrass / total) * 255.0 + 0.5)
+           | (uint(saturate(wRock  / total) * 255.0 + 0.5) << 8u)
+           | (uint(saturate(wSnow  / total) * 255.0 + 0.5) << 16u)
+           | (uint(saturate(wDirt  / total) * 255.0 + 0.5) << 24u);
+    }
+    weight_atlas.Store((job.atlas_offset + vox * 8u) >> 1u, pw);
 }

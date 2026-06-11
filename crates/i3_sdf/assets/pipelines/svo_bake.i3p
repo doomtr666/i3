@@ -1,6 +1,0 @@
-PipelineConfig(
-    name: "svo_bake",
-    shader: Path("../shaders/svo_bake.slang"),
-    search_paths: [],
-    graphics: None,
-)

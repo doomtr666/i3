@@ -2,12 +2,25 @@
 name = "i3_voxel"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-i3_math = { path = "../i3_math" }
+i3_math  = { path = "../i3_math" }
+i3_gfx   = { path = "../i3_gfx" }
+i3_io    = { path = "../i3_io" }
 i3_noise = { path = "../i3_noise" }
 nalgebra = { workspace = true }
-rayon = { workspace = true }
+rayon    = { workspace = true }
+tracing  = { workspace = true }
+
+[dependencies.egui]
+workspace = true
+optional = true
+
+[features]
+default = []
+debug-ui = ["egui"]
+profiling = ["i3_math/profiling", "i3_gfx/profiling", "i3_noise/profiling"]

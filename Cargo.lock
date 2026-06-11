@@ -1227,21 +1227,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "i3_sdf"
-version = "0.1.0"
-dependencies = [
- "egui",
- "i3_gfx",
- "i3_io",
- "i3_math",
- "i3_noise",
- "i3_voxel",
- "nalgebra",
- "rayon",
- "tracing",
-]
-
-[[package]]
 name = "i3_slang"
 version = "0.1.0"
 dependencies = [
@@ -1254,10 +1239,14 @@ dependencies = [
 name = "i3_voxel"
 version = "0.1.0"
 dependencies = [
+ "egui",
+ "i3_gfx",
+ "i3_io",
  "i3_math",
  "i3_noise",
  "nalgebra",
  "rayon",
+ "tracing",
 ]
 
 [[package]]
@@ -2284,25 +2273,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "sdf"
-version = "0.1.0"
-dependencies = [
- "examples_common",
- "i3_baker",
- "i3_egui",
- "i3_gfx",
- "i3_io",
- "i3_math",
- "i3_noise",
- "i3_renderer",
- "i3_sdf",
- "i3_voxel",
- "i3_vulkan_backend",
- "nalgebra-glm",
- "tracing",
-]
-
-[[package]]
 name = "sdl2"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2520,6 +2490,23 @@ dependencies = [
  "dirs-next",
  "rustversion",
  "winapi",
+]
+
+[[package]]
+name = "terrain"
+version = "0.1.0"
+dependencies = [
+ "examples_common",
+ "i3_baker",
+ "i3_egui",
+ "i3_gfx",
+ "i3_io",
+ "i3_math",
+ "i3_renderer",
+ "i3_voxel",
+ "i3_vulkan_backend",
+ "nalgebra-glm",
+ "tracing",
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
 BakeManifest(
-    bundle_name: "sdf",
+    bundle_name: "terrain",
     pipelines_dirs: [
         "pipelines",
-        "../../../crates/i3_sdf/assets/pipelines",
+        "../../../crates/i3_voxel/assets/pipelines",
     ],
     // Terrain material layers (ambientCG 1K). Each packs Albedo (sRGB) + Normal (GL) +
     // ORM (R=AO, G=Roughness, B=Metallic=0) → baked as `<name>_albedo/_normal/_orm`.
